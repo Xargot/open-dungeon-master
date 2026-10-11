@@ -317,8 +317,10 @@ function fakeAudioFactory({ refuse = false, duration = 100 } = {}) {
       paused: true,
       ended: false,
       preload: "",
+      playCalls: 0,
       play() {
-        if (refuse) {
+        audio.playCalls += 1;
+        if (typeof refuse === "function" ? refuse() : refuse) {
           return Promise.reject(new Error("NotAllowedError"));
         }
         audio.paused = false;
@@ -458,6 +460,17 @@ await (async () => {
   assert.equal(player.snapshot().bed.cueId, "tavern", "played once its file arrived");
   assert.equal(player.snapshot().music.cueId, null, "a cue with no file stays silent");
   assert.equal(fake.made.length, 1);
+  player.setTracks({ tavern: ["/ambience/tavern.mp3", "/ambience/tavern-2.mp3"] });
+  assert.equal(player.snapshot().bed.takes, 2, "a same-cue refresh updates the available take count");
+  assert.equal(fake.made.length, 1, "a still-available current take keeps playing");
+  player.setTracks({ tavern: ["/ambience/tavern-3.mp3", "/ambience/tavern-4.mp3"] });
+  await flush();
+  assert.equal(player.snapshot().bed.takes, 2);
+  assert.equal(fake.made.length, 2, "a removed current file switches to an available take");
+  assert.ok(
+    ["/ambience/tavern-3.mp3", "/ambience/tavern-4.mp3"].includes(fake.made[1].src),
+    "the refreshed file list supplies the new take",
+  );
   player.setTracks({ tavern: ["/ambience/tavern.mp3"], battle: ["/ambience/battle.mp3"] });
   await flush();
   assert.equal(player.snapshot().music.cueId, "battle", "and comes in when the library grows");
@@ -490,6 +503,27 @@ await (async () => {
 })();
 
 await (async () => {
+  let refuse = true;
+  const { player, fake } = makePlayer({ refuse: () => refuse });
+  player.setTracks({ tavern: ["/ambience/tavern.mp3"] });
+  player.setUnlocked(true);
+  player.setScene("tavern", null);
+  await flush();
+  assert.equal(player.snapshot().blocked, true);
+  const voice = fake.made[0];
+  refuse = false;
+  player.setUnlocked(true);
+  player.setUnlocked(true);
+  await flush();
+  assert.equal(voice.playCalls, 2, "later gestures retry the blocked voice once while a play is pending");
+  assert.equal(fake.made.length, 1, "retry keeps the same take");
+  assert.equal(player.snapshot().blocked, false);
+  assert.equal(player.snapshot().bed.playing, true);
+  player.dispose();
+  passed += 1;
+})();
+
+await (async () => {
   const { player, fake } = makePlayer();
   player.setTracks({ thunder: ["/ambience/thunder.ogg"] });
   player.setLevels({ master: 1, bed: 1, music: 1, muted: false, ducked: false });
@@ -501,8 +535,13 @@ await (async () => {
   await flush();
   assert.equal(fake.made.length, 3, "stings share a pool of three elements");
   player.setLevels({ muted: true });
+  assert.ok(fake.made.every((audio) => audio.volume === 0), "mute silences stings already playing");
   player.sting("thunder");
   assert.equal(fake.made.length, 3, "a muted listener hears no sting");
+  player.setLevels({ muted: false, master: 0.25 });
+  assert.ok(fake.made.every((audio) => audio.volume === 0.25 * cueById("thunder").gain), "active stings follow the master slider");
+  player.setLevels({ master: 0 });
+  assert.ok(fake.made.every((audio) => audio.volume === 0), "zero master volume silences active stings");
   player.dispose();
   assert.equal(fake.released.length, 3);
   passed += 1;

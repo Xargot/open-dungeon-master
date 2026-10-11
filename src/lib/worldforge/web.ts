@@ -1,4 +1,5 @@
 import type { Veracity, WorldLink, XY } from "./model.ts";
+import { startWebLayout } from "./force-layout.ts";
 
 // The world's web, after WorldForge's veracity, kinship and hierarchy
 // modules (by Smoebo). Family trees and chains of command are not stored
@@ -127,80 +128,17 @@ export function treeRows(nodes: string[], up: Map<string, Set<string>>): string[
 
 // ---- the web ----
 
-function seeded(ref: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < ref.length; i += 1) hash = Math.imul(hash ^ ref.charCodeAt(i), 16777619);
-  return ((hash >>> 0) % 10_000) / 10_000;
-}
-
 // A force layout in a 0..1 square: linked entries pull together, everything
 // pushes apart, and the same world always settles the same way (positions
 // start from each ref's hash, not from chance), so the web does not jump
-// between visits.
+// between visits. Run to the end in one call; the engine and the reason it
+// can also run in slices are in src/lib/worldforge/force-layout.ts.
 export function webLayout(nodes: string[], edges: Array<{ from: string; to: string }>, iterations = 240): Map<string, XY> {
-  const count = nodes.length;
-  const at = new Map<string, XY>();
-  nodes.forEach((ref, index) => {
-    const angle = (index / Math.max(1, count)) * Math.PI * 2 + seeded(ref) * 0.6;
-    const radius = 0.25 + seeded(`${ref}#r`) * 0.2;
-    at.set(ref, { x: 0.5 + Math.cos(angle) * radius, y: 0.5 + Math.sin(angle) * radius });
-  });
-  if (count < 2) return at;
-  const ideal = Math.min(0.3, 0.9 / Math.sqrt(count));
-  const live = edges.filter((edge) => at.has(edge.from) && at.has(edge.to) && edge.from !== edge.to);
-  for (let step = 0; step < iterations; step += 1) {
-    const heat = 0.08 * (1 - step / iterations) + 0.002;
-    const push = new Map(nodes.map((ref) => [ref, { x: 0, y: 0 }]));
-    for (let i = 0; i < count; i += 1) {
-      for (let j = i + 1; j < count; j += 1) {
-        const a = at.get(nodes[i])!;
-        const b = at.get(nodes[j])!;
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        let distance = Math.hypot(dx, dy);
-        if (distance < 1e-4) {
-          dx = seeded(nodes[i]) - 0.5;
-          dy = seeded(nodes[j]) - 0.5;
-          distance = Math.hypot(dx, dy) || 1e-4;
-        }
-        const force = (ideal * ideal) / distance;
-        const pi = push.get(nodes[i])!;
-        const pj = push.get(nodes[j])!;
-        pi.x += (dx / distance) * force;
-        pi.y += (dy / distance) * force;
-        pj.x -= (dx / distance) * force;
-        pj.y -= (dy / distance) * force;
-      }
-    }
-    for (const edge of live) {
-      const a = at.get(edge.from)!;
-      const b = at.get(edge.to)!;
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const distance = Math.hypot(dx, dy) || 1e-4;
-      const force = (distance * distance) / ideal;
-      const pa = push.get(edge.from)!;
-      const pb = push.get(edge.to)!;
-      pa.x -= (dx / distance) * force;
-      pa.y -= (dy / distance) * force;
-      pb.x += (dx / distance) * force;
-      pb.y += (dy / distance) * force;
-    }
-    for (const ref of nodes) {
-      const p = at.get(ref)!;
-      const d = push.get(ref)!;
-      // A gentle pull to the middle keeps islands from drifting off.
-      d.x += (0.5 - p.x) * 0.05;
-      d.y += (0.5 - p.y) * 0.05;
-      const length = Math.hypot(d.x, d.y) || 1;
-      p.x = Math.min(0.97, Math.max(0.03, p.x + (d.x / length) * Math.min(length, heat)));
-      p.y = Math.min(0.97, Math.max(0.03, p.y + (d.y / length) * Math.min(length, heat)));
-    }
-  }
-  return at;
+  const run = startWebLayout(nodes, edges, iterations);
+  run.step(run.total);
+  return run.positions();
 }
 
-// Everyone within `hops` links of `center`, for the web around one entry.
 export function neighbourhood(center: string, links: WorldLink[], hops: number, view: WebView): Set<string> {
   const out = new Set([center]);
   let frontier = [center];

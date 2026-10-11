@@ -907,7 +907,11 @@ export function BattleMapPanel({
     [prompt, promptToken],
   );
 
-  const grid = (
+  // The painted picture is one canvas, and a DOM node sits in one place: the
+  // board on screen carries it (the open tabletop covers the panel). Both
+  // boards drawing it let the tabletop take it and close with it, leaving
+  // the panel's board bare.
+  const gridWith = (picture: HTMLCanvasElement | null) => (
     <div
       ref={attachFrame}
       tabIndex={0}
@@ -944,7 +948,7 @@ export function BattleMapPanel({
         <BattleMapGrid
           view={gridView}
           sheets={sheets}
-          painted={painted}
+          painted={picture}
           faces={faces}
           onTileClick={canDirect || canMove || pointing || areaAim.active ? handleTile : undefined}
           onTileHover={
@@ -1276,7 +1280,7 @@ export function BattleMapPanel({
           disabled={busy}
         />
       ) : null}
-      {grid}
+      {gridWith(enlarged ? null : painted)}
       {canDirect && tool === "place" ? (
         <PlaceTokenForm
           kind={placeKind}
@@ -1405,7 +1409,7 @@ export function BattleMapPanel({
             <div className="cine-tabletop-body">
               {chronicle}
               <div className="flex min-w-0 flex-1 flex-col gap-2">
-                <div className="cine-board-frame">{grid}</div>
+                <div className="cine-board-frame">{gridWith(enlarged ? painted : null)}</div>
                 {underBoard}
               </div>
               {!scene ? <TabletopOrder encounter={encounter} faceOf={faceOfEntry} /> : null}

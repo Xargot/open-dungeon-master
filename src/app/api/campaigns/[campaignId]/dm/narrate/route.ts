@@ -11,6 +11,7 @@ import { getNpcById } from "@/lib/db/npcs";
 import type { Speaker } from "@/lib/dm/speech";
 import { closeAgentTurn, isAgentRequest, readAgentNarration } from "@/lib/dm/agent-turn";
 import { narratedLines } from "@/lib/dm/speech-lines";
+import { NARRATION_MAX_CHARS, textLength, tooLongMessage } from "@/lib/text-limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export const dynamic = "force-dynamic";
 // engine (chapters, compaction, retrieval, export, recap) keep working
 // without knowing who wrote the words.
 const narrateSchema = z.object({
-  content: z.string().trim().min(1).max(8000),
+  content: z.string().trim().min(1),
   // Spoken as someone (docs/vtt-parity-implementation-plan.md 8.1): an
   // NPC by id, or a monster on the board by name. Absent for the narrator.
   speaker: z
@@ -52,6 +53,12 @@ export async function POST(
   const parsed = narrateSchema.safeParse(await request.json().catch(() => ({})));
   if (!parsed.success) {
     return Response.json({ error: "Write something to narrate." }, { status: 400 });
+  }
+  if (textLength(parsed.data.content) > NARRATION_MAX_CHARS) {
+    return Response.json(
+      { error: tooLongMessage("A passage", NARRATION_MAX_CHARS, textLength(parsed.data.content)), maxChars: NARRATION_MAX_CHARS },
+      { status: 400 },
+    );
   }
 
   // An NPC speaker is named from the record so a stale client name never

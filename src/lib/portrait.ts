@@ -13,6 +13,7 @@ import type { Campaign } from "@/lib/db/campaigns";
 import { presetFor } from "@/lib/worlds/preset";
 import { configuredDefaultStorySettings } from "@/lib/runtime-defaults";
 import type { CreateSheetInput, SheetAttachment } from "@/lib/schemas/sheet";
+import { recordMediaFile } from "@/lib/media-access";
 
 // One-shot portrait render at character creation. Status lives in memory
 // only: a restart mid-job simply drops the entry and the UI falls back to
@@ -66,6 +67,7 @@ export function copyIntoUploads(generatedUrl: string): { id: string; url: string
   const uploadsDir = path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "uploads");
   mkdirSync(uploadsDir, { recursive: true });
   copyFileSync(source, path.join(/*turbopackIgnore: true*/ uploadsDir, `${id}.png`));
+  recordMediaFile(`/uploads/${id}.png`);
   return { id, url: `/uploads/${id}.png` };
 }
 

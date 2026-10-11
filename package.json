@@ -14,7 +14,9 @@
     "start": "next start",
     "start:lan": "next start -H 0.0.0.0 -p 3005",
     "lint": "eslint",
+    "audit:check": "node scripts/check-audit.mjs",
     "test": "vitest run",
+    "test:browser": "node scripts/browser/run.mjs",
     "coverage": "vitest run --coverage",
     "resources:generate": "node scripts/generate-class-resources.mjs",
     "test:dice": "node scripts/test-dice.mjs",
@@ -64,6 +66,7 @@
     "@vitest/coverage-v8": "^5.0.3",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
+    "playwright-core": "^1.63.0",
     "tailwindcss": "^4",
     "typescript": "^6",
     "vitest": "^5.0.3"

@@ -178,6 +178,16 @@ test("the Hand's turn and pips are the engine's count, and a spent reaction come
   assert.equal(turn.attacksMade, 1);
   assert.equal(turn.reactionUsed, true);
   assert.deepEqual(turn.marks, ["martial-arts:attack-action"]);
+  // A server too old to say what the Attack action was made with says
+  // nothing, and the Hand keeps its old reading (issue 210).
+  assert.equal(turn.lightMeleeAttack, undefined);
+  const said = turnFromEncounter(
+    { ...encounter, turn: { ...encounter.turn, lightMeleeAttack: false, oneHandMeleeAttack: true } },
+    { id: "s1" },
+    { myTurn: false },
+  );
+  assert.equal(said.lightMeleeAttack, false);
+  assert.equal(said.oneHandMeleeAttack, true);
   assert.deepEqual(turnPips(turn).map((pip) => pip.used), [true, false, true]);
   assert.deepEqual(turnHudBudget(turn), { action: false, bonus: true, reaction: false });
   // Off their turn, another character's budget is not theirs.

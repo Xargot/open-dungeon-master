@@ -153,6 +153,9 @@ export const EVENT_AUDIENCE: Readonly<Record<string, Audience>> = {
   // Presence and the heartbeat are not game events, but they pass the same door.
   presence: TABLE,
   ping: TABLE,
+  // The stream's own word to a page too far behind to replay: reload the
+  // snapshot (planReplay, src/lib/events.ts). Carries only a seq.
+  resync: TABLE,
 };
 
 // The audience of a type, or null for one the table never declared: such an

@@ -21,6 +21,7 @@ import {
 import { insertCampaignMessage } from "@/lib/db/messages";
 import {
   createSheet,
+  deleteSheetById,
   deleteSheetForUser,
   getSheetById,
   getSheetForUser,
@@ -92,6 +93,15 @@ function publishReplacement(
   newSheet: CharacterSheet,
 ) {
   const campaignId = context.campaign.id;
+  // The seat follows the sheet it was on (PR 216): a player who held this
+  // character holds its replacement, since the replaced row's id is gone and
+  // a seat left pointing at it fell back to whichever sheet is listed first.
+  // A player seated on another of their sheets stays there.
+  const seat = listMembers(campaignId).find((member) => member.userId === context.user.id)?.activeCharacterId ?? "";
+  const stillHeld = Boolean(seat) && seat !== oldSheet.id && listSheetsForUser(campaignId, context.user.id).some((sheet) => sheet.id === seat);
+  if (!stillHeld) {
+    seatAddedSheet(context.campaign, context.user.id, newSheet.id);
+  }
   setMemberReady(campaignId, context.user.id, false);
   publishPersisted(campaignId, "member_ready", { userId: context.user.id, ready: false });
   publishPersisted(campaignId, "sheet_deleted", { sheetId: oldSheet.id, userId: context.user.id });
@@ -312,8 +322,17 @@ export async function PUT(
     }
     edit.data.sheet = edited.sheet;
     edited.settle();
+    // The copy this edit replaces is the one made from the character it
+    // edited. At a table where the player fields several, the seat may be on
+    // another of their sheets, and replacing THAT one lost it and left two
+    // copies of the edited one. A copy with no library link (an older host's
+    // sheet) falls back to the seated one, as before.
+    const replaced =
+      listSheetsForUser(campaignId, context.user.id).find(
+        (sheet) => sheet.libraryCharacterId === character.id && !sheet.isCompanion,
+      ) ?? existing;
     if (character.level !== context.campaign.startingLevel) {
-      deleteSheetForUser(campaignId, context.user.id);
+      deleteSheetById(campaignId, context.user.id, replaced.id);
       const sheet = createSheet(
         campaignId,
         context.user.id,
@@ -325,7 +344,7 @@ export async function PUT(
       if (!edit.data.sheet.portrait) {
         queueLibraryPortrait({ ...character, sheet: edit.data.sheet });
       }
-      publishReplacement(context, existing, sheet);
+      publishReplacement(context, replaced, sheet);
       return Response.json({ sheet });
     }
     const updated = updateCharacter(
@@ -337,7 +356,7 @@ export async function PUT(
     if (!updated) {
       return Response.json({ error: "Could not update the character." }, { status: 400 });
     }
-    deleteSheetForUser(campaignId, context.user.id);
+    deleteSheetById(campaignId, context.user.id, replaced.id);
     const result = instantiateIntoCampaign(
       character.id,
       campaignId,
@@ -346,13 +365,13 @@ export async function PUT(
     );
     if ("error" in result) {
       publishPersisted(campaignId, "sheet_deleted", {
-        sheetId: existing.id,
+        sheetId: replaced.id,
         userId: context.user.id,
       });
       return Response.json({ error: result.error }, { status: 400 });
     }
     queueLibraryPortrait(updated);
-    publishReplacement(context, existing, result);
+    publishReplacement(context, replaced, result);
     return Response.json({ sheet: result });
   }
 

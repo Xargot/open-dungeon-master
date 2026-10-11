@@ -7,7 +7,7 @@ import { XP_THRESHOLDS, deriveAc } from "@/lib/srd";
 import { settleLevelChange, withoutDuplicateClasses } from "@/lib/srd/level-change";
 import { normalizeSpellcasting } from "@/lib/srd/spell-lists";
 import { settleAttunement, type Wearer } from "@/lib/srd/magic-items";
-import { itemWeightByName } from "@/lib/content";
+import { itemWeightByName, repairedWeight } from "@/lib/content";
 import { homebrewRaceLabel, hydrateHomebrewGear } from "@/lib/db/homebrew";
 import { subclassExtrasForTable } from "@/lib/db/subclass-extras";
 import { storedGender } from "@/lib/gender";
@@ -244,13 +244,19 @@ function withBackgroundFeature(
 // player typed by hand survives. The lookup is an in-memory map; the
 // optional encumbrance rule (src/lib/srd/encumbrance.ts) is the only
 // consumer and falls back to the SRD armor table for what is still missing.
+// A filled weight is saved with the next write, so a weight an old pack got
+// wrong (a dart at 14 lb, issue #205) is put right here first; any other
+// number is left as it is.
 function withItemWeights(equipment: CharacterSheet["equipment"]): CharacterSheet["equipment"] {
   return equipment.map((item) => {
-    if (typeof item.weight === "number") {
-      return item;
+    const stored = repairedWeight(item.name, item.weight);
+    if (typeof stored === "number") {
+      return stored === item.weight ? item : { ...item, weight: stored };
     }
+    const line = { ...item };
+    delete line.weight;
     const weight = itemWeightByName(item.name);
-    return weight === null ? item : { ...item, weight };
+    return weight === null ? (item.weight === undefined ? item : line) : { ...line, weight };
   });
 }
 
@@ -449,6 +455,19 @@ export function listSheetsForUser(campaignId: string, userId: string): Character
 export function deleteSheetForUser(campaignId: string, userId: string): CharacterSheet | null {
   const existing = getSheetForUser(campaignId, userId);
   if (!existing) {
+    return null;
+  }
+  getDatabase().prepare(`DELETE FROM character_sheets WHERE id = ?`).run(existing.id);
+  touchCampaign(campaignId);
+  return existing;
+}
+
+// One named sheet of the player's, for a lobby edit that replaces the copy
+// of the character it edited rather than whichever sheet the seat is on: at
+// a table where a player fields several, those differ.
+export function deleteSheetById(campaignId: string, userId: string, sheetId: string): CharacterSheet | null {
+  const existing = getSheetById(sheetId);
+  if (!existing || existing.campaignId !== campaignId || existing.userId !== userId) {
     return null;
   }
   getDatabase().prepare(`DELETE FROM character_sheets WHERE id = ?`).run(existing.id);

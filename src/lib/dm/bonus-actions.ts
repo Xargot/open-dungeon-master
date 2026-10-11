@@ -33,7 +33,7 @@ import { chosenOptions } from "@/lib/srd/options";
 
 // The pure half (which feature routes what to the bonus action) lives in
 // bonus-routes.ts, so the Hand can ask it too.
-import { holdsFeature as holds, kiLeft } from "@/lib/dm/bonus-routes";
+import { holdsFeature as holds, kiLeft, usesLeft } from "@/lib/dm/bonus-routes";
 export { bonusRouteFor, kiLeft, noBonusRoute, type BonusRoute, type MoveAction } from "@/lib/dm/bonus-routes";
 
 // The resources patch that spends `points` ki, or an error when the
@@ -54,6 +54,20 @@ export function kiSpend(
     };
   }
   return { resources: { ...sheet.resources, ki: { max: ki.max, used: ki.used + points } } };
+}
+
+// One use of a counted bonus-action route (Adrenaline Surge, the grifter's
+// Vanish), priced and paid the way kiSpend is.
+export function counterSpend(
+  sheet: CharacterSheet,
+  id: string,
+  feature: string,
+): { resources: FullPatchSheetInput["resources"] } | { error: string } {
+  const counter = sheet.resources?.[id];
+  if (!counter || !usesLeft(sheet, id)) {
+    return { error: `${sheet.name} has no use of ${feature} left; it comes back after a rest.` };
+  }
+  return { resources: { ...sheet.resources, [id]: { max: counter.max, used: counter.used + 1 } } };
 }
 
 // ---- the ki techniques, through use_resource ----

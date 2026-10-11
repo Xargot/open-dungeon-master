@@ -10,6 +10,8 @@ import {
   filedScope,
   isAskScope,
   parseAskJson,
+  questionLength,
+  questionProblem,
 } from "../src/lib/dm/ask-logic.ts";
 
 let passed = 0;
@@ -20,8 +22,22 @@ function test(name, fn) {
 
 test("clampQuestion collapses whitespace and bounds length", () => {
   assert.equal(clampQuestion("  who   is\n\nMarla?  "), "who is Marla?");
-  assert.equal(clampQuestion("x".repeat(900)).length, QUESTION_MAX_CHARS);
+  assert.equal(clampQuestion("x".repeat(QUESTION_MAX_CHARS + 400)).length, QUESTION_MAX_CHARS);
   assert.equal(clampQuestion("   "), "");
+});
+
+// Issue 207: a 500-character limit turned away questions that carried their
+// scene, with only "Invalid question." and nothing on screen to warn.
+test("a question may carry its scene, and over the limit it hears the limit", () => {
+  assert.equal(QUESTION_MAX_CHARS, 2_000);
+  assert.equal(questionLength("  who   is\n\nMarla?  "), "who is Marla?".length);
+  assert.equal(questionProblem("   "), "Ask a question first.");
+  assert.equal(questionProblem("x".repeat(QUESTION_MAX_CHARS)), null);
+  // Whitespace is folded before it is counted, as it is stored.
+  assert.equal(questionProblem(`${"word ".repeat(400)}${" ".repeat(600)}`), null);
+  const over = questionProblem("x".repeat(QUESTION_MAX_CHARS + 1));
+  assert.match(over, /up to 2,000 characters/);
+  assert.match(over, /this one has 2,001/);
 });
 
 test("isAskScope rejects anything unexpected", () => {

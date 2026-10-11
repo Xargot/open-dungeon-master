@@ -1,11 +1,12 @@
 "use client";
 
-import { Crosshair, ExternalLink, Network, Users, Crown } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Crosshair, ExternalLink, Loader2, Network, Users, Crown } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { ui } from "@/lib/ui";
 import { KitButton } from "@/app/campaigns/[campaignId]/PanelKit";
 import { chain, family, linkInView, neighbourhood, treeRows, webLayout, type Edge, type WebView as View } from "@/lib/worldforge/web";
+import { startWebLayout } from "@/lib/worldforge/force-layout";
 import type { XY } from "@/lib/worldforge/model";
 import type { WorldState } from "./useWorld";
 import { EntityAvatar, TypeChip, tint, typeOf } from "./world-ui";
@@ -30,6 +31,43 @@ const VIEWS: Array<{ id: View; label: string }> = [
   { id: "believed", label: "What people believe" },
 ];
 
+type GraphEdge = Edge & { kind: string; label: string; veracity?: string };
+type Graph = { nodes: string[]; edges: GraphEdge[]; at: Map<string, XY> };
+
+// Up to this many entries the web is laid out in the render, as it always
+// was (a few milliseconds). A bigger world is laid out a slice at a time
+// between frames (src/lib/worldforge/force-layout.ts), so the page answers
+// while it settles: the last settled web stays on screen, and the new one
+// replaces it when it is done, the entries that stay gliding to their new
+// places as on any recentre.
+const SYNC_LIMIT = 60;
+const SLICE_MS = 8;
+
+function useSettledGraph(target: Omit<Graph, "at"> & { at: Map<string, XY> | null }): { graph: Graph | null; settling: boolean } {
+  const [settled, setSettled] = useState<Graph | null>(null);
+  const pending = target.at === null;
+  useEffect(() => {
+    if (!pending) return;
+    const run = startWebLayout(target.nodes, target.edges);
+    let frame = 0;
+    const slice = () => {
+      const until = performance.now() + SLICE_MS;
+      while (!run.done() && performance.now() < until) run.step(1);
+      if (run.done()) {
+        setSettled({ nodes: target.nodes, edges: target.edges, at: run.positions() });
+        return;
+      }
+      frame = requestAnimationFrame(slice);
+    };
+    frame = requestAnimationFrame(slice);
+    // A world that changed (a recentre, another view) drops the run it
+    // replaced.
+    return () => cancelAnimationFrame(frame);
+  }, [pending, target.nodes, target.edges]);
+  if (!pending) return { graph: target as Graph, settling: false };
+  return { graph: settled, settling: true };
+}
+
 function rowsLayout(rows: string[][]): Map<string, XY> {
   const at = new Map<string, XY>();
   rows.forEach((row, depth) => {
@@ -48,12 +86,12 @@ export function WebView({ world, focus, onOpen }: { world: WorldState; focus: st
   const byRef = useMemo(() => new Map(entities.map((entity) => [entity.ref, entity])), [entities]);
   const live = useMemo(() => new Set(entities.map((entity) => entity.ref)), [entities]);
 
-  const graph = useMemo(() => {
+  const target = useMemo((): Omit<Graph, "at"> & { at: Map<string, XY> | null } => {
     const links = doc.links.filter((link) => live.has(link.from) && live.has(link.to) && linkInView(link, view));
     if (mode === "family") {
       const tree = family(links, live, view);
       const nodes = [...new Set([...tree.descent, ...tree.spouses, ...tree.siblings].flatMap((edge) => [edge.from, edge.to]))];
-      const edges: Array<Edge & { kind: string; label: string }> = [
+      const edges: GraphEdge[] = [
         ...tree.descent.map((edge) => ({ ...edge, kind: "descent", label: "parent of" })),
         ...tree.spouses.map((edge) => ({ ...edge, kind: "spouse", label: "spouse of" })),
         ...tree.siblings.map((edge) => ({ ...edge, kind: "sibling", label: "sibling of" })),
@@ -70,8 +108,11 @@ export function WebView({ world, focus, onOpen }: { world: WorldState; focus: st
     const edges = links
       .filter((link) => set.has(link.from) && set.has(link.to))
       .map((link) => ({ from: link.from, to: link.to, veracity: link.veracity, kind: link.oneway ? "oneway" : "link", label: link.rank ? `${link.label} (${link.rank})` : link.label }));
-    return { nodes, edges, at: webLayout(nodes, edges) };
+    return { nodes, edges, at: nodes.length <= SYNC_LIMIT ? webLayout(nodes, edges) : null };
   }, [center, doc.links, hops, live, mode, view]);
+  const { graph: settled, settling } = useSettledGraph(target);
+  const graph: Graph = settled ?? { nodes: [], edges: [], at: new Map() };
+  const arranging = settling && !settled;
 
   const point = (ref: string) => {
     const at = graph.at.get(ref) ?? { x: 0.5, y: 0.5 };
@@ -116,7 +157,11 @@ export function WebView({ world, focus, onOpen }: { world: WorldState; focus: st
       {/* On a phone the web keeps a readable size and scrolls sideways; the
           card for the chosen entry sits under it instead of over it. */}
       <div className="panel relative overflow-x-auto overflow-y-hidden rounded-xl" data-tour="world-web">
-        {graph.nodes.length === 0 ? (
+        {arranging ? (
+          <p role="status" className="live-in flex items-center justify-center gap-2 p-8 text-sm text-stone-500">
+            <Loader2 className="size-4 animate-spin" /> Arranging {target.nodes.length} entries…
+          </p>
+        ) : graph.nodes.length === 0 ? (
           <p className="p-8 text-center text-sm text-stone-500">
             {mode === "family"
               ? "No family yet: link people with parent of, child of, spouse of or sibling of."

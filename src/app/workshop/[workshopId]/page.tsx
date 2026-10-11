@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, use, useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, use, useCallback, useEffect, useState } from "react";
 import { SystemCards } from "@/app/workshop/[workshopId]/SystemCards";
 import { SystemView } from "@/app/workshop/[workshopId]/SystemView";
 import { TargetPartyBar } from "@/app/workshop/[workshopId]/TargetPartyBar";
@@ -22,8 +22,14 @@ import { markTourSeen, tourSeen } from "@/lib/tours/logic";
 import { draftCount, worldPackDraftSchema } from "@/lib/worlds/draft";
 import { requestTourPrepare } from "@/lib/tours/prepare";
 import { HUB_TOUR, HUB_TOUR_ID, SYSTEM_TOURS, systemTourId } from "@/lib/tours/workshop";
-import { GuidedTour } from "@/components/ui/GuidedTour";
-import { WorkshopHelpDialog, type HelpTour } from "@/components/WorkshopHelpDialog";
+import type { HelpTour } from "@/components/WorkshopHelpDialog";
+
+// The guide and the tour load the first time they are opened, and stay
+// mounted after so they animate closed.
+const GuidedTour = lazy(() => import("@/components/ui/GuidedTour").then((module) => ({ default: module.GuidedTour })));
+const WorkshopHelpDialog = lazy(() =>
+  import("@/components/WorkshopHelpDialog").then((module) => ({ default: module.WorkshopHelpDialog })),
+);
 import type { WorkshopSummary } from "@/app/workshop/types";
 
 // The workshop shell: a hub of system cards, or one system open.
@@ -53,6 +59,10 @@ function WorkshopPageInner({ workshopId }: { workshopId: string }) {
   const [helpOpen, setHelpOpen] = useState(false);
   // The tour on screen: the hub's, or a tool's, by id.
   const [tour, setTour] = useState<string | null>(null);
+  const [helpMounted, setHelpMounted] = useState(false);
+  const [tourMounted, setTourMounted] = useState(false);
+  if (helpOpen && !helpMounted) setHelpMounted(true);
+  if (tour !== null && !tourMounted) setTourMounted(true);
 
   const load = useCallback(
     () =>
@@ -260,18 +270,24 @@ function WorkshopPageInner({ workshopId }: { workshopId: string }) {
           }
         />
       )}
-      <WorkshopHelpDialog
-        open={helpOpen}
-        onOpenChange={setHelpOpen}
-        tours={helpTours}
-        system={system}
-      />
-      <GuidedTour
-        open={tour !== null}
-        steps={tourSteps}
-        onPrepare={requestTourPrepare}
-        onClose={closeTour}
-      />
+      <Suspense fallback={null}>
+        {helpMounted ? (
+          <WorkshopHelpDialog
+            open={helpOpen}
+            onOpenChange={setHelpOpen}
+            tours={helpTours}
+            system={system}
+          />
+        ) : null}
+        {tourMounted ? (
+          <GuidedTour
+            open={tour !== null}
+            steps={tourSteps}
+            onPrepare={requestTourPrepare}
+            onClose={closeTour}
+          />
+        ) : null}
+      </Suspense>
       {/* Pinned: the negative margins let the blur run edge to edge while the
           bar itself keeps the page's gutter. */}
       <div

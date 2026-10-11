@@ -33,6 +33,7 @@ import {
 import { removeUnreferencedFiles } from "@/lib/image-files";
 import { worldFromBundle } from "@/lib/db/world-forge-bundle";
 import { admitUpload, type UploadRefusal } from "@/lib/upload-budget";
+import { recordMediaFile } from "@/lib/media-access";
 
 export { exportWorkshopBundle, type ExportResult } from "@/lib/db/workshop-bundle-export";
 
@@ -77,6 +78,7 @@ function saveBundleImage(image: BundleImage | null, uploadDir: string, written: 
   const filename = `${crypto.randomUUID()}.${image.ext}`;
   writeFileSync(path.join(/*turbopackIgnore: true*/ uploadDir, filename), image.bytes);
   const url = `/uploads/${filename}`;
+  recordMediaFile(url);
   written.push(url);
   return url;
 }

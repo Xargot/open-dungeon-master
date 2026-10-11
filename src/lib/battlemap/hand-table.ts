@@ -49,6 +49,8 @@ export function turnFromEncounter(
     ...(own?.marks?.length ? { marks: own.marks } : {}),
     ...(own?.flurryStrikes ? { flurryStrikes: own.flurryStrikes } : {}),
     ...(own?.castThisAction ? { castThisAction: true } : {}),
+    ...(own && own.lightMeleeAttack !== undefined ? { lightMeleeAttack: own.lightMeleeAttack } : {}),
+    ...(own && own.oneHandMeleeAttack !== undefined ? { oneHandMeleeAttack: own.oneHandMeleeAttack } : {}),
     table,
   };
 }

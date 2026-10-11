@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ACTION_MAX_CHARS, textLength, tooLongMessage } from "@/lib/text-limits";
 import { resolveActionCharacter } from "@/lib/player-characters";
 import { currentPcId } from "@/lib/character-seat";
 import { getActiveEncounter } from "@/lib/db/encounters";
@@ -30,8 +31,10 @@ import { intentRefusal } from "@/lib/dm/intent-check";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// The length is checked after the shape, so a long move hears its limit
+// rather than "Invalid action." (issue 207).
 const actionSchema = z.object({
-  content: z.string().trim().min(1).max(2000),
+  content: z.string().trim().min(1),
   characterId: z.string().trim().min(1).optional(),
   kind: z.enum(["do", "say", "ooc"]).default("do"),
   // The card the Hand played, beside the sentence it wrote. Optional: typed
@@ -64,6 +67,13 @@ export async function POST(
   const parsed = actionSchema.safeParse(raw);
   if (!parsed.success) {
     return Response.json({ error: "Invalid action." }, { status: 400 });
+  }
+  if (textLength(parsed.data.content) > ACTION_MAX_CHARS) {
+    const what = parsed.data.kind === "say" ? "A line" : parsed.data.kind === "ooc" ? "Table talk" : "A move";
+    return Response.json(
+      { error: tooLongMessage(what, ACTION_MAX_CHARS, textLength(parsed.data.content)), maxChars: ACTION_MAX_CHARS },
+      { status: 400 },
+    );
   }
 
   const { kind } = parsed.data;

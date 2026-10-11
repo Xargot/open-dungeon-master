@@ -109,6 +109,9 @@ export function spendAttackEconomy(input: {
       if (!profile.ranged && (profile.properties ?? []).includes("light")) {
         budget = { ...budget, lightMeleeAttack: true };
       }
+      if (!profile.ranged && !profile.twoHanded && profile.weapon !== "Unarmed strike") {
+        budget = { ...budget, oneHandMeleeAttack: true };
+      }
       // The Attack action taken with an unarmed strike or a monk weapon opens
       // Martial Arts' bonus strike for the rest of the turn.
       if (profile.martialArts && !budget.oncePerTurn.includes(MARTIAL_ARTS_READY)) {

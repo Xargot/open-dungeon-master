@@ -18,6 +18,18 @@ class ByName extends BaseSequencer {
   }
 }
 
+// passWithNoTests is what lets a script with no Vitest test() in it pass. It
+// would also let a run that found no files at all pass (an include that
+// stopped matching, a filter with a typo), so that case fails here instead.
+const failAnEmptyRun = {
+  onTestRunEnd(modules: readonly unknown[]) {
+    if (modules.length === 0) {
+      console.error("No test files ran. Check the include pattern or the file filter.");
+      process.exitCode = 1;
+    }
+  },
+};
+
 export default defineConfig({
   resolve: {
     // What scripts/lib/register-routes.mjs does for a plain Node run.
@@ -29,6 +41,7 @@ export default defineConfig({
   test: {
     include: ["scripts/test-*.mjs"],
     passWithNoTests: true,
+    reporters: ["default", failAnEmptyRun],
     fileParallelism: false,
     sequence: { sequencer: ByName },
     coverage: {

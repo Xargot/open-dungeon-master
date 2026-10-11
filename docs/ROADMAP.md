@@ -60,7 +60,7 @@ as human mode: active effects with real durations, an in-world calendar and
 clock, the party as an entity with its own purse and pack, coins in more than
 one denomination, unidentified items, mounted combat, structured non-combat
 scene trackers, freeform typed attributes on anything, and the assistant DM
-seat. See docs/human-dm-plan.md.
+seat. See docs/archive/human-dm-plan.md.
 
 **The Workshop, phases 1 to 9 (2026-08-30):** a user-scoped place to build
 prep before any table exists, and to import it into a campaign. A workshop is

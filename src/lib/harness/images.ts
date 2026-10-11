@@ -20,6 +20,7 @@ import { buildChildEnv } from "./child-env.ts";
 import { childPath } from "./discover.ts";
 import { adapterFor, ADAPTERS, harnessConfig, resolveHarnessBinary } from "./status.ts";
 import { isHarnessId } from "./types.ts";
+import { recordMediaFile } from "@/lib/media-access";
 
 export const MAX_HARNESS_IMAGE_BYTES = 8 * 1024 * 1024;
 const PICTURE_TIMEOUT_MS = 5 * 60_000;
@@ -221,6 +222,7 @@ export async function generateHarnessImage(options: {
   writeFileSync(saved, accepted.bytes);
   scheduleImageVariants(saved);
   const size = imageSize(accepted.bytes);
+  recordMediaFile(`/generated/${filename}`);
   return {
     id: randomUUID(),
     url: `/generated/${filename}`,

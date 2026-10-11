@@ -24,6 +24,12 @@ const hasFeat = (feats: string[] | undefined, name: string, campaignId?: string)
 const isLightMelee = (profile: Pick<AttackProfile, "properties" | "ranged">) =>
   !profile.ranged && (profile.properties ?? []).includes("light");
 
+// Whether a sheet's feats include Dual Wielder (or a pack twin of it), for
+// the Hand's off-hand card.
+export function dualWields(feats: string[] | undefined, campaignId?: string): boolean {
+  return hasFeat(feats, "dual wielder", campaignId);
+}
+
 // ---- hands ----
 
 // What a shield on the arm does to the swing. A two-handed weapon cannot be
@@ -58,13 +64,15 @@ export function handsRuling(input: {
 
 // ---- two-weapon fighting ----
 
-// Whether the pack holds a second light melee weapon for the other hand:
-// two of the same, or two different ones.
-function lightWeaponsCarried(equipment: Carried[]): number {
+// Whether the pack holds a second weapon for the other hand: two of the
+// same, or two different ones. Light melee weapons, or with Dual Wielder
+// any melee weapon held in one hand.
+function offHandWeaponsCarried(equipment: Carried[], dualWielder: boolean): number {
   let count = 0;
   for (const item of equipment) {
     const weapon = matchWeapon(item.name);
-    if (weapon && weapon.kind === "melee" && (weapon.properties ?? []).includes("light")) {
+    const properties = weapon?.properties ?? [];
+    if (weapon && weapon.kind === "melee" && (dualWielder ? !properties.includes("two-handed") : properties.includes("light"))) {
       count += Math.max(1, item.qty ?? 1);
     }
   }
@@ -74,7 +82,9 @@ function lightWeaponsCarried(equipment: Carried[]): number {
 // The bonus-action swing of two-weapon fighting (SRD 5.1): it follows an
 // Attack action made with a light melee weapon, on the character's own
 // turn, and is made with a different light melee weapon in the other hand.
-// The Dual Wielder feat lifts the word "light" from both.
+// The Dual Wielder feat lifts the word "light" from both, and only that:
+// the weapons are still one-handed melee weapons, one in each hand. The
+// Hand's off-hand card asks this same function (hand.ts, issue 210).
 export function offHandProblem(input: {
   who: string;
   profile: Pick<AttackProfile, "weapon" | "properties" | "ranged">;
@@ -86,14 +96,20 @@ export function offHandProblem(input: {
   shieldName: string | null;
 }): string | null {
   const dualWielder = hasFeat(input.feats, "dual wielder", input.campaignId);
+  const twoHanded = (input.profile.properties ?? []).includes("two-handed");
+  if (dualWielder && (input.profile.ranged || twoHanded)) {
+    return `The off-hand attack of two-weapon fighting is made with a melee weapon held in one hand, and ${input.profile.weapon} is not one. Dual Wielder lifts the need for a light weapon, not for a one-handed one.`;
+  }
   if (input.profile.ranged || (!isLightMelee(input.profile) && !dualWielder)) {
     return `The off-hand attack of two-weapon fighting is made with a light melee weapon, and ${input.profile.weapon} is not one. ${input.who} can make it with a dagger, shortsword, handaxe or another light weapon.`;
   }
   if (input.shieldName) {
-    return `${input.who} has ${input.shieldName} in their other hand, so there is no second weapon to strike with. Two-weapon fighting needs a light weapon in each hand.`;
+    return `${input.who} has ${input.shieldName} in their other hand, so there is no second weapon to strike with. Two-weapon fighting needs a ${dualWielder ? "weapon" : "light weapon"} in each hand.`;
   }
-  if (!dualWielder && lightWeaponsCarried(input.equipment) < 2) {
-    return `Two-weapon fighting needs a light melee weapon in each hand, and ${input.who} carries only one.`;
+  if (offHandWeaponsCarried(input.equipment, dualWielder) < 2) {
+    return dualWielder
+      ? `Two-weapon fighting needs a one-handed melee weapon in each hand, and ${input.who} carries only one.`
+      : `Two-weapon fighting needs a light melee weapon in each hand, and ${input.who} carries only one.`;
   }
   if (!input.inFight) {
     return null;
@@ -104,8 +120,14 @@ export function offHandProblem(input: {
   if (input.budget.attacksMade < 1 || input.budget.castThisAction) {
     return `The off-hand attack follows the Attack action: ${input.who} attacks with the weapon in their main hand first, then makes the off-hand attack as a bonus action.`;
   }
-  if (!input.budget.lightMeleeAttack && !dualWielder) {
-    return `The off-hand attack is earned by attacking with a light melee weapon, and ${input.who}'s Attack action this turn was made with something else.`;
+  // A budget saved before the one-handed flag existed reads the light one.
+  const earned = dualWielder
+    ? (input.budget.oneHandMeleeAttack ?? input.budget.lightMeleeAttack)
+    : input.budget.lightMeleeAttack;
+  if (!earned) {
+    return dualWielder
+      ? `The off-hand attack is earned by attacking with a melee weapon held in one hand, and ${input.who}'s Attack action this turn was made with something else.`
+      : `The off-hand attack is earned by attacking with a light melee weapon, and ${input.who}'s Attack action this turn was made with something else.`;
   }
   return null;
 }

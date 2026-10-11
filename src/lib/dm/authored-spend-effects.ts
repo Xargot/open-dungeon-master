@@ -297,7 +297,9 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
     case "teleport":
       return {
         result: {
-          teleport: `${sheet.name} moves up to ${does.feet} feet${does.note ? `, ${does.note}` : ""}: move their token with move_token (forced: true) if a battle map is live.`,
+          teleport: does.touched
+            ? `A willing creature ${sheet.name} touches moves up to ${does.feet} feet${does.note ? `, ${does.note}` : ""}: move its token with move_token (forced: true) if a battle map is live.`
+            : `${sheet.name} moves up to ${does.feet} feet${does.note ? `, ${does.note}` : ""}: move their token with move_token (forced: true) if a battle map is live.`,
         },
       };
     case "die_damage": {

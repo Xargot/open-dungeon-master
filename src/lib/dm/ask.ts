@@ -101,6 +101,7 @@ export type AskRequest = {
   scope: AskScope | "auto";
 };
 
+const ASK_THREAD_ANSWER_CLIP = 1_200;
 const RECENT_MESSAGES = 24;
 const RECENT_ROLLS = 30;
 const SCENE_CLIP = 700;
@@ -295,11 +296,16 @@ async function assembleEvidence(request: AskRequest, ownedCharacterIds: string[]
 
 // The asker's own recent Ask thread, as ordinary chat turns, so follow-ups
 // resolve. Never persisted into the story and never shown to the DM turn.
+// Each question goes back whole: it was stored within the question limit,
+// and a follow-up ("and if she lied?") leans on all of it. Clipping it to
+// 1,200 would have quietly dropped the end of a question the route took
+// (issue 207). The answers keep their clip; the model wrote them and the
+// question it answers is what a follow-up turns on.
 function threadMessages(campaignId: string, userId: string): ChatMessage[] {
   const messages: ChatMessage[] = [];
   for (const ask of listRecentAsksForThread(campaignId, userId)) {
-    messages.push({ role: "user", content: ask.question.slice(0, 1_200) });
-    messages.push({ role: "assistant", content: ask.answer.slice(0, 1_200) });
+    messages.push({ role: "user", content: clampQuestion(ask.question) });
+    messages.push({ role: "assistant", content: ask.answer.slice(0, ASK_THREAD_ANSWER_CLIP) });
   }
   return messages;
 }

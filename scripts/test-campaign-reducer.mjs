@@ -7,7 +7,7 @@ import { register } from "node:module";
 
 register("./lib/register-alias.mjs", import.meta.url);
 
-const { campaignReducer, INITIAL_CAMPAIGN_STATE } = await import(
+const { campaignReducer, INITIAL_CAMPAIGN_STATE, refreshesBattleMap } = await import(
   "../src/app/campaigns/[campaignId]/useCampaignStream.ts"
 );
 
@@ -192,4 +192,20 @@ test("selection events update the named member without changing another player's
   const reconnect = campaignReducer(own, { type: "snapshot", payload: { members: own.members, sheets: own.sheets, activeSheetId: own.activeSheetId, lastSeq: own.lastSeq } });
   assert.equal(reconnect.activeSheetId, "a2");
 });
+test("issue 214: a sheet change redraws a board that is up, and only then", () => {
+  // Dropping a pack, a condition or exhaustion changes the speed the board's
+  // reach is drawn from; the board kept the old reach until a reload.
+  assert.equal(refreshesBattleMap("sheet_updated", true), true);
+  assert.equal(refreshesBattleMap("sheet_updated", false), false);
+  for (const eventType of ["battle_map_updated", "encounter_updated", "floor_changed", "roster_updated"]) {
+    assert.equal(refreshesBattleMap(eventType, false), true, eventType);
+    assert.equal(refreshesBattleMap(eventType, true), true, eventType);
+  }
+  assert.equal(refreshesBattleMap("narration", true), false);
+  // The reducer still takes the sheet in, so the tile and the board agree.
+  const sheet = { id: "s1", name: "Hero", level: 1, equipment: [] };
+  const next = campaignReducer(loaded, event("sheet_updated", { sheet }));
+  assert.equal(next.sheets.find((entry) => entry.id === "s1"), sheet);
+});
+
 console.log(`\n${passed} campaign reducer tests passed.`);

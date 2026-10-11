@@ -21,8 +21,31 @@ import { stems } from "../language/language.ts";
 // "oracolo" are one term and "della" is none at an Italian table, as
 // "spiders" and "spider" are one at an English one. Two-letter stems carry
 // no signal.
+//
+// search_lore scores every lore entry, fact and note against each query and
+// tokenized each one twice per query (once for the IDF, once to score it):
+// a few hundred entries cost tens of milliseconds of blocked server per
+// call. The terms of a text are remembered by the text itself, so an
+// unchanged entry is read once, and an edited one is simply a new text.
+// Bounded by the characters held; past it the memo starts over.
+const TOKEN_MEMO_CHARS = 8_000_000;
+const tokenMemo = new Map<string, readonly string[]>();
+let tokenMemoChars = 0;
+
 export function tokenize(text: string, language: TableLanguage): string[] {
-  return stems(text, language).filter((term) => term.length > 2);
+  const key = `${language}\u0000${text}`;
+  const known = tokenMemo.get(key);
+  if (known) {
+    return [...known];
+  }
+  const terms = stems(text, language).filter((term) => term.length > 2);
+  if (tokenMemoChars + key.length > TOKEN_MEMO_CHARS) {
+    tokenMemo.clear();
+    tokenMemoChars = 0;
+  }
+  tokenMemo.set(key, terms);
+  tokenMemoChars += key.length;
+  return [...terms];
 }
 
 // Inverse document frequency with BM25's smoothing, so a term in every

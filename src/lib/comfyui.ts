@@ -12,6 +12,7 @@ import {
   type ZImageSlot,
 } from "@/lib/setup/discovery-logic";
 import type { AspectPreset, GeneratedImage, ImageMode } from "@/lib/types";
+import { recordMediaFile } from "@/lib/media-access";
 
 // First-party ComfyUI backend: the app submits a plain text-to-image workflow
 // over ComfyUI's HTTP API and saves the result exactly like the FLUX worker
@@ -492,6 +493,7 @@ export async function generateComfyImage(options: {
   // original is what the campaign stores and what a client without them gets.
   scheduleImageVariants(saved);
 
+  recordMediaFile(`/generated/${filename}`);
   return {
     id: crypto.randomUUID(),
     url: `/generated/${filename}`,

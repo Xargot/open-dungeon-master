@@ -3,6 +3,7 @@ import path from "node:path";
 import { getWorldDoc, hasWorldDoc, saveWorldDoc } from "@/lib/db/world-forge";
 import { decodeBundleImage } from "@/lib/workshop/bundle";
 import { parseRef, readDoc, refOf, remapDoc, type Shelf } from "@/lib/worldforge/model";
+import { recordMediaFile } from "@/lib/media-access";
 
 // A workshop's WorldForge inside a workshop bundle. A bundle carries its
 // rows as lists without ids, so a ref travels as the row's place in its
@@ -47,6 +48,7 @@ export function worldFromBundle(workshopId: string, world: BundleWorld, ids: Rec
     mkdirSync(dir, { recursive: true });
     const filename = `${crypto.randomUUID()}.${image.ext}`;
     writeFileSync(path.join(/*turbopackIgnore: true*/ dir, filename), image.bytes);
+    recordMediaFile(`/uploads/${filename}`);
     return { ...atlas, image: `/uploads/${filename}` };
   });
   saveWorldDoc(workshopId, doc);

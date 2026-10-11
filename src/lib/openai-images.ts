@@ -7,6 +7,7 @@ import { sniffImage } from "@/lib/image-format";
 import { scheduleImageVariants } from "@/lib/image-variants";
 import { serverEnv } from "@/lib/server-env";
 import type { AspectPreset, GeneratedImage, ImageMode, StorySettings } from "@/lib/types";
+import { recordMediaFile } from "@/lib/media-access";
 
 // OpenAI Images backend: the paid escape hatch for a server (or an app-only
 // host) whose hardware cannot run a local image model. The key is the server
@@ -223,6 +224,7 @@ export async function generateOpenAiImage(
   writeFileSync(saved, bytes);
   scheduleImageVariants(saved);
 
+  recordMediaFile(`/generated/${filename}`);
   return {
     id: crypto.randomUUID(),
     url: `/generated/${filename}`,

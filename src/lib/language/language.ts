@@ -86,10 +86,33 @@ export function stemWord(word: string, language: TableLanguage): string {
 // language's stop words (checked on the whole word, which is how Snowball's
 // lists are written: English lists "don't" whole, Italian lists the elided
 // "dell" on its own), each stemmed.
+//
+// Stemming is most of the cost of reading a text this way, and the same few
+// thousand words recur across a campaign's lore, notes and facts, so each
+// word's stem is remembered per language (bounded: a table that writes a
+// great many distinct words starts the memo over rather than growing it).
+const STEM_MEMO_LIMIT = 50_000;
+const stemMemos = new Map<TableLanguage, Map<string, string>>();
+
+function memoStem(word: string, language: TableLanguage): string {
+  let memo = stemMemos.get(language);
+  if (!memo) {
+    memo = new Map();
+    stemMemos.set(language, memo);
+  }
+  let stem = memo.get(word);
+  if (stem === undefined) {
+    stem = STEMMERS[language](word);
+    if (memo.size >= STEM_MEMO_LIMIT) memo.clear();
+    memo.set(word, stem);
+  }
+  return stem;
+}
+
 export function stems(text: string, language: TableLanguage): string[] {
   const stop = stopWordsFor(language);
   return words(text.normalize("NFC"))
     .map((word) => word.toLowerCase())
     .filter((word) => !stop.has(word))
-    .map((word) => STEMMERS[language](word));
+    .map((word) => memoStem(word, language));
 }

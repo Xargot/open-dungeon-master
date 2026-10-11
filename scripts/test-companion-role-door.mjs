@@ -176,7 +176,10 @@ await test("a companion already is one; the cap holds", async () => {
   const copy = sheetsDb.createSheet(world.campaignId, player.id, 1, libraryInput("Pip", "rogue"), second.id);
   const full = await call(world, ADOPT, "POST", world.owner, { sheetId: copy.id });
   assert.equal(full.status, 409);
-  assert.match(full.json.error, /full number of companions/);
+  // The cap is named with the way past it (issue 209).
+  assert.equal(full.json.code, "full-roster");
+  assert.match(full.json.error, /already has 2 lasting companions, the most this table allows/);
+  assert.match(full.json.error, /Raise "Most lasting party companions allowed at once"/);
   assert.equal(world.sheet(copy.id).userId, player.id, "unchanged when refused");
 });
 
@@ -226,6 +229,105 @@ await test("a lobby switch to a player character still replaces the sheet", asyn
   const now = sheetsDb.getSheetForUser(lobby.campaignId, guest.id);
   assert.notEqual(now.id, guestHero.id);
   assert.equal(now.name, "Lobby Spare");
+});
+
+// ---- issue 209: the handoff says which setting holds it ----
+
+const { lastingCompanionBlock } = await import("../src/lib/schemas/game-settings.ts");
+const { normalizeGameSettings } = await import("../src/lib/schemas/game-settings.ts");
+
+await test("Auto names what it resolved to; a person running the table or a lone player gets lasting companions", () => {
+  const auto = normalizeGameSettings({ companions: "auto", maxCompanions: 2 });
+  const block = lastingCompanionBlock(auto, 2, 0);
+  assert.equal(block.code, "auto-guests");
+  assert.match(block.reason, /on Auto, and at a table the AI runs for several players Auto allows only temporary guests/);
+  assert.match(block.remedy, /set AI companions to "Party members and guests" \(Setup tab, Game settings, Allies\)/);
+  assert.match(block.remedy, /other lasting companions at this table too/);
+  assert.equal(lastingCompanionBlock(auto, 1, 0), null, "a solo table");
+  assert.equal(lastingCompanionBlock(auto, 3, 0, true), null, "a table a person runs");
+  assert.equal(lastingCompanionBlock(normalizeGameSettings({ companions: "guests" }), 1, 0).code, "guests");
+  assert.equal(lastingCompanionBlock(normalizeGameSettings({ companions: "off" }), 1, 0).code, "off");
+  const capped = lastingCompanionBlock(normalizeGameSettings({ companions: "full", maxCompanions: 4 }), 2, 4);
+  assert.equal(capped.code, "full-roster");
+  assert.equal(capped.remedy, "Dismiss a companion first.", "no higher cap to point at");
+});
+
+const autoTable = await openWorld({ gameSettings: { companions: "auto", maxCompanions: 1 } });
+autoTable.addHero({ name: "Aldo" });
+const autoPlayer = autoTable.addUser("player");
+autoTable.addHero({ user: autoPlayer, name: "Bea" });
+const wrenLib = createCharacter(autoPlayer.id, 1, libraryInput("Wren"), "companion");
+const wrenCopy = sheetsDb.createSheet(autoTable.campaignId, autoPlayer.id, 1, libraryInput("Wren"), wrenLib.id);
+const SETTINGS = "campaigns/[campaignId]/settings";
+
+await test("at a multiplayer AI table on Auto the handoff names Auto, guests only, and the setting to change", async () => {
+  const refused = await call(autoTable, ADOPT, "POST", autoTable.owner, { sheetId: wrenCopy.id });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.json.code, "auto-guests");
+  assert.match(refused.json.error, /^Wren cannot be handed to the DM yet\. AI companions is on Auto/);
+  assert.match(refused.json.error, /"Party members and guests" \(Setup tab, Game settings, Allies\)/);
+  assert.equal(autoTable.sheet(wrenCopy.id).userId, autoPlayer.id, "unchanged when refused");
+  // The library's "Join the party" hears the same.
+  const join = await call(autoTable, CREATE, "POST", autoTable.owner, { libraryCharacterId: wrenLib.id });
+  assert.equal(join.status, 409);
+  assert.equal(join.json.code, "auto-guests");
+  assert.match(join.json.error, /^A companion cannot join the party here yet\. AI companions is on Auto/);
+});
+
+await test("explicit guests-only and off say so", async () => {
+  for (const [companions, code, words] of [["guests", "guests", /"Temporary guests only"/], ["off", "off", /set to Off/]]) {
+    const saved = await call(autoTable, SETTINGS, "PATCH", autoTable.owner, { companions });
+    assert.equal(saved.status, 200, JSON.stringify(saved.json));
+    const refused = await call(autoTable, ADOPT, "POST", autoTable.owner, { sheetId: wrenCopy.id });
+    assert.equal(refused.json.code, code);
+    assert.match(refused.json.error, words);
+  }
+});
+
+await test("a player who does not run the story gets no handoff and no settings guidance", async () => {
+  const refused = await call(autoTable, ADOPT, "POST", autoPlayer, { sheetId: wrenCopy.id });
+  assert.equal(refused.status, 403);
+  assert.ok(!/Party members and guests/.test(refused.json.error ?? ""));
+});
+
+await test("with Party members and guests and a free slot the handoff goes through, sheet and progress kept", async () => {
+  autoTable.patch(wrenCopy.id, { currentHp: 7 });
+  const saved = await call(autoTable, SETTINGS, "PATCH", autoTable.owner, { companions: "full" });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  const adopted = await call(autoTable, ADOPT, "POST", autoTable.owner, { sheetId: wrenCopy.id });
+  assert.equal(adopted.status, 200, JSON.stringify(adopted.json));
+  const now = autoTable.sheet(wrenCopy.id);
+  assert.equal(now.isCompanion, true);
+  assert.equal(now.currentHp, 7);
+  // The one slot is taken now: the next one names the cap and the way past it.
+  const tamLib = createCharacter(autoPlayer.id, 1, libraryInput("Tam", "rogue"), "companion");
+  const tamCopy = sheetsDb.createSheet(autoTable.campaignId, autoPlayer.id, 1, libraryInput("Tam", "rogue"), tamLib.id);
+  const capped = await call(autoTable, ADOPT, "POST", autoTable.owner, { sheetId: tamCopy.id });
+  assert.equal(capped.json.code, "full-roster");
+  assert.match(capped.json.error, /already has 1 lasting companion, the most this table allows/);
+});
+
+await test("a player whose only character is the misfiled ally loses the seat cleanly, and the table hears it", async () => {
+  const campaigns = await import("../src/lib/db/campaigns.ts");
+  const events = await import("../src/lib/events.ts");
+  const loner = autoTable.addUser("loner");
+  // Seated through the old door: the ally is all this player has here.
+  campaigns.setCampaignStatus(autoTable.campaignId, "lobby");
+  campaigns.joinByInviteCode(loner.id, autoTable.campaign().inviteCode);
+  campaigns.setCampaignStatus(autoTable.campaignId, "active");
+  const onlyLib = createCharacter(loner.id, 1, libraryInput("Moss"), "companion");
+  const only = sheetsDb.createSheet(autoTable.campaignId, loner.id, 1, libraryInput("Moss"), onlyLib.id);
+  campaigns.setMemberActiveCharacter(autoTable.campaignId, loner.id, only.id);
+  await call(autoTable, SETTINGS, "PATCH", autoTable.owner, { companions: "full", maxCompanions: 4 });
+  const published = [];
+  const unsubscribe = events.subscribe(autoTable.campaignId, (chunk) => published.push(/^event: (.+)$/m.exec(chunk)?.[1] ?? ""));
+  const adopted = await call(autoTable, ADOPT, "POST", autoTable.owner, { sheetId: only.id });
+  unsubscribe();
+  assert.equal(adopted.status, 200, JSON.stringify(adopted.json));
+  assert.equal(autoTable.sheet(only.id).isCompanion, true);
+  const seat = campaigns.listMembers(autoTable.campaignId).find((member) => member.userId === loner.id);
+  assert.equal(seat.activeCharacterId, "", "the seat still points at the ally");
+  assert.ok(published.includes("sheet_updated"), "the table never heard");
 });
 
 finish();

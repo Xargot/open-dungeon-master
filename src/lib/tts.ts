@@ -212,6 +212,19 @@ export function takeNarrationFailure(messageId: string): string | null {
 // drops it outright the moment a take lands.
 const narrationLists = new Map<string, { mtimeMs: number; audio: Record<string, string> }>();
 
+// The takes for the given messages only: what a table snapshot needs for the
+// transcript it carries. The whole map grew with every passage ever
+// narrated; an older passage's replay asks /narrate, which answers with the
+// take already on disk without rendering it again.
+export function narrationAudioFor(campaignId: string, messageIds: string[]): Record<string, string> {
+  const all = listNarrationAudio(campaignId);
+  const out: Record<string, string> = {};
+  for (const id of messageIds) {
+    if (all[id]) out[id] = all[id];
+  }
+  return out;
+}
+
 export function listNarrationAudio(campaignId: string): Record<string, string> {
   const directory = path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "generated-audio", campaignId);
   let mtimeMs: number;

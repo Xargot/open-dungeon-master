@@ -1,4 +1,4 @@
-// The pure parts of the agent-harness backend (docs/harness-mcp-plan.md):
+// The pure parts of the agent-harness backend (docs/archive/harness-mcp-plan.md):
 // how a DM turn is rendered for an agent program, what environment it may
 // see, the lockdown flags each adapter starts it with, and how a picture it
 // returns is checked. The flags are pinned here on purpose: a refactor that

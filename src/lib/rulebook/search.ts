@@ -107,29 +107,49 @@ function passagesOf(page: RulebookPage, blocks: BookBlock[]): Passage[] {
   return out;
 }
 
+function indexPage(page: RulebookPage) {
+  const passages = passagesOf(page, parseBook(page.md));
+  const wordStems = new Map<string, string>();
+  for (const text of [page.title, ...passages.flatMap((item) => [item.heading ?? "", item.text])]) {
+    for (const word of words(text)) {
+      if (!wordStems.has(word)) wordStems.set(word, stem(word));
+    }
+  }
+  return {
+    page,
+    wordStems,
+    titleStems: new Set(words(page.title).map(stem)),
+    titleLower: page.title.toLowerCase(),
+    passages,
+  };
+}
+
+function chapterMap(chapters: Array<{ id: string; numeral: string; title: string }>) {
+  return new Map(chapters.map((chapter) => [chapter.id, { numeral: chapter.numeral, title: chapter.title }]));
+}
+
 export function buildIndex(
   pages: RulebookPage[],
   chapters: Array<{ id: string; numeral: string; title: string }>,
 ): RulebookIndex {
-  return {
-    pages: pages.map((page) => {
-      const passages = passagesOf(page, parseBook(page.md));
-      const wordStems = new Map<string, string>();
-      for (const text of [page.title, ...passages.flatMap((item) => [item.heading ?? "", item.text])]) {
-        for (const word of words(text)) {
-          if (!wordStems.has(word)) wordStems.set(word, stem(word));
-        }
-      }
-      return {
-        page,
-        wordStems,
-        titleStems: new Set(words(page.title).map(stem)),
-        titleLower: page.title.toLowerCase(),
-        passages,
-      };
-    }),
-    chapters: new Map(chapters.map((chapter) => [chapter.id, { numeral: chapter.numeral, title: chapter.title }])),
-  };
+  return { pages: pages.map(indexPage), chapters: chapterMap(chapters) };
+}
+
+// The same index, built a slice of pages at a time with the event loop
+// handed back between slices. Parsing every page of the book takes about a
+// third of a second; done in one go, the first search after a start held
+// every other request and live stream on the server for all of it.
+export async function buildIndexInSlices(
+  pages: RulebookPage[],
+  chapters: Array<{ id: string; numeral: string; title: string }>,
+  slice = 24,
+): Promise<RulebookIndex> {
+  const indexed: RulebookIndex["pages"] = [];
+  for (let start = 0; start < pages.length; start += slice) {
+    for (const page of pages.slice(start, start + slice)) indexed.push(indexPage(page));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  return { pages: indexed, chapters: chapterMap(chapters) };
 }
 
 // Rules text outranks an entry that merely mentions a word, all else equal.

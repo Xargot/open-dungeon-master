@@ -10,11 +10,10 @@ import {
   adoptSheetAsCompanion,
   getSheetById,
   getSheetForUser,
-  listSheets,
   listSheetsForUser,
 } from "@/lib/db/sheets";
 import { createCompanionUser } from "@/lib/db/users";
-import { companionMode, listCompanions } from "@/lib/dm/companion-tools";
+import { lastingCompanionProblem } from "@/lib/dm/companion-tools";
 import { publishEphemeral, publishPersisted, publishWithSeq } from "@/lib/events";
 
 export const runtime = "nodejs";
@@ -63,18 +62,19 @@ export async function POST(
       { status: 403 },
     );
   }
-  if (companionMode(campaign) !== "full") {
+  // The table's companion setting and cap, said with the setting that
+  // holds it and the way to allow it (issue 209), the same words the Party
+  // panel shows beside the button. A stale client or a direct call hears
+  // them too.
+  const blocked = lastingCompanionProblem(campaign);
+  if (blocked) {
     return Response.json(
-      { error: "Party companions are not available at this table." },
-      { status: 409 },
-    );
-  }
-  const partyCompanions = listCompanions(listSheets(campaignId)).filter(
-    (entry) => entry.companionKind !== "guest",
-  ).length;
-  if (partyCompanions >= campaign.gameSettings.maxCompanions) {
-    return Response.json(
-      { error: "The party already has its full number of companions." },
+      {
+        error: `${sheet.name} cannot be handed to the DM yet. ${blocked.reason} ${blocked.remedy}`,
+        code: blocked.code,
+        reason: blocked.reason,
+        remedy: blocked.remedy,
+      },
       { status: 409 },
     );
   }

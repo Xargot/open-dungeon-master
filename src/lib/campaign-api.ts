@@ -3,7 +3,7 @@ import { capsFor as capsForCampaign, getCampaignForUser, type Campaign } from "@
 import type { ViewerCaps } from "@/lib/dm/viewer";
 import type { User } from "@/lib/db/users";
 import { isMemberMuted } from "@/lib/db/moderation";
-import { enterUsageScope } from "@/lib/usage/scope";
+import { fillUsageScope, openUsageScope } from "@/lib/usage/scope";
 
 export type MemberContext = { user: User; campaign: Campaign };
 
@@ -12,7 +12,9 @@ export type MemberContext = { user: User; campaign: Campaign };
 export async function requireMember(
   campaignId: string,
 ): Promise<MemberContext | Response> {
-  const user = await currentUser();
+  // Opened before the first await so it is the route's (src/lib/usage/scope.ts).
+  const scope = openUsageScope();
+  const user = await currentUser(scope);
   if (!user) {
     return unauthorized();
   }
@@ -27,7 +29,7 @@ export async function requireMember(
   }
   // Everything this request goes on to ask of a model, a painter or a
   // speech server is this campaign's in the usage ledger.
-  enterUsageScope({ campaignId: campaign.id, userId: user.id });
+  fillUsageScope(scope, { campaignId: campaign.id, userId: user.id });
   return { user, campaign };
 }
 

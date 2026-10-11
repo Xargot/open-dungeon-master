@@ -3,14 +3,12 @@
 import Link from "next/link";
 import { appConfirm } from "@/components/ui/ConfirmDialog";
 import { ArrowLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { roomCodeRefused } from "@/lib/shell-host";
 import { useShellShare } from "@/lib/use-shell-share";
 import { ScheduleSection } from "@/components/ScheduleSection";
 import { ui } from "@/lib/ui";
-import { CompanionBuilderDialog } from "@/app/campaigns/[campaignId]/CompanionBuilderDialog";
-import { EditCampaignDialog } from "@/app/campaigns/[campaignId]/EditCampaignDialog";
 import { GameSettingsPanel } from "@/app/campaigns/[campaignId]/GameSettingsPanel";
 import { LobbyActions } from "@/app/campaigns/[campaignId]/LobbyActions";
 import { LobbyParty } from "@/app/campaigns/[campaignId]/LobbyParty";
@@ -30,6 +28,16 @@ import {
 import type { CampaignState } from "@/app/campaigns/[campaignId]/useCampaignStream";
 import { navigateTo } from "@/lib/navigation";
 import { SceneBackdrop } from "@/app/campaigns/[campaignId]/CinematicParts";
+
+// The companion builder carries the whole character builder (spells,
+// gear, the portrait cropper); it and the campaign editor load when they
+// are opened, not with the lobby.
+const CompanionBuilderDialog = lazy(() =>
+  import("@/app/campaigns/[campaignId]/CompanionBuilderDialog").then((module) => ({ default: module.CompanionBuilderDialog })),
+);
+const EditCampaignDialog = lazy(() =>
+  import("@/app/campaigns/[campaignId]/EditCampaignDialog").then((module) => ({ default: module.EditCampaignDialog })),
+);
 
 // The lobby: where the table gathers before the adventure opens. On a desktop
 // it is a table with two sides: the campaign, its party and this viewer's
@@ -526,6 +534,7 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
         </div>
       </div>
 
+      <Suspense fallback={null}>
       {editing ? (
         <EditCampaignDialog campaign={campaign} onClose={() => setEditing(false)} />
       ) : null}
@@ -539,6 +548,7 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
           onClose={() => setBuildingCompanion(false)}
         />
       ) : null}
+      </Suspense>
     </main>
   );
 }

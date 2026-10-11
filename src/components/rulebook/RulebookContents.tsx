@@ -1,5 +1,6 @@
 "use client";
 
+import "@/app/styles/rulebook.css";
 import { Bookmark, ChevronRight, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { cn } from "@/lib/cn";

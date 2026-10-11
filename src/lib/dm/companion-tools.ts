@@ -39,7 +39,12 @@ import { settingClassIds } from "@/lib/classes";
 import { TOLD_GENDER_HELP, TOLD_GENDERS, toldGender } from "@/lib/gender";
 import { presetFor, packFor } from "@/lib/worlds/preset";
 import { packIds } from "@/lib/worlds/reskin-logic";
-import { resolveCompanionMode, type CompanionMode } from "@/lib/schemas/game-settings";
+import {
+  lastingCompanionBlock,
+  resolveCompanionMode,
+  type CompanionMode,
+  type LastingCompanionBlock,
+} from "@/lib/schemas/game-settings";
 import { hasHumanDm } from "@/lib/dm/viewer";
 import {
   createSheetSchema,
@@ -79,6 +84,21 @@ export function companionMode(campaign: Campaign): CompanionMode {
 
 export function listCompanions(sheets: CharacterSheet[]): CharacterSheet[] {
   return sheets.filter((sheet) => sheet.isCompanion);
+}
+
+// Why a lasting party companion cannot join this table now, with the way
+// to allow one (game-settings.ts lastingCompanionBlock, issue 209); null
+// when one can. The mode and the cap, read the way companionMode reads them.
+export function lastingCompanionProblem(campaign: Campaign): LastingCompanionBlock | null {
+  const partyCompanions = listCompanions(listSheets(campaign.id)).filter(
+    (sheet) => sheet.companionKind !== "guest",
+  ).length;
+  return lastingCompanionBlock(
+    campaign.gameSettings,
+    countPartySlots(campaign.id),
+    partyCompanions,
+    hasHumanDm(campaignSeats(campaign)),
+  );
 }
 
 type ToolDef = {

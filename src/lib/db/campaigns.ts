@@ -18,7 +18,10 @@ import { syncArcQuests } from "@/lib/db/quests";
 import { normalizeCover, type DmCover } from "@/lib/dm/delegation";
 import { MINUTES_PER_DAY, daysPerYear, defaultClock, normalizeCalendarDefinition, normalizeClock, type CampaignClock } from "@/lib/dm/calendar";
 import { packFor } from "@/lib/worlds/preset";
-import { normalizeParty, type PartyState } from "@/lib/dm/party-logic";
+import { closeStreamsForCampaign } from "@/lib/live-streams";
+import { dropDmQueue } from "@/lib/dm/queue";
+import type { PartyState } from "@/lib/dm/party-logic";
+import { partyFromJson } from "@/lib/db/party";
 import {
   partySlotCount,
   viewerCaps,
@@ -267,7 +270,7 @@ function mapCampaign(row: CampaignRow): Campaign {
     floor: normalizeFloor(parseJson(row.floor_json, null)),
     dmCover: normalizeCover(parseJson(row.dm_cover_json ?? "", null)),
     clock: normalizeClock(parseJson(row.clock_json ?? "", null)),
-    party: normalizeParty(parseJson(row.party_json ?? "", null)),
+    party: partyFromJson(row.party_json ?? ""),
   };
 }
 
@@ -419,6 +422,10 @@ export function deleteCampaign(campaignId: string) {
        AND id IN (SELECT user_id FROM character_sheets WHERE campaign_id = ?)`,
   ).run(campaignId);
   db.prepare(`DELETE FROM campaigns WHERE id = ?`).run(campaignId);
+  // Anyone still at the table stops hearing it now (src/lib/live-streams.ts),
+  // and turns still waiting for it are not run against rows that are gone.
+  closeStreamsForCampaign(campaignId);
+  dropDmQueue(campaignId);
 }
 
 export function listCampaignsForUser(userId: string): CampaignSummary[] {
@@ -896,10 +903,14 @@ export function setMemberRealDice(campaignId: string, userId: string, useRealDic
 
 // Which of their characters a player is running now
 // (docs/vtt-parity-implementation-plan.md 11.3).
+// No character is the empty string: the column is NOT NULL DEFAULT ''. A
+// null here failed the write, which is how handing a player's only
+// character to the DM answered 500 after the sheet had already changed
+// hands, and the table never heard about it (companions/adopt).
 export function setMemberActiveCharacter(campaignId: string, userId: string, characterId: string | null) {
   getDatabase()
     .prepare(`UPDATE campaign_members SET active_character_id = ? WHERE campaign_id = ? AND user_id = ?`)
-    .run(characterId, campaignId, userId);
+    .run(characterId ?? "", campaignId, userId);
 }
 
 export function setMemberHoldRolls(campaignId: string, userId: string, holdRolls: boolean) {

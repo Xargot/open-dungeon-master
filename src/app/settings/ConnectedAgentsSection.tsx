@@ -37,7 +37,7 @@ function when(iso: string | null): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-// Connected agents (docs/harness-mcp-plan.md 7): your own Claude Code, Codex
+// Connected agents (docs/archive/harness-mcp-plan.md 7): your own Claude Code, Codex
 // or other MCP client acting as you on this server, with exactly what your
 // account can do in the browser and nothing more. The token is shown once.
 export function ConnectedAgentsSection() {

@@ -263,6 +263,13 @@ button:hover > .rail-glyph { filter: none; opacity: 1; }
   border-color: rgba(212, 171, 58, 0.65);
   box-shadow: 0 2px 8px rgba(4, 2, 12, 0.55) inset, 0 0 0 3px rgba(212, 171, 58, 0.12);
 }
+/* A draft over its mode's limit (issue 207): the frame turns ember and
+   eases there, the same transition the focus ring rides. */
+.session-well[data-over],
+.session-well[data-over]:focus-within {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow: 0 2px 8px rgba(4, 2, 12, 0.55) inset, 0 0 0 3px rgba(239, 68, 68, 0.14);
+}
 .session-mode {
   display: inline-flex;
   align-items: center;

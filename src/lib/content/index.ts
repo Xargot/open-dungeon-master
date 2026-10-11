@@ -1,4 +1,5 @@
 import { getContentDb } from "@/lib/content/db";
+import { packWeightLb } from "@/lib/content/weight";
 import { listHomebrew } from "@/lib/db/homebrew";
 import { normalizeSpellMech } from "@/lib/homebrew/gear";
 import type { HomebrewKind } from "@/lib/schemas/homebrew";
@@ -22,7 +23,7 @@ import {
   type SpellMech,
 } from "@/lib/srd/spell-mechanics";
 
-export { itemWeightByName } from "@/lib/content/item-weights";
+export { itemWeightByName, repairedWeight } from "@/lib/content/item-weights";
 
 // Unified content entry: Open5e rows and homebrew rows share this shape so
 // pickers render one list. `data` is the raw normalized payload (Open5e API
@@ -343,19 +344,25 @@ export function searchItems(
       data_json: string;
     }>;
     rows.push(
-      ...found.map((row) => ({
-        slug: row.slug,
-        name: row.name,
-        source: "open5e" as const,
-        documentSlug: row.document_slug,
-        document: documentTitle(row.document_slug),
-        kind: row.kind,
-        rarity: row.rarity,
-        cost: row.cost,
-        category: row.category,
-        weight: row.weight ?? 0,
-        data: parseData(row.data_json),
-      })),
+      ...found.map((row) => {
+        const data = parseData(row.data_json);
+        return {
+          slug: row.slug,
+          name: row.name,
+          source: "open5e" as const,
+          documentSlug: row.document_slug,
+          document: documentTitle(row.document_slug),
+          kind: row.kind,
+          rarity: row.rarity,
+          cost: row.cost,
+          category: row.category,
+          // Read from the row's own text, not the column an older pack may
+          // have filled wrong (issue #205): the builder and a workshop copy
+          // take this number onto a sheet.
+          weight: packWeightLb(row.weight, data),
+          data,
+        };
+      }),
     );
   }
   const brews = homebrewEntries(options, "item", options.q).map((entry) => ({

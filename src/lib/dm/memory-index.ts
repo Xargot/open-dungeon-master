@@ -136,7 +136,7 @@ export async function indexChapter(campaignId: string, chapterId: string): Promi
       const messages = listMessagesInSeqRange(campaignId, chapter.seqStart, chapter.seqEnd);
       const scenes = chunkScenes(messages);
       if (scenes.length) {
-        const vectors = await embed(scenes.map((scene) => scene.text));
+        const vectors = await embed(scenes.map((scene) => scene.text), { background: true });
         const signals = gatherSceneSignals(
           campaignId,
           { seqStart: chapter.seqStart, seqEnd: chapter.seqEnd },
@@ -192,7 +192,7 @@ export async function reembedSceneChunks(campaignId: string): Promise<number> {
   const pending = listSceneChunksMissingVectors(campaignId);
   for (let start = 0; start < pending.length; start += REEMBED_BATCH) {
     const batch = pending.slice(start, start + REEMBED_BATCH);
-    const vectors = await embed(batch.map((chunk) => chunk.text));
+    const vectors = await embed(batch.map((chunk) => chunk.text), { background: true });
     batch.forEach((chunk, index) => {
       setSceneChunkEmbedding(chunk.id, vectorToBuffer(vectors[index]));
     });
@@ -365,7 +365,7 @@ export async function embedPendingFacts(campaignId: string): Promise<number> {
   if (!missing.length) {
     return 0;
   }
-  const vectors = await embed(missing.map((row) => row.fact));
+  const vectors = await embed(missing.map((row) => row.fact), { background: true });
   const update = db.prepare(`UPDATE world_facts SET embedding = ? WHERE id = ?`);
   missing.forEach((row, index) => {
     update.run(vectorToBuffer(vectors[index]), row.id);

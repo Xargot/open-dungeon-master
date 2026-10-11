@@ -1,7 +1,9 @@
 import { openDatabase, type SqliteDatabase } from "./driver.ts";
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { serverEnv } from "../server-env.ts";
+import { maintenanceState } from "../maintenance.ts";
 import { populateFeatures, populateFeaturesForClasses } from "@/lib/srd/features";
 import { packSubclassExtras } from "@/lib/content/archetype-tables";
 import { extraSubclassOf, mergeExtras, type SubclassExtras } from "@/lib/srd/subclass-tables";
@@ -92,6 +94,10 @@ function ensureSchema(db: SqliteDatabase) {
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL
     );
+    -- The expiry sweep (pruneExpiredSessions) and signing a user out
+    -- everywhere (deleteSessionsForUser, and the cascade from users).
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
     CREATE TABLE IF NOT EXISTS account_invites (
       code TEXT PRIMARY KEY,
@@ -2177,7 +2183,7 @@ function ensureSchema(db: SqliteDatabase) {
   // such owner as the DM. Idempotent: a repaired row no longer matches.
   repairWorkshopDmSeats(db);
 
-  // Connected agents (docs/harness-mcp-plan.md 7): a player's own agent
+  // Connected agents (docs/archive/harness-mcp-plan.md 7): a player's own agent
   // session (Claude Code, Codex, any MCP client) acting as that player over
   // /api/mcp. Only the token's hash is kept, the same rule as sessions.
   // scopes_json is the list of tool groups the player ticked.
@@ -2269,6 +2275,21 @@ function ensureSchema(db: SqliteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_usage_events_campaign ON usage_events(campaign_id, at);
     CREATE INDEX IF NOT EXISTS idx_usage_events_user ON usage_events(user_id, at);
 
+    -- Who a stored picture or document was made for (src/lib/media-access.ts):
+    -- the account that uploaded or asked for it and the campaign or workshop
+    -- it was made in, so it can be shown before any row names it (a portrait
+    -- previewed before the sheet is saved). Plain columns: the file can
+    -- outlive both.
+    CREATE TABLE IF NOT EXISTS media_files (
+      path TEXT PRIMARY KEY,
+      user_id TEXT,
+      campaign_id TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    -- The campaigns one account belongs to, asked on every picture it opens.
+    CREATE INDEX IF NOT EXISTS idx_campaign_members_user ON campaign_members(user_id);
+
     -- Where a row of prep came from (src/lib/db/content-origins.ts): the
     -- campaign or workshop it was copied out of and the row it was copied
     -- from, or 'bundle' and the portable key it arrived under. It is what
@@ -2291,6 +2312,9 @@ function ensureSchema(db: SqliteDatabase) {
   // Databases that created player_webhooks before receivers could carry
   // their own Authorization value or extra headers (docs/player-webhooks.md).
   addColumns("player_webhooks", [["authorization_header", `TEXT`], ["extra_headers", `TEXT`]]);
+  // How many calls a row stands for: one, until the retention pass merges
+  // old rows into one per month (src/lib/ops/retention.ts).
+  addColumns("usage_events", [["calls", `INTEGER NOT NULL DEFAULT 1`]]);
 }
 
 // Widens battle_tokens.kind to accept the DM's own board furniture.
@@ -2671,16 +2695,92 @@ function bootSubclassExtras(db: SqliteDatabase, campaignId: string, cache: Map<s
   return extras;
 }
 
+// The boot resync below re-derives every sheet, and its answer depends only
+// on the rules this build carries, the content pack, the workshop subclasses
+// and feats on this server, and who sits in each campaign's DM seats. A
+// restart of the same build over the same data would rewrite nothing, yet it
+// read and re-derived every sheet before the first request. So a production
+// boot records what it resynced against and the next boot skips the pass
+// when nothing it depends on has changed. Development and test runs (no
+// build stamp) resync every time, as before, since their code changes
+// without a new build.
+const SHEET_RESYNC_KEY = "sheet_resync_fingerprint";
+
+export function sheetResyncFingerprint(
+  db: SqliteDatabase,
+  // Read member by member: next.config.ts inlines the build stamps into the
+  // bundle only where the code names them, so process.env as a whole would
+  // never carry them.
+  env: { NODE_ENV?: string; ODM_BUILD_TIME?: string; ODM_BUILD_COMMIT?: string; CONTENT_DB_PATH?: string } = {
+    NODE_ENV: process.env.NODE_ENV,
+    ODM_BUILD_TIME: process.env.ODM_BUILD_TIME,
+    ODM_BUILD_COMMIT: process.env.ODM_BUILD_COMMIT,
+    CONTENT_DB_PATH: process.env.CONTENT_DB_PATH,
+  },
+): string | null {
+  if (env.NODE_ENV !== "production" || !env.ODM_BUILD_TIME) {
+    return null;
+  }
+  const hash = createHash("sha256");
+  hash.update(`build ${env.ODM_BUILD_COMMIT ?? ""} ${env.ODM_BUILD_TIME}\n`);
+  try {
+    const pack = statSync(
+      env.CONTENT_DB_PATH || path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "content", "open5e.sqlite"),
+    );
+    hash.update(`pack ${pack.size} ${pack.mtimeMs}\n`);
+  } catch {
+    hash.update("pack none\n");
+  }
+  const homebrew = db
+    .prepare(
+      `SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM homebrew_entries WHERE kind IN ('archetype', 'feat')`,
+    )
+    .get() as { n: number; at: string | null };
+  hash.update(`homebrew ${homebrew.n} ${homebrew.at ?? ""}\n`);
+  const seats = db
+    .prepare(
+      `SELECT id, owner_user_id, human_dm_user_id, assistant_dm_user_id FROM campaigns ORDER BY id`,
+    )
+    .all() as Array<Record<string, string | null>>;
+  for (const seat of seats) {
+    hash.update(`${seat.id} ${seat.owner_user_id} ${seat.human_dm_user_id ?? ""} ${seat.assistant_dm_user_id ?? ""}\n`);
+  }
+  return hash.digest("hex");
+}
+
 function backfillSheetResources(db: SqliteDatabase) {
+  const fingerprint = sheetResyncFingerprint(db);
+  if (fingerprint) {
+    const done = db.prepare(`SELECT value_json FROM app_settings WHERE key = ?`).get(SHEET_RESYNC_KEY) as
+      | { value_json: string }
+      | undefined;
+    if (done && parseJson<{ fingerprint?: string }>(done.value_json, {}).fingerprint === fingerprint) {
+      return;
+    }
+  }
   resyncingDb = db;
   try {
-    resyncSheetResources(db);
+    const started = Date.now();
+    const { checked, changed } = resyncSheetResources(db);
+    if (checked > 0) {
+      console.log(`[db] resynced ${checked} character sheets against this build's rules (${changed} changed) in ${Date.now() - started} ms`);
+    }
   } finally {
     resyncingDb = null;
   }
+  if (fingerprint) {
+    db.prepare(
+      `INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+    ).run(SHEET_RESYNC_KEY, JSON.stringify({ fingerprint }), nowIso());
+  }
 }
 
-function resyncSheetResources(db: SqliteDatabase) {
+// Rows written per transaction: one commit per sheet made a large world's
+// boot pay a journal write for every character.
+const RESYNC_BATCH = 200;
+
+function resyncSheetResources(db: SqliteDatabase): { checked: number; changed: number } {
   const sheets = db
     .prepare(
       `SELECT id, campaign_id, class, subclass, race, level, abilities_json, features_json, resources_json,
@@ -2701,12 +2801,19 @@ function resyncSheetResources(db: SqliteDatabase) {
     feats_json: string | null;
   }>;
   if (!sheets.length) {
-    return;
+    return { checked: 0, changed: 0 };
   }
   const update = db.prepare(
     `UPDATE character_sheets SET features_json = ?, resources_json = ? WHERE id = ?`,
   );
   const extrasByCampaign = new Map<string, SubclassExtras>();
+  const pending: Array<[string, string, string]> = [];
+  let changed = 0;
+  const flush = db.transaction((rows: Array<[string, string, string]>) => {
+    for (const [features, resources, id] of rows) {
+      update.run(features, resources, id);
+    }
+  });
   for (const row of sheets) {
     try {
       const existingFeatures = JSON.parse(row.features_json ?? "[]") as Parameters<
@@ -2746,12 +2853,20 @@ function resyncSheetResources(db: SqliteDatabase) {
       const nextFeatures = JSON.stringify(features);
       const nextResources = JSON.stringify(resources);
       if (nextFeatures !== row.features_json || nextResources !== row.resources_json) {
-        update.run(nextFeatures, nextResources, row.id);
+        pending.push([nextFeatures, nextResources, row.id]);
+        changed += 1;
+        if (pending.length >= RESYNC_BATCH) {
+          flush(pending.splice(0));
+        }
       }
     } catch {
       // Unparseable rows stay untouched; the sheet UI can still fix them.
     }
   }
+  if (pending.length) {
+    flush(pending.splice(0));
+  }
+  return { checked: sheets.length, changed };
 }
 
 let plaintextWarned = false;
@@ -2774,7 +2889,30 @@ function requireDbKey() {
 // includes a full character_sheets backfill and table_info sweeps.
 let schemaEnsured = false;
 
+// Closes the world's database for good in this process: a live restore is
+// about to replace the file (src/lib/ops/backup.ts), and the next open must
+// be a fresh process that reads the restored one.
+export function closeDatabaseForRestore(): void {
+  const db = globalThis.__localRoleplayDb;
+  globalThis.__localRoleplayDb = undefined;
+  schemaEnsured = false;
+  try {
+    db?.close();
+  } catch (error) {
+    console.error("[db] closing the database for a restore failed", error);
+  }
+}
+
+// The database file, for the storage panel's sizes and free-space check.
+export function databaseFilePath(): string {
+  return dbPath;
+}
+
 export function getDatabase() {
+  const maintenance = maintenanceState();
+  if (maintenance) {
+    throw new Error(`The server is in maintenance (${maintenance.reason}); restart it to continue.`);
+  }
   if (globalThis.__localRoleplayDb) {
     if (!schemaEnsured) {
       ensureSchema(globalThis.__localRoleplayDb);
@@ -2797,8 +2935,9 @@ export function getDatabase() {
       `[db] ${db.engine} SQLite engine cannot encrypt; ${dbPath} is stored unencrypted.`,
     );
   }
+  let tables = 0;
   try {
-    db.prepare("SELECT count(*) FROM sqlite_master").get();
+    tables = Number(Object.values(db.prepare("SELECT count(*) FROM sqlite_master").get() as object)[0]) || 0;
   } catch {
     db.close();
     throw new Error(
@@ -2808,6 +2947,12 @@ export function getDatabase() {
         : `Could not open ${dbPath}: it is encrypted and the ${db.engine} SQLite engine has no cipher. ` +
             "Set ODM_SQLITE_DRIVER=native on a host with the native module.",
     );
+  }
+  // A new database hands the pages its deletes free back to the disk a
+  // little at a time (src/lib/ops/retention.ts). Only possible before the
+  // first table; an older file switches when the admin compacts it.
+  if (tables === 0) {
+    db.pragma("auto_vacuum = INCREMENTAL");
   }
   db.pragma("journal_mode = WAL");
   // Under WAL, NORMAL only fsyncs at checkpoints, so a persisted event no

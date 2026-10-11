@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { scheduleImageVariants } from "@/lib/image-variants";
 import { isUploadedImagePath, isUploadedPdfPath } from "@/lib/uploads";
+import { recordMediaFile } from "@/lib/media-access";
 
 // The one size cap for anything that lands in public/uploads, whether it
 // arrives by upload form or inside a character bundle.
@@ -49,6 +50,7 @@ export async function writeUploadedImage(
   // fatal (src/lib/image-variants.ts); covers the upload route and the
   // character bundle import alike.
   scheduleImageVariants(saved);
+  recordMediaFile(`/uploads/${filename}`);
   return { id, url: `/uploads/${filename}` };
 }
 
@@ -59,6 +61,7 @@ export async function writeUploadedPdf(bytes: Uint8Array): Promise<{ id: string;
   const dir = uploadsDir();
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(/*turbopackIgnore: true*/ dir, filename), bytes);
+  recordMediaFile(`/uploads/${filename}`);
   return { id, url: `/uploads/${filename}` };
 }
 

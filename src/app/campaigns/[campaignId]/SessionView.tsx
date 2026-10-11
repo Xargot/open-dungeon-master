@@ -8,7 +8,6 @@ import { SceneTitle } from "@/components/SceneTitle";
 import { HandoutStage } from "@/components/HandoutStage";
 import { SafetyPause } from "@/app/campaigns/[campaignId]/SafetyPause";
 import type { Speaker } from "@/lib/dm/speech";
-import { LabelSheet } from "@/app/campaigns/[campaignId]/LabelSheet";
 import type { MapLabel } from "@/lib/battlemap/scene";
 
 const NOOP = () => {};
@@ -31,24 +30,19 @@ import {
   useSyncExternalStore,
 } from "react";
 import { JOIN_NOTE_PREFIX, latestUnintroducedJoin } from "@/lib/campaign-types";
+import { composerLimit, textLength } from "@/lib/text-limits";
 import { markTourSeen, tourSeen } from "@/lib/tours/logic";
 import { DM_TOUR, DM_TOUR_ID, PLAYER_TOUR, PLAYER_TOUR_ID } from "@/lib/tours/table";
-import { HelpDialog } from "@/components/HelpDialog";
-import { GuidedTour } from "@/components/ui/GuidedTour";
-import { CharacterGate } from "@/app/campaigns/[campaignId]/CharacterGate";
 import { Composer, type InputKind } from "@/app/campaigns/[campaignId]/Composer";
 import { composerGate } from "@/app/campaigns/[campaignId]/composerGate";
 import { DiceOverlay } from "@/app/campaigns/[campaignId]/DiceOverlay";
-import { DiceLookDialog } from "@/components/DiceLookEditor";
-import { DiceTrayDialog, secretAudience } from "@/app/campaigns/[campaignId]/DiceTrayDialog";
+import { secretAudience } from "@/lib/dice/secret-audience";
 import {
   requestMotionAccess,
   supportsShake,
   useShakeToRoll,
   writeShakeToRoll,
 } from "@/lib/dice/shake-to-roll";
-import { LoreCheckDialog } from "@/app/campaigns/[campaignId]/LoreCheckDialog";
-import { RenarrateDialog } from "@/app/campaigns/[campaignId]/RenarrateDialog";
 import type { CampaignMessage } from "@/lib/db/messages";
 import {
   beatCadence,
@@ -70,7 +64,6 @@ import { useTableAudio } from "@/app/campaigns/[campaignId]/useTableAudio";
 import type { SoundSteering } from "@/app/campaigns/[campaignId]/SoundPanel";
 import type { CampaignState } from "@/app/campaigns/[campaignId]/useCampaignStream";
 import { InitiativeRibbon, PartyRail, QuestGlance, RollToast, SceneBackdrop, TabletopChronicle } from "@/app/campaigns/[campaignId]/CinematicParts";
-import { BattleMapPanel } from "@/app/campaigns/[campaignId]/BattleMapPanel";
 import {
   NarrationFailureBanner,
   useNarrationReplay,
@@ -79,6 +72,8 @@ import {
 import { turnFromEncounter, turnHudBudget } from "@/lib/battlemap/hand-table";
 
 import { useDocked } from "@/app/campaigns/[campaignId]/SidePanel";
+import { PanelLoading, panels, preloadSidePanels } from "@/app/campaigns/[campaignId]/side-panel-loaders";
+import { preloadable } from "@/lib/preloadable";
 
 // The level-up dialog carries the class feature and resource tables of the
 // whole SRD; it loads the first time a character actually levels rather
@@ -88,6 +83,54 @@ const LevelUpDialog = lazy(() =>
     default: module.LevelUpDialog,
   })),
 );
+
+// What a table only needs when someone reaches for it: the dialogs, the
+// tours, the character gate and the board. Each is its own download,
+// fetched when the browser is idle after the table is up (with the side
+// panels, side-panel-loaders.ts), so it is already here when it is opened.
+// The dialogs that animate closed mount on first open and then stay
+// mounted (useOpenedOnce), so their exit animation still plays.
+const tablePieces = {
+  HelpDialog: preloadable(() => import("@/components/HelpDialog").then((module) => module.HelpDialog)),
+  GuidedTour: preloadable(() => import("@/components/ui/GuidedTour").then((module) => module.GuidedTour)),
+  CharacterGate: preloadable(() => import("@/app/campaigns/[campaignId]/CharacterGate").then((module) => module.CharacterGate)),
+  DiceLookDialog: preloadable(() => import("@/components/DiceLookEditor").then((module) => module.DiceLookDialog)),
+  DiceTrayDialog: preloadable(() => import("@/app/campaigns/[campaignId]/DiceTrayDialog").then((module) => module.DiceTrayDialog)),
+  LoreCheckDialog: preloadable(() => import("@/app/campaigns/[campaignId]/LoreCheckDialog").then((module) => module.LoreCheckDialog)),
+  RenarrateDialog: preloadable(() => import("@/app/campaigns/[campaignId]/RenarrateDialog").then((module) => module.RenarrateDialog)),
+  LabelSheet: preloadable(() => import("@/app/campaigns/[campaignId]/LabelSheet").then((module) => module.LabelSheet)),
+};
+const { HelpDialog, GuidedTour, CharacterGate, DiceLookDialog, DiceTrayDialog, LoreCheckDialog, RenarrateDialog, LabelSheet } = tablePieces;
+const { BattleMapPanel } = panels;
+
+// True from the first time `open` is true: a dialog mounts then and stays.
+function useOpenedOnce(open: boolean): boolean {
+  const [opened, setOpened] = useState(open);
+  if (open && !opened) {
+    setOpened(true);
+  }
+  return opened || open;
+}
+
+// Once the table is drawn and the browser has a moment, fetch what it may
+// reach for next.
+function usePreloadTable() {
+  useEffect(() => {
+    const preload = () => {
+      preloadSidePanels();
+      for (const piece of Object.values(tablePieces)) {
+        void piece.preload().catch(() => undefined);
+      }
+    };
+    const idle = typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(preload, { timeout: 3000 })
+      : window.setTimeout(preload, 1500);
+    return () => {
+      if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(idle as number);
+      window.clearTimeout(idle as number);
+    };
+  }, []);
+}
 
 // The localStorage-backed preferences below are read as external stores.
 // Each keeps its last answer and forgets it only when its own event says
@@ -221,6 +264,11 @@ export function SessionView({
   const openDiceTray = useCallback(() => setDiceTrayOpen(true), []);
   const [helpOpen, setHelpOpen] = useState(false);
   const openHelp = useCallback(() => setHelpOpen(true), []);
+  usePreloadTable();
+  const helpMounted = useOpenedOnce(helpOpen);
+  const diceLookMounted = useOpenedOnce(diceLookOpen);
+  const diceTrayMounted = useOpenedOnce(diceTrayOpen);
+  const tourMounted = useOpenedOnce(tour !== null);
 
   // Shake to roll is a device preference; while it is on here, this
   // member's rolls are held at the campaign so the phone can release them.
@@ -483,7 +531,8 @@ export function SessionView({
     async (event: FormEvent) => {
       event.preventDefault();
       const content = input.trim();
-      if (!content || sending || gate.inputBlocked || muted) {
+      // Over the mode's limit the box says so and keeps the draft (issue 207).
+      if (!content || sending || gate.inputBlocked || muted || textLength(content) > composerLimit(kind, leadPrivate)) {
         return;
       }
       setSending(true);
@@ -575,6 +624,7 @@ export function SessionView({
   }, [turnTokenId, myTokenId, turnRound, turnChime, playSting]);
   // A pinned label on the board opens what it points at in a sheet.
   const [openedLabel, setOpenedLabel] = useState<MapLabel | null>(null);
+  const labelMounted = useOpenedOnce(openedLabel !== null);
   const openLabel = setOpenedLabel;
   const selectChatView = useCallback(() => setMobileView("chat"), [setMobileView]);
   const selectPanelView = useCallback(
@@ -696,6 +746,10 @@ export function SessionView({
       inputBlocked={gate.inputBlocked || muted}
       placeholder={muted ? "The party lead has muted you at this table." : gate.placeholder}
       onSubmit={submit}
+      maxChars={composerLimit(kind, leadPrivate)}
+      // The stage's copy opens the story for what its window leaves out;
+      // the enlarged board's dialog covers the story, so it only says so.
+      onShowStory={composer ? undefined : toggleStage}
       composer={composer}
     />
   );
@@ -759,6 +813,7 @@ export function SessionView({
               <div className="cine-fight">
                 {chronicle}
                 <div className="cine-fight-board cine-board-frame">
+                  <Suspense fallback={<PanelLoading />}>
                   <BattleMapPanel
                     campaignId={campaign.id}
                     meUserId={me.id}
@@ -797,6 +852,7 @@ export function SessionView({
                     chronicle={chronicleDesk}
                     visible
                   />
+                  </Suspense>
                 </div>
               </div>
             ) : undefined
@@ -818,7 +874,9 @@ export function SessionView({
           onPinned={bumpPins}
         >
           {needsCharacter ? (
-            <CharacterGate campaignId={campaign.id} />
+            <Suspense fallback={<PanelLoading />}>
+              <CharacterGate campaignId={campaign.id} />
+            </Suspense>
           ) : (
             <Composer
               campaignId={campaign.id}
@@ -970,8 +1028,12 @@ export function SessionView({
           });
         }}
       />
-      <LabelSheet campaignId={campaign.id} label={openedLabel} onClose={() => setOpenedLabel(null)} />
-      <DiceLookDialog open={diceLookOpen} onOpenChange={setDiceLookOpen} />
+      <Suspense fallback={null}>
+      {labelMounted ? (
+        <LabelSheet campaignId={campaign.id} label={openedLabel} onClose={() => setOpenedLabel(null)} />
+      ) : null}
+      {diceLookMounted ? <DiceLookDialog open={diceLookOpen} onOpenChange={setDiceLookOpen} /> : null}
+      {diceTrayMounted ? (
       <DiceTrayDialog
         open={diceTrayOpen}
         onOpenChange={setDiceTrayOpen}
@@ -982,7 +1044,9 @@ export function SessionView({
           aiTable: campaign.gameSettings?.dmMode === "ai" || campaign.gameSettings?.dmMode === "steered",
         })}
       />
+      ) : null}
 
+      {helpMounted ? (
       <HelpDialog
         open={helpOpen}
         onOpenChange={setHelpOpen}
@@ -1003,13 +1067,16 @@ export function SessionView({
             : []),
         ]}
       />
+      ) : null}
 
+      {tourMounted ? (
       <GuidedTour
         open={tour !== null}
         steps={tour === "dm" ? DM_TOUR : PLAYER_TOUR}
         onPrepare={prepareTourStep}
         onClose={closeTour}
       />
+      ) : null}
 
       {loreCheck ? (
         <LoreCheckDialog
@@ -1032,6 +1099,7 @@ export function SessionView({
           onClose={() => setRenarrate(null)}
         />
       ) : null}
+      </Suspense>
 
       <RestMoment auditLog={auditLog} sheets={sheets} />
       <LootMoment sheet={mySheet} />

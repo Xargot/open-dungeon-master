@@ -772,8 +772,13 @@ export function GameSettingsPanel({
                 : "Standing is tracked per character; romance is off."}
           </span>
         </div>
-        {aiNarrates ? (
-        <div className="reveal flex flex-wrap items-center gap-2">
+        {/* At a table a person runs, Auto already allows the lasting allies
+            the DM plays by hand, so the row stays out of the way; it shows
+            when an Off or guests-only setting carried over from an AI table
+            shuts them out, which is where the Party panel's handoff points
+            (issue 209). */}
+        {aiNarrates || settings.companions === "off" || settings.companions === "guests" ? (
+        <div data-settings-row="allies" className="reveal flex flex-wrap items-center gap-2">
           <span className="pk-rowlabel">Allies</span>
           <Tooltip content="AI companions the DM plays: 'party members' travel with the party until dismissed; 'guests' are temporary allies for one scene or battle (a town soldier helping defend) and leave automatically when the fight ends. Auto picks full for solo play, guests only for multiplayer.">
             <span className="inline-flex min-w-0 max-w-full">

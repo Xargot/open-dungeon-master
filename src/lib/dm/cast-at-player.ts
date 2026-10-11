@@ -4,7 +4,8 @@ import { tilesBetween } from "@/lib/dm/attack-spatial";
 import { z } from "zod";
 import { globeProblemFor } from "@/lib/dm/zone-rules";
 import type { Campaign } from "@/lib/db/campaigns";
-import { getActiveEncounter, recordEncounterTarget, saveEncounter, setEnemyConcentration } from "@/lib/db/encounters";
+import { getActiveEncounter, recordEncounterTarget, setEnemyConcentration } from "@/lib/db/encounters";
+import { markReactionUsed } from "@/lib/dm/turn-budget";
 import { getSheetById } from "@/lib/db/sheets";
 import type { DmTurn } from "@/lib/db/dm-turns";
 import { isValidExpression } from "@/lib/dice";
@@ -306,8 +307,7 @@ export function handleCastAtPlayer(
     if (saved && dealt > 0 && ability === "dex" && shieldMasterSaveBonus(sheet) > 0) {
       const live = getActiveEncounter(campaign.id);
       if (live && !live.reactionsUsed.includes(sheet.id) && canAct({ sheet, encounter: live, kind: "reaction" }).ok) {
-        live.reactionsUsed = [...live.reactionsUsed, sheet.id];
-        saveEncounter(live);
+        markReactionUsed(live, sheet.id);
         dealt = 0;
         base.shieldMaster = `Shield Master: the reaction turns the successful save into no damage at all; ${sheet.name}'s reaction is used until their next turn.`;
       }

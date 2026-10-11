@@ -14,6 +14,7 @@ import type { MagicItemEffect } from "@/lib/srd/magic-items";
 import type { SpellMech } from "@/lib/srd/spell-mechanics";
 import type { EditorKind } from "@/app/workshop/homebrew/types";
 import { engineSpellNamed, materialOf, spellFlagsOf } from "@/lib/srd/spell-facts";
+import { readWeightLb } from "@/lib/content/weight";
 
 // The editor's working copy of an entry and what can be said about it
 // before it is saved. Pure so the panel's findings run client-side on
@@ -211,18 +212,12 @@ export function copiedFromOf(entry: CatalogEntry): CopiedFrom {
   };
 }
 
-// "3 lb.", "5.000", 3: a catalog weight in pounds, or null.
+// "3 lb.", "1/4 lb.", "5.000", 3: a catalog weight in pounds, or null. The
+// same reader the content pack is built with (src/lib/content/weight.ts), so
+// a copy never weighs what its original does not.
 export function poundsOf(value: unknown): number | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) && value > 0 ? value : null;
-  }
-  const text = String(value ?? "").trim();
-  const match = /^(\d+(?:\.\d+)?)(?:\s*(?:lb\.?|lbs\.?|pounds?))?$/i.exec(text) ?? /^(\d+)\/(\d+)\s*lb/i.exec(text);
-  if (!match) {
-    return null;
-  }
-  const pounds = match[2] && /\//.test(text) ? Number(match[1]) / Number(match[2]) : Number(match[1]);
-  return pounds > 0 ? pounds : null;
+  const pounds = readWeightLb(value).pounds;
+  return pounds !== null && pounds > 0 ? pounds : null;
 }
 
 // A catalog row turned into a draft the DM then edits. Spells and options

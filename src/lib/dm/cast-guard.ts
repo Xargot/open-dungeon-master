@@ -26,7 +26,7 @@ import { enemyCounterspell } from "@/lib/dm/enemy-reactions";
 import { endInvisibilityOnCast } from "@/lib/dm/attack-marks";
 import { endSanctuaryOnHarm } from "@/lib/dm/spell-defenses";
 import type { Campaign } from "@/lib/db/campaigns";
-import { getActiveEncounter, saveEncounter, type Encounter } from "@/lib/db/encounters";
+import { getActiveEncounter, type Encounter } from "@/lib/db/encounters";
 import { patchSheet } from "@/lib/db/sheets";
 import { advanceClock } from "@/lib/db/clock";
 import type { CharacterSheet, FullPatchSheetInput } from "@/lib/schemas/sheet";
@@ -38,7 +38,7 @@ import { describeCastingTime, type SpellFacts } from "@/lib/srd/spell-facts";
 import { conditionExtraActions } from "@/lib/srd/condition-effects";
 import { canAct } from "@/lib/dm/can-act";
 import { incapacitatedBy } from "@/lib/dm/condition-logic";
-import { attacksAllowedFor, budgetFor, storeBudget } from "@/lib/dm/turn-budget";
+import { attacksAllowedFor, budgetFor, markReactionUsed, storeBudget } from "@/lib/dm/turn-budget";
 import { spellAuthorsFor } from "@/lib/dm/spell-authors";
 import { clearSpellConditionsByName, setConcentration } from "@/lib/dm/concentration";
 import { repeatSpell } from "@/lib/dm/cast-repeat";
@@ -449,11 +449,10 @@ export function castSpell(
       result.costNote = turn.note;
     }
   } else if (turn.kind === "reaction" && encounter) {
-    encounter.reactionsUsed = [...encounter.reactionsUsed, sheet.id];
     if (turn.budget) {
       encounter.turnBudget = turn.budget;
     }
-    saveEncounter(encounter);
+    markReactionUsed(encounter, sheet.id);
     result.cost = "their reaction";
   } else if (turn.kind === "mark" && encounter) {
     storeBudget(encounter, turn.budget);

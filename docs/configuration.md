@@ -54,6 +54,8 @@ falls through to the env var.
 | `DM_CHAPTER_MAX` | `120` | Hard cap: a chapter this long closes even with no finished beat |
 | `DB_ENCRYPTION_KEY` | required | Encrypts `data/local-roleplay.sqlite` at rest (chacha20). Belongs in `.env.server` |
 | `ODM_SETUP_CODE` | generated and printed in the server log | The one-time code that creating a fresh server's first (admin) account requires. Unset, the server mints one and prints it at every start until the first account exists. On a device world (`ODM_DEVICE_WORLD=1`) nothing is minted or printed: the app that hosts it sets this itself and sends it with the host's own account, and a device world started without it asks for no code |
+| `ODM_PORTAL_SECRET` | unset | Set only by the desktop app for the world it runs: the key its portal cookies are signed with, so that server may forward a player's data calls to the host they are visiting. Unset (every hosted server), portal cookies are ignored and nothing is ever forwarded |
+| `TRUST_PROXY_HEADERS` | `1` | Whether the login throttle reads the caller's address from `cf-connecting-ip` or the last `x-forwarded-for` entry. Set `0` on a server reached directly with no proxy in front, so a caller cannot choose their own address; every caller then shares one, and only the per-account limits apply |
 | `DISCORD_CLIENT_ID` | — | Discord OAuth application id for "Sign in with Discord" (or set in `/admin`) |
 | `DISCORD_CLIENT_SECRET` | — | Discord OAuth client secret. Belongs in `.env.server` (or set in `/admin`) |
 | `APP_PUBLIC_URL` | forwarded headers / request origin | Public URL players use (e.g. `https://dungeon.example.org`); needed for OAuth redirect URIs when the reverse proxy doesn't send `X-Forwarded-Host`/`X-Forwarded-Proto` |

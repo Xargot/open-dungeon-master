@@ -12,7 +12,30 @@ export type AskScope = (typeof ASK_SCOPES)[number];
 export const ASK_VISIBILITIES = ["private", "table"] as const;
 export type AskVisibility = (typeof ASK_VISIBILITIES)[number];
 
-export const QUESTION_MAX_CHARS = 500;
+// The longest question, counted once its whitespace is folded (as it is
+// stored). It was 500, which turned away a question carrying the scene it
+// was about with only "Invalid question." (issue 207). 2,000 is the action
+// box's own limit: a question may hold as much context as a move does. The
+// thread hands each earlier question back whole (ask.ts threadMessages).
+export const QUESTION_MAX_CHARS = 2_000;
+
+// A question's length as the route counts it.
+export function questionLength(question: string): number {
+  return question.replace(/\s+/g, " ").trim().length;
+}
+
+// Why a question cannot be asked as typed, or null. The route answers with
+// this sentence and the Ask box shows the same limit before it is sent.
+export function questionProblem(question: string): string | null {
+  const length = questionLength(question);
+  if (!length) {
+    return "Ask a question first.";
+  }
+  if (length > QUESTION_MAX_CHARS) {
+    return `Questions can be up to ${QUESTION_MAX_CHARS.toLocaleString("en-US")} characters; this one has ${length.toLocaleString("en-US")}. Shorten it and ask again.`;
+  }
+  return null;
+}
 
 export type AskCitation = {
   kind: string;

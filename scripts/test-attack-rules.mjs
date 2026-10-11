@@ -150,8 +150,74 @@ test("Dual Wielder lifts the word light", () => {
     offHand("Longsword", {
       feats: ["Dual Wielder"],
       equipment: [{ name: "Longsword", qty: 2 }],
-      budget: turn({ actionUsed: true, attacksMade: 1 }),
+      budget: turn({ actionUsed: true, attacksMade: 1, oneHandMeleeAttack: true }),
     }),
+    null,
+  );
+  // A turn saved before the one-handed flag existed reads the light one.
+  assert.equal(
+    offHand("Longsword", {
+      feats: ["Dual Wielder"],
+      equipment: [{ name: "Longsword", qty: 1 }, { name: "Dagger", qty: 1 }],
+      budget: turn({ actionUsed: true, attacksMade: 1, lightMeleeAttack: true }),
+    }),
+    null,
+  );
+});
+
+// Issue 210's rule, read whole: the Hand's off-hand card asks this function,
+// so these are also the Hand's answers.
+test("the off-hand swing is earned by the Attack action's weapon, not by any attack", () => {
+  // A rapier is a finesse weapon, not a light one: two daggers carried or not.
+  assert.match(
+    offHand("Dagger", {
+      equipment: [{ name: "Rapier", qty: 1 }, { name: "Dagger", qty: 2 }],
+      budget: turn({ actionUsed: true, attacksMade: 1, oneHandMeleeAttack: true }),
+    }),
+    /earned by attacking with a light melee weapon[\s\S]*something else/,
+  );
+  assert.equal(
+    offHand("Dagger", {
+      equipment: [{ name: "Rapier", qty: 1 }, { name: "Dagger", qty: 2 }],
+      budget: turn({ actionUsed: true, attacksMade: 1, lightMeleeAttack: true, oneHandMeleeAttack: true }),
+    }),
+    null,
+  );
+  // Spent: the bonus action is gone (the spend says so; the rule stays open).
+  assert.equal(
+    offHand("Dagger", {
+      equipment: [{ name: "Dagger", qty: 2 }],
+      budget: turn({ actionUsed: true, bonusUsed: true, attacksMade: 1, lightMeleeAttack: true }),
+    }),
+    null,
+  );
+});
+
+test("Dual Wielder keeps one-handed and a weapon in each hand", () => {
+  const dual = { feats: ["Dual Wielder"] };
+  // Not a two-handed weapon in the off hand, and not a ranged one.
+  assert.match(
+    offHand("Greatsword", { ...dual, equipment: [{ name: "Greatsword", qty: 2 }], budget: turn({ actionUsed: true, attacksMade: 1, oneHandMeleeAttack: true }) }),
+    /held in one hand/,
+  );
+  assert.match(
+    offHand("Hand Crossbow", { ...dual, equipment: [{ name: "Hand Crossbow", qty: 2 }] }),
+    /held in one hand/,
+  );
+  // One weapon carried is not two-weapon fighting.
+  assert.match(
+    offHand("Longsword", { ...dual, equipment: [{ name: "Longsword", qty: 1 }], budget: turn({ actionUsed: true, attacksMade: 1, oneHandMeleeAttack: true }) }),
+    /one-handed melee weapon in each hand[\s\S]*only one/,
+  );
+  // The Attack action has to have been made with a one-handed melee weapon
+  // (a longbow or a greatsword swing earns nothing).
+  assert.match(
+    offHand("Longsword", { ...dual, equipment: [{ name: "Longsword", qty: 2 }], budget: turn({ actionUsed: true, attacksMade: 1 }) }),
+    /held in one hand[\s\S]*something else/,
+  );
+  // A rapier swing does earn it with the feat.
+  assert.equal(
+    offHand("Rapier", { ...dual, equipment: [{ name: "Rapier", qty: 2 }], budget: turn({ actionUsed: true, attacksMade: 1, oneHandMeleeAttack: true }) }),
     null,
   );
 });

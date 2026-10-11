@@ -12,7 +12,7 @@ import {
   setCampaignStatus,
   updateCampaignInfo,
 } from "@/lib/db/campaigns";
-import { ensureOpenChapter, listChapters } from "@/lib/db/chapters";
+import { ensureOpenChapter, listChaptersForSnapshot } from "@/lib/db/chapters";
 import { publicCast } from "@/lib/dm/cast";
 import { getAmbience } from "@/lib/db/ambience";
 import { captureBoundarySnapshot } from "@/lib/db/snapshots";
@@ -45,7 +45,7 @@ import { listBlockedUserIds } from "@/lib/db/moderation";
 import { xCardRaised } from "@/lib/dm/safety";
 import { latestEventOfType, publishPersisted, publishWithSeq } from "@/lib/events";
 import type { HandoutShown, TitleCard } from "@/lib/scene/state";
-import { listNarrationAudio } from "@/lib/tts";
+import { narrationAudioFor } from "@/lib/tts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -101,6 +101,7 @@ export async function GET(
   // whose row says companion came in through the wrong door (issue 192),
   // and the party panel offers whoever runs the story the repair for it.
   const libraryRoles = libraryRolesFor(sheets.map((sheet) => sheet.libraryCharacterId ?? ""));
+  const messages = listRecentMessages(campaignId, 100);
   return Response.json({
     campaign: publicCampaign(campaign),
     me: { id: user.id, username: user.username, avatar: user.avatar },
@@ -122,7 +123,7 @@ export async function GET(
     feats: Object.fromEntries(tableFeatsFrom(getDatabase(), campaignId)),
     // The character this user is playing when they have several (11.3).
     activeSheetId: getSheetForUser(campaignId, user.id)?.id ?? "",
-    messages: listRecentMessages(campaignId, 100),
+    messages,
     // Blind and DM-only rolls are redacted or dropped here, not in the UI;
     // a player's snapshot must never carry a number they are not meant to
     // have (src/lib/dm/viewer.ts).
@@ -130,7 +131,7 @@ export async function GET(
     pendingRolls: listOpenPendingRolls(campaignId).map(publicPendingRoll),
     auditLog: listRecentAudit(campaignId, 50),
     locations: listLocations(campaignId),
-    chapters: listChapters(campaignId),
+    chapters: listChaptersForSnapshot(campaignId),
     notes: listNotesVisibleTo(campaignId, user.id, caps.steersStory),
     characterEvents: listRecentCampaignEvents(campaignId, 30),
     encounter: activePublicEncounter(campaignId, { enemyNumbers: caps.enemyNumbers }),
@@ -143,7 +144,7 @@ export async function GET(
     latestSeq: latestSeq(campaignId),
     // Which messages already have narration on disk, so read-aloud plays them
     // straight from a fresh load instead of rendering a second take.
-    narrationAudio: listNarrationAudio(campaignId),
+    narrationAudio: narrationAudioFor(campaignId, messages.map((message) => message.id)),
     // What is playing. The ambience_changed event keeps it live from here;
     // without the snapshot a reload mid-scene would sit in silence until the
     // next place or fight changed it.

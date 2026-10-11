@@ -11,6 +11,7 @@ import { createRecord, getWorldDoc, nextEntry, saveWorldDoc, worldEntities, worl
 import { firstSentence, readWorldForge, writeWorldForge, type ExportRecord, type WorldImport } from "@/lib/worldforge/format";
 import { LIMITS, LINK_LABELS, newId, parseRef, refOf, remapDoc, type WorldDoc, type WorldType } from "@/lib/worldforge/model";
 import { mergeImportedLinks } from "@/lib/db/world-link-merge";
+import { recordMediaFile } from "@/lib/media-access";
 
 // A WorldForge file into a workshop, and a workshop out as one. Importing
 // into a workshop that already has a world adds to it: a type, a field, a
@@ -42,6 +43,7 @@ function saveImage(image: BundleImage | null, written: string[]): string {
   const filename = `${crypto.randomUUID()}.${image.ext}`;
   writeFileSync(path.join(/*turbopackIgnore: true*/ dir, filename), image.bytes);
   written.push(`/uploads/${filename}`);
+  recordMediaFile(`/uploads/${filename}`);
   return `/uploads/${filename}`;
 }
 

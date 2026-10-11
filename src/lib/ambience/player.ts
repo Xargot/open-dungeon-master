@@ -73,6 +73,7 @@ const STING_POOL = 3;
 type Voice = {
   audio: AudioLike;
   url: string;
+  playPending: boolean;
   // The fade this voice is on: 0..1, with where it is going and when it
   // started, so a slider dragged mid-fade is obeyed on the next tick.
   fade: number;
@@ -107,7 +108,7 @@ export class AmbiencePlayer {
   private wanted: Record<AmbienceLayerName, string | null> = { bed: null, music: null };
   private levels: Levels = { master: 0.6, bed: 1, music: 1, muted: false, ducked: false };
   private unlocked = false;
-  private stings: AudioLike[] = [];
+  private stings: { audio: AudioLike; gain: number }[] = [];
   private listeners = new Set<() => void>();
   private disposed = false;
 
@@ -146,6 +147,13 @@ export class AmbiencePlayer {
   // anything that was refused is tried again.
   setUnlocked(unlocked: boolean) {
     if (this.unlocked === unlocked) {
+      if (unlocked) {
+        for (const layer of Object.values(this.layers)) {
+          if (layer.current && layer.blocked) {
+            this.play(layer, layer.current);
+          }
+        }
+      }
       return;
     }
     this.unlocked = unlocked;
@@ -185,19 +193,20 @@ export class AmbiencePlayer {
     if (!url || !this.unlocked || this.levels.muted) {
       return;
     }
-    let audio = this.stings.find((entry) => entry.paused || entry.ended);
-    if (!audio) {
+    let sting = this.stings.find((entry) => entry.audio.paused || entry.audio.ended);
+    if (!sting) {
       if (this.stings.length < STING_POOL) {
-        audio = this.deps.create(url);
-        this.stings.push(audio);
+        sting = { audio: this.deps.create(url), gain: 0 };
+        this.stings.push(sting);
       } else {
-        audio = this.stings[0];
+        sting = this.stings[0];
         this.stings.push(...this.stings.splice(0, 1));
       }
     }
-    audio.src = url;
-    audio.volume = clamp(this.levels.master * (cueById(cueId)?.gain ?? 0.7));
-    void audio.play().catch(() => {});
+    sting.audio.src = url;
+    sting.gain = cueById(cueId)?.gain ?? 0.7;
+    sting.audio.volume = clamp(this.levels.master * sting.gain);
+    void sting.audio.play().catch(() => {});
   }
 
   // ---- time ----
@@ -265,7 +274,7 @@ export class AmbiencePlayer {
       layer.cueId = null;
       layer.urls = [];
     }
-    for (const audio of this.stings) {
+    for (const { audio } of this.stings) {
       audio.pause();
       audio.src = "";
       this.deps.release(audio);
@@ -281,6 +290,22 @@ export class AmbiencePlayer {
     const urls = cueId ? this.tracks[cueId] ?? [] : [];
     const resolved = urls.length ? cueId : null;
     if (resolved === layer.cueId) {
+      const tracksChanged = urls.length !== layer.urls.length || urls.some((url, index) => url !== layer.urls[index]);
+      if (!tracksChanged) {
+        return;
+      }
+      const currentIndex = layer.current ? urls.indexOf(layer.current.url) : -1;
+      layer.urls = urls;
+      if (currentIndex >= 0) {
+        layer.index = currentIndex;
+        this.changed();
+        return;
+      }
+      layer.index = Math.min(layer.index, urls.length - 1);
+      if (this.unlocked) {
+        this.start(layer, layer.index, true);
+      }
+      this.changed();
       return;
     }
     layer.cueId = resolved;
@@ -317,6 +342,7 @@ export class AmbiencePlayer {
     const voice: Voice = {
       audio,
       url,
+      playPending: false,
       fade: 0,
       fadeFrom: 0,
       fadeTo: 1,
@@ -342,14 +368,20 @@ export class AmbiencePlayer {
   }
 
   private play(layer: Layer, voice: Voice) {
+    if (voice.playPending) {
+      return;
+    }
+    voice.playPending = true;
     voice.audio.play().then(
       () => {
+        voice.playPending = false;
         if (layer.current === voice) {
           layer.blocked = false;
           this.changed();
         }
       },
       () => {
+        voice.playPending = false;
         // Autoplay still blocked, or the file went missing. Keep the voice
         // so the next unlock can try again, and say so.
         if (layer.current === voice) {
@@ -408,6 +440,11 @@ export class AmbiencePlayer {
       }
       for (const voice of layer.retiring) {
         this.advance(voice, now);
+      }
+    }
+    for (const { audio, gain } of this.stings) {
+      if (!audio.paused && !audio.ended) {
+        audio.volume = this.levels.muted ? 0 : clamp(this.levels.master * gain);
       }
     }
   }

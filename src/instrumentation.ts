@@ -13,6 +13,10 @@ export async function register() {
     // itself is left running in the background. A failure here must not stop
     // the server: the worst case is the keyword fallback search already has.
     if (process.env.NEXT_PHASE !== "phase-production-build") {
+      // Event loop delay for the admin's metrics (src/lib/metrics.ts).
+      const { startProcessMetrics } = await import("@/lib/metrics");
+      startProcessMetrics();
+
       // Player decision webhooks, when the operator allowed receiver origins
       // (src/lib/agents/webhooks.ts). A failure must not stop the server.
       try {

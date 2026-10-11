@@ -9,7 +9,7 @@ import type { PublicEncounter } from "@/lib/db/encounter-view";
 import { GameIcon } from "@/components/ui/GameIcon";
 import { SectionHead } from "@/components/ui/SectionHead";
 import { KitButton, SettingToggle } from "./PanelKit";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, Suspense, lazy } from "react";
 import { cn } from "@/lib/cn";
 import { CountPop } from "@/components/ui/Reveal";
 import { CharacterPortrait } from "@/lib/ui";
@@ -21,13 +21,18 @@ import { CompanionBuilderDialog } from "@/app/campaigns/[campaignId]/CompanionBu
 import { DiceSourcesButton } from "@/app/campaigns/[campaignId]/DiceSourcesDialog";
 import { DiceLookButton } from "@/components/DiceLookEditor";
 import { LeadEditDialog } from "@/app/campaigns/[campaignId]/LeadEditDialog";
-import { AvatarCropDialog } from "@/app/settings/AvatarCropDialog";
 import type { CampaignMember } from "@/lib/campaign-types";
 import type { Note } from "@/lib/db/notes";
-import type { Genre } from "@/lib/schemas/game-settings";
+import type { Genre, LastingCompanionBlock } from "@/lib/schemas/game-settings";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { computeSheetDerived, formatModifier } from "@/lib/srd";
 import { usePackArt } from "@/lib/worlds/use-pack-art";
+
+// The portrait cropper (and its cropping library) loads when a portrait is
+// being cropped, not with the table.
+const AvatarCropDialog = lazy(() =>
+  import("@/app/settings/AvatarCropDialog").then((module) => ({ default: module.AvatarCropDialog })),
+);
 
 // Inspiration held (resources.inspiration, used below its one use).
 function inspired(sheet: CharacterSheet): boolean {
@@ -111,13 +116,43 @@ function RequestCompanionButton({ campaignId }: { campaignId: string }) {
   );
 }
 
+// Brings a Game settings row into view once the Setup tab has mounted it
+// (a moment after the switch) and flashes it, so "change this" lands on
+// the one control meant rather than the top of a long panel.
+function revealSettingsRow(row: string, tries = 40) {
+  const element = document.querySelector<HTMLElement>(`[data-settings-row="${row}"]`);
+  if (!element) {
+    if (tries > 0) window.setTimeout(() => revealSettingsRow(row, tries - 1), 50);
+    return;
+  }
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  element.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
+  element.removeAttribute("data-flash");
+  void element.offsetWidth;
+  element.setAttribute("data-flash", "");
+}
+
 // A player sheet whose library entry is an ally the DM plays came in through
 // the wrong door before the doors checked (issue 192). Whoever runs the
 // story hands it to the DM: same sheet, same progress, a bot owner and the
-// DM's turns from here. The server holds the companion setting and cap.
-function HandToDmButton({ campaignId, sheet }: { campaignId: string; sheet: CharacterSheet }) {
+// DM's turns from here. The server holds the companion setting and cap;
+// when either shuts the door the button says so before it is pressed, with
+// the setting to change (issue 209), and the server refuses in the same
+// words for a stale page.
+function HandToDmButton({
+  campaignId,
+  sheet,
+  blocked,
+  onOpenSettings,
+}: {
+  campaignId: string;
+  sheet: CharacterSheet;
+  blocked: LastingCompanionBlock | null;
+  onOpenSettings?: () => void;
+}) {
   const [state, setState] = useState<"idle" | "sending">("idle");
   const [error, setError] = useState("");
+  const whyId = useId();
   async function adopt() {
     setState("sending");
     setError("");
@@ -142,12 +177,39 @@ function HandToDmButton({ campaignId, sheet }: { campaignId: string; sheet: Char
       <p className="text-[11px] leading-4 text-amber-200">
         {sheet.name} is filed in the library as an ally the DM plays, but sits here as a player&apos;s character, so the DM takes no turns for them.
       </p>
+      {blocked ? (
+        <div
+          id={whyId}
+          key={blocked.code}
+          className="reveal space-y-1 rounded-md border border-amber-700/40 bg-amber-950/20 p-2 text-[11px] leading-4 text-stone-300"
+        >
+          <p>{blocked.reason}</p>
+          <p className="text-stone-400">{blocked.remedy}</p>
+          {onOpenSettings ? (
+            <button
+              type="button"
+              onClick={() => {
+                onOpenSettings();
+                revealSettingsRow("allies");
+              }}
+              className="font-medium text-amber-300 underline decoration-amber-500/40 underline-offset-2 transition-colors hover:text-amber-100"
+            >
+              Open Game settings
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <KitButton
         tone="secondary"
         onClick={adopt}
-        disabled={state === "sending"}
+        disabled={state === "sending" || Boolean(blocked)}
         busy={state === "sending"}
-        title="Make this character a party companion: the sheet and its progress stay, the DM plays it from here"
+        aria-describedby={blocked ? whyId : undefined}
+        title={
+          blocked
+            ? blocked.reason
+            : "Make this character a party companion: the sheet and its progress stay, the DM plays it from here"
+        }
         className="w-full justify-center"
       >
         {state === "sending" ? null : <Bot className="size-3.5" />} Hand to the DM
@@ -234,6 +296,8 @@ export function PartyPanel({
   campaignId = "",
   companionsAvailable = false,
   companionBuildAvailable = false,
+  companionBlock = null,
+  onOpenSettings,
   humanDmTable = false,
   companionGenre,
   companionLevel = 1,
@@ -277,6 +341,11 @@ export function PartyPanel({
   // Manual build (lasting party companion) is offered only when the table
   // allows party companions and a party slot is free.
   companionBuildAvailable?: boolean;
+  // Why a lasting party companion cannot join now, and how to allow one
+  // (game-settings.ts lastingCompanionBlock): said beside Hand to the DM.
+  companionBlock?: LastingCompanionBlock | null;
+  // Opens the Setup tab, where that setting lives.
+  onOpenSettings?: () => void;
   // A person runs this table. There is no AI to ask for an ally, so the
   // request button goes and the build button is the only door left; it is
   // also the door that lets a human DM hold a character sheet of their own.
@@ -743,7 +812,7 @@ export function PartyPanel({
             ) : null}
 
             {campaignId && steersStory && !sheet.isCompanion && sheet.libraryRole === "companion" ? (
-              <HandToDmButton campaignId={campaignId} sheet={sheet} />
+              <HandToDmButton campaignId={campaignId} sheet={sheet} blocked={companionBlock} onOpenSettings={onOpenSettings} />
             ) : null}
 
             {setsPortrait ? (
@@ -828,11 +897,13 @@ export function PartyPanel({
       ) : null}
 
       {croppingSheet ? (
-        <AvatarCropDialog
-          title={`${croppingSheet.name}'s portrait`}
-          onUploaded={(image) => setPortrait(croppingSheet, image.url)}
-          onClose={() => setCroppingSheetId("")}
-        />
+        <Suspense fallback={null}>
+          <AvatarCropDialog
+            title={`${croppingSheet.name}'s portrait`}
+            onUploaded={(image) => setPortrait(croppingSheet, image.url)}
+            onClose={() => setCroppingSheetId("")}
+          />
+        </Suspense>
       ) : null}
 
       {tradingWith && mySheet ? (

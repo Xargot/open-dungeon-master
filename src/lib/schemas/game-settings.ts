@@ -366,6 +366,63 @@ export function companionSlotsFree(
   return mode === "full" && party < settings.maxCompanions;
 }
 
+// Why a LASTING party companion cannot join this table right now, and how
+// whoever runs the story can allow one; null when one can (issue 209). The
+// handoff of a misfiled ally (companions/adopt) and the library's "Join the
+// party" (companions/create) refuse with it, and the Party panel says it
+// beside the handoff before anyone presses it. Auto is named for what it
+// resolved to, since "not available" alone sent a lead hunting. Only the
+// story's authority sees it: the same seat that may change the setting.
+// `partyCompanions` counts lasting companions already seated (guests have a
+// cap of their own).
+export type LastingCompanionBlock = {
+  code: "off" | "guests" | "auto-guests" | "full-roster";
+  reason: string;
+  remedy: string;
+};
+
+const ALLIES_ROW = "Setup tab, Game settings, Allies";
+export const MAX_COMPANIONS_CAP = 4;
+
+export function lastingCompanionBlock(
+  settings: GameSettings,
+  partySize: number,
+  partyCompanions: number,
+  humanDm = false,
+): LastingCompanionBlock | null {
+  const mode = resolveCompanionMode(settings, partySize, humanDm);
+  const allow = `To allow one, set AI companions to "Party members and guests" (${ALLIES_ROW}). That setting lets the DM keep other lasting companions at this table too.`;
+  if (mode === "off") {
+    return { code: "off", reason: "AI companions is set to Off at this table, so no companion can join the party.", remedy: allow };
+  }
+  if (mode === "guests") {
+    return settings.companions === "auto"
+      ? {
+          code: "auto-guests",
+          reason:
+            "AI companions is on Auto, and at a table the AI runs for several players Auto allows only temporary guests. A companion who travels with the party is a lasting one.",
+          remedy: allow,
+        }
+      : {
+          code: "guests",
+          reason: 'AI companions is set to "Temporary guests only", which allows no lasting party companions.',
+          remedy: allow,
+        };
+  }
+  if (partyCompanions >= settings.maxCompanions) {
+    const count = settings.maxCompanions;
+    return {
+      code: "full-roster",
+      reason: `The party already has ${count} lasting ${count === 1 ? "companion" : "companions"}, the most this table allows.`,
+      remedy:
+        count < MAX_COMPANIONS_CAP
+          ? `Raise "Most lasting party companions allowed at once" (${ALLIES_ROW}), or dismiss a companion first.`
+          : "Dismiss a companion first.",
+    };
+  }
+  return null;
+}
+
 export function normalizeGameSettings(raw: unknown): GameSettings {
   return parseKeepingValid(gameSettingsSchema, raw ?? {});
 }

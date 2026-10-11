@@ -1,5 +1,6 @@
 import { getDatabase, nowIso, parseJson } from "@/lib/db/core";
 import { getContentDb } from "@/lib/content/db";
+import { repairedWeight } from "@/lib/content/item-weights";
 import { gearFromHomebrewData } from "@/lib/homebrew/gear";
 import { SRD_ARMOR } from "@/lib/srd/armor";
 import { matchMagicItem } from "@/lib/srd/magic-items";
@@ -34,17 +35,41 @@ type HomebrewRow = {
 };
 
 function mapEntry(row: HomebrewRow): HomebrewEntry {
+  const data = parseJson<Record<string, unknown>>(row.data_json, {});
   return {
     id: row.id,
     userId: row.user_id,
     kind: row.kind,
     slug: row.slug,
     name: row.name,
-    data: parseJson<Record<string, unknown>>(row.data_json, {}),
+    data: row.kind === "item" ? withRepairedWeight(row.name, data) : data,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at ?? null,
   };
+}
+
+// A copy of a catalog item took the catalog's weight, and packs built before
+// issue #205 had a dart at 14 lb: that one number is put right on read,
+// whatever the copy was renamed to (its copiedFrom names the original).
+// A weight its author changed is theirs and stays.
+function withRepairedWeight(name: string, data: Record<string, unknown>): Record<string, unknown> {
+  if (typeof data.weight !== "number") {
+    return data;
+  }
+  const from = data.copiedFrom as { name?: unknown } | undefined;
+  const original = typeof from?.name === "string" ? from.name : name;
+  const weight = repairedWeight(original, data.weight);
+  if (weight === data.weight) {
+    return data;
+  }
+  const repaired = { ...data };
+  if (weight === undefined) {
+    delete repaired.weight;
+  } else {
+    repaired.weight = weight;
+  }
+  return repaired;
 }
 
 function slugify(value: string) {
@@ -285,10 +310,17 @@ export function hydrateHomebrewGear(
       delete bare.gear;
       return bare;
     }
+    // The line took the entry's weight when it was first carried; a copy's
+    // old-pack weight (issue #205) is replaced by the entry's repaired one.
+    const copied = (entry?.data.copiedFrom as { name?: unknown } | undefined)?.name;
+    const stale =
+      item.weight !== undefined &&
+      typeof copied === "string" &&
+      repairedWeight(copied, item.weight) !== item.weight;
     return {
       ...item,
       gear,
-      ...(item.weight === undefined && gear.weight !== undefined ? { weight: gear.weight } : {}),
+      ...((item.weight === undefined || stale) && gear.weight !== undefined ? { weight: gear.weight } : {}),
     };
   });
 }

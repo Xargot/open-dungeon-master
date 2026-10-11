@@ -39,6 +39,7 @@ import { SheetBetween } from "@/components/sheet/SheetBetween";
 import { conditionDetail, hitDiceLine, itemStatus, maxHpView, otherSpeedsLine, speedView } from "@/components/sheet/sheet-state";
 import { FeatureChoicePicker, OtherSpeeds } from "@/components/sheet/SheetChoices";
 import { SheetGearRow } from "@/components/sheet/SheetGearRow";
+import { LoadBreakdown } from "@/components/sheet/LoadBreakdown";
 import { ResourceRow, SlotRow, STEP_BUTTON } from "@/components/sheet/SheetCounters";
 import { namesLookup } from "@/lib/battlemap/condition-notes";
 
@@ -141,6 +142,9 @@ export function CharacterSheetDialog({
   const speedNote = speedState.notes.length ? speedState.notes.join(" ") : "Their walking speed.";
   const [busy, setBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  // The Carried tile's breakdown (issue #206), drawn from the same sheet and
+  // load as the tile, so a change to either redraws both.
+  const [loadOpen, setLoadOpen] = useState(false);
   // The server's reason when it refuses an adjustment, shown under the
   // counters so the player knows what would be accepted.
   // It is kept beside the control that was used (the counters or the gear).
@@ -292,8 +296,18 @@ export function CharacterSheetDialog({
                         ? `${load.note ?? "Not encumbered"}. Capacity ${load.capacityLb} lb.`
                         : `Carrying capacity ${load.capacityLb} lb. Encumbrance is off for this table, so weight up to the capacity costs nothing.`
                   }${load.unweighed ? ` ${load.unweighed} item${load.unweighed === 1 ? "" : "s"} of unknown weight are not counted.` : ""}`,
+                  onOpen: () => setLoadOpen(true),
+                  opens: "Show what makes up this load",
                 },
               ]}
+            />
+            <LoadBreakdown
+              open={loadOpen}
+              onOpenChange={setLoadOpen}
+              name={sheet.name}
+              equipment={sheet.equipment}
+              gold={sheet.gold}
+              load={load}
             />
             <OtherSpeeds speeds={derived.speeds} />
           </div>

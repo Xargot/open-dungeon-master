@@ -315,12 +315,14 @@ export function SoundDialog({
   ambience: AmbienceAudio;
   steering: SoundSteering;
 }) {
-  // Opening the panel is a gesture, which is all the browser wanted.
+  // Ask again when the panel opens; the page gesture listener also retries
+  // during the click itself, while the browser's audio gesture is active.
+  const { unlock } = ambience;
   useEffect(() => {
     if (open) {
-      ambience.unlock();
+      unlock();
     }
-  }, [open, ambience]);
+  }, [open, unlock]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title="Sound" icon={<Music className="size-5 text-amber-300" />} width="w-[min(94vw,38rem)]">
       <div className="flex flex-wrap items-center justify-between gap-3">

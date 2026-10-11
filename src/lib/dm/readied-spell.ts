@@ -15,7 +15,8 @@
 
 import { sheetSpellAuthors } from "@/lib/dm/spell-authors";
 import type { Campaign } from "@/lib/db/campaigns";
-import { saveEncounter, type Encounter } from "@/lib/db/encounters";
+import type { Encounter } from "@/lib/db/encounters";
+import { markReactionUsed } from "@/lib/dm/turn-budget";
 import type { DmTurn } from "@/lib/db/dm-turns";
 import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
@@ -131,8 +132,7 @@ export function releaseReadied(
   if (dryRun) {
     return { ok: true, dryRun: true, spell: held.spell, slotLevel: held.slotLevel, released: true };
   }
-  encounter.reactionsUsed = [...encounter.reactionsUsed, sheet.id];
-  saveEncounter(encounter);
+  markReactionUsed(encounter, sheet.id);
   dropReadied(campaign, sheet.id);
   // The concentration was the holding; a spell that is not itself a
   // concentration spell lets go of it now.

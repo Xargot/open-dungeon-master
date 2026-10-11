@@ -10,6 +10,7 @@ import {
   QUESTION_MAX_CHARS,
   clampQuestion,
   filedScope,
+  questionProblem,
 } from "@/lib/dm/ask-logic";
 
 export const runtime = "nodejs";
@@ -22,8 +23,11 @@ export const dynamic = "force-dynamic";
 // question that has to wait for your turn is not much use, and since nothing
 // here progresses the story there is nothing for floor control to protect.
 
+// The question's length is checked after the shape, so an over-long one
+// hears the limit rather than "Invalid question." (issue 207). The body is
+// already bounded by the route's request limit.
 const askSchema = z.object({
-  question: z.string().trim().min(1).max(QUESTION_MAX_CHARS),
+  question: z.string(),
   scope: z.enum(["auto", ...ASK_SCOPES]).default("auto"),
   visibility: z.enum(ASK_VISIBILITIES).default("private"),
 });
@@ -43,6 +47,10 @@ export async function POST(
   const parsed = askSchema.safeParse(raw);
   if (!parsed.success) {
     return Response.json({ error: "Invalid question." }, { status: 400 });
+  }
+  const problem = questionProblem(parsed.data.question);
+  if (problem) {
+    return Response.json({ error: problem, maxChars: QUESTION_MAX_CHARS }, { status: 400 });
   }
 
   const question = clampQuestion(parsed.data.question);

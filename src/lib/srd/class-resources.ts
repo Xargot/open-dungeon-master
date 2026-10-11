@@ -181,11 +181,12 @@ export function effectFromFx(fx: ResourceFx | undefined): ResourceEffect {
 }
 
 // What spending the feature costs of a turn in a fight. "none" is a feature
-// used on the character's own turn for nothing (Action Surge). Absent means
-// the feature's many uses cost different things (Ki, Channel Divinity
-// options, the genre counters) and the turn budget is left to the tool that
+// used on the character's own turn for nothing (Action Surge). "reaction"
+// spends the reaction, on the character's turn or off it. Absent means the
+// feature's many uses cost different things (Ki, Channel Divinity options)
+// or its text names no cost, and the turn budget is left to the tool that
 // resolves the effect.
-export type ResourceAction = "action" | "bonus" | "none";
+export type ResourceAction = "action" | "bonus" | "reaction" | "none";
 
 export type ResourceDef = {
   id: string;
@@ -454,6 +455,7 @@ const SRD_RESOURCE_DEFS: ResourceDef[] = [
     displayName: "Divine Sense",
     maxFor: (_level, mods) => Math.max(1, 1 + (mods.cha ?? 0)),
     recharge: "long",
+    action: "action",
     effect: { kind: "narrative" },
     guidance:
       "Until the end of their next turn the paladin knows the location of any celestial, fiend, or undead within 60 feet that is not behind total cover, and of consecrated or desecrated ground.",
@@ -579,6 +581,8 @@ type CustomResourceRow = {
   guidance: string;
   // Optional typed effect the spend executes server-side.
   fx?: ResourceFx;
+  // What a use costs of the turn, when the catalog line names it.
+  action?: ResourceAction;
 };
 
 const CUSTOM_RESOURCE_DEFS: ResourceDef[] = (
@@ -601,6 +605,7 @@ const CUSTOM_RESOURCE_DEFS: ResourceDef[] = (
   effect: effectFromFx(row.fx),
   guidance: row.guidance,
   upgrades: row.upgrades,
+  ...(row.action ? { action: row.action } : {}),
 }));
 
 // The limited-use features of the authored subclass layer. Same row shape as
@@ -632,6 +637,8 @@ type SubclassResourceRow = {
   // Never spent by choice (reaction-triggered features the server or model
   // invokes at the trigger, not on the holder's turn).
   passive?: boolean;
+  // What a use costs of the turn, when the guidance names it.
+  action?: ResourceAction;
 };
 
 function proficiencyBonus(level: number): number {
@@ -666,6 +673,7 @@ const SUBCLASS_RESOURCE_DEFS: ResourceDef[] = (
   effect: effectFromFx(row.fx),
   guidance: row.guidance,
   ...(row.passive ? { passive: true } : {}),
+  ...(row.action ? { action: row.action } : {}),
 }));
 
 // The spells a race casts once a day by nature (a tiefling's hellish rebuke

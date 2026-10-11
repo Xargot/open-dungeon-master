@@ -9,6 +9,7 @@ import { subclassExtrasFor } from "@/lib/db/subclass-extras";
 import { populateFeaturesForClasses } from "@/lib/srd/features";
 import { normalizeSpellcasting } from "@/lib/srd/spell-lists";
 import { storedGender } from "@/lib/gender";
+import { repairedWeight } from "@/lib/content/item-weights";
 import { dedupeName } from "@/lib/workshop/import";
 import { normalizeCampaignKind, type CampaignKind } from "@/lib/workshop/kind";
 import type { CampaignStatus } from "@/lib/campaign-types";
@@ -81,6 +82,26 @@ function withStoredGender(sheet: CreateSheetInput): CreateSheetInput {
   return { ...sheet, gender: storedGender(sheet.gender) };
 }
 
+// A weight the builder or a table copied from a pack built before issue
+// #205 (a dart at 14 lb) is put right on read; any other number stays.
+function withRepairedWeights(sheet: CreateSheetInput): CreateSheetInput {
+  if (!Array.isArray(sheet.equipment) || !sheet.equipment.some((item) => typeof item.weight === "number")) {
+    return sheet;
+  }
+  let changed = false;
+  const equipment = sheet.equipment.map((item) => {
+    const weight = repairedWeight(item.name, item.weight);
+    if (weight === item.weight) {
+      return item;
+    }
+    changed = true;
+    const line = { ...item };
+    delete line.weight;
+    return weight === undefined ? line : { ...line, weight };
+  });
+  return changed ? { ...sheet, equipment } : sheet;
+}
+
 function mapCharacter(row: LibraryRow): LibraryCharacter {
   return {
     id: row.id,
@@ -93,7 +114,7 @@ function mapCharacter(row: LibraryRow): LibraryCharacter {
     background: row.background,
     level: row.level,
     xp: row.xp,
-    sheet: withStoredGender(withSplitCantrips(parseJson(row.sheet_json, {} as CreateSheetInput))),
+    sheet: withRepairedWeights(withStoredGender(withSplitCantrips(parseJson(row.sheet_json, {} as CreateSheetInput)))),
     workshopId: row.workshop_id ?? "",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
