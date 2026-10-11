@@ -16,6 +16,7 @@ import { AdminImagesSection } from "@/app/admin/AdminImagesSection";
 import { AdminSpeechSection } from "@/app/admin/AdminSpeechSection";
 import { AmbienceLibraryCard } from "@/app/admin/AmbienceLibraryCard";
 import { AdminHarnessSection } from "@/app/admin/AdminHarnessSection";
+import { mergeAdminConfigDraft } from "@/app/admin/merge-config-draft";
 import {
   Field,
   SECRET_KEPT,
@@ -390,7 +391,13 @@ export function AdminSettingsPanel() {
       </PageSection>
 
       {phoneWorld ? null : (
-        <AdminHarnessSection textProvider={config.text.provider} imagesBackend={config.images.defaultBackend} onConfig={setConfig} />
+        <AdminHarnessSection
+          textProvider={config.text.provider}
+          imagesBackend={config.images.defaultBackend}
+          onConfig={(patch) =>
+            setConfig((current) => (current ? mergeAdminConfigDraft(current, patch) : current))
+          }
+        />
       )}
 
       <PageSection id="admin-utility" heading="Utility model (optional)" glyph="tab-log">
