@@ -317,8 +317,10 @@ function fakeAudioFactory({ refuse = false, duration = 100 } = {}) {
       paused: true,
       ended: false,
       preload: "",
+      playCalls: 0,
       play() {
-        if (refuse) {
+        audio.playCalls += 1;
+        if (typeof refuse === "function" ? refuse() : refuse) {
           return Promise.reject(new Error("NotAllowedError"));
         }
         audio.paused = false;
@@ -496,6 +498,27 @@ await (async () => {
   assert.equal(player.snapshot().bed.cueId, null);
   player.sting("thunder");
   assert.equal(fake.made.length, 2, "no file, no sting");
+  player.dispose();
+  passed += 1;
+})();
+
+await (async () => {
+  let refuse = true;
+  const { player, fake } = makePlayer({ refuse: () => refuse });
+  player.setTracks({ tavern: ["/ambience/tavern.mp3"] });
+  player.setUnlocked(true);
+  player.setScene("tavern", null);
+  await flush();
+  assert.equal(player.snapshot().blocked, true);
+  const voice = fake.made[0];
+  refuse = false;
+  player.setUnlocked(true);
+  player.setUnlocked(true);
+  await flush();
+  assert.equal(voice.playCalls, 2, "later gestures retry the blocked voice once while a play is pending");
+  assert.equal(fake.made.length, 1, "retry keeps the same take");
+  assert.equal(player.snapshot().blocked, false);
+  assert.equal(player.snapshot().bed.playing, true);
   player.dispose();
   passed += 1;
 })();

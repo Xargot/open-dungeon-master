@@ -73,6 +73,7 @@ const STING_POOL = 3;
 type Voice = {
   audio: AudioLike;
   url: string;
+  playPending: boolean;
   // The fade this voice is on: 0..1, with where it is going and when it
   // started, so a slider dragged mid-fade is obeyed on the next tick.
   fade: number;
@@ -146,6 +147,13 @@ export class AmbiencePlayer {
   // anything that was refused is tried again.
   setUnlocked(unlocked: boolean) {
     if (this.unlocked === unlocked) {
+      if (unlocked) {
+        for (const layer of Object.values(this.layers)) {
+          if (layer.current && layer.blocked) {
+            this.play(layer, layer.current);
+          }
+        }
+      }
       return;
     }
     this.unlocked = unlocked;
@@ -334,6 +342,7 @@ export class AmbiencePlayer {
     const voice: Voice = {
       audio,
       url,
+      playPending: false,
       fade: 0,
       fadeFrom: 0,
       fadeTo: 1,
@@ -359,14 +368,20 @@ export class AmbiencePlayer {
   }
 
   private play(layer: Layer, voice: Voice) {
+    if (voice.playPending) {
+      return;
+    }
+    voice.playPending = true;
     voice.audio.play().then(
       () => {
+        voice.playPending = false;
         if (layer.current === voice) {
           layer.blocked = false;
           this.changed();
         }
       },
       () => {
+        voice.playPending = false;
         // Autoplay still blocked, or the file went missing. Keep the voice
         // so the next unlock can try again, and say so.
         if (layer.current === voice) {

@@ -184,24 +184,29 @@ export function useAmbienceAudio(
   const setVolume = useCallback((next: number) => writeAudioPref("ambienceVolume", Math.max(0, Math.min(1, next))), []);
   const setBedLevel = useCallback((next: number) => writeAudioPref("ambienceBedLevel", Math.max(0, Math.min(1, next))), []);
   const setMusicLevel = useCallback((next: number) => writeAudioPref("ambienceMusicLevel", Math.max(0, Math.min(1, next))), []);
-  const unlock = useCallback(() => setUnlocked(true), []);
+  const unlock = useCallback(() => {
+    setUnlocked(true);
+    // Retry during the gesture itself, even when an earlier gesture already
+    // marked this browser unlocked but the browser refused play().
+    if (enabled) {
+      playerRef.current?.setUnlocked(true);
+    }
+  }, [enabled]);
   const skip = useCallback((layer: AmbienceLayerName) => playerRef.current?.skip(layer), []);
   const setDucked = useCallback((ducked: boolean) => playerRef.current?.setLevels({ ducked }), []);
 
-  // The browser refuses audio before a user gesture, so any first
-  // interaction with the page counts, exactly as it does for narration.
+  // A later gesture can retry a cue that the browser refused after the first.
   useEffect(() => {
-    if (unlocked || !enabled) {
+    if (!enabled) {
       return;
     }
-    const handle = () => setUnlocked(true);
-    window.addEventListener("pointerdown", handle, { once: true });
-    window.addEventListener("keydown", handle, { once: true });
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
     return () => {
-      window.removeEventListener("pointerdown", handle);
-      window.removeEventListener("keydown", handle);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
     };
-  }, [unlocked, enabled]);
+  }, [enabled, unlock]);
 
   useEffect(() => {
     if (!sting || sting.at <= stingAtRef.current) {
