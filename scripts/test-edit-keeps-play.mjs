@@ -34,12 +34,12 @@ const { z } = await import("zod");
 const { getDatabase } = await import("../src/lib/db/core.ts");
 const { createUser } = await import("../src/lib/db/users.ts");
 const { mintSession } = await import("../src/lib/auth.ts");
-const { getCampaignById } = await import("../src/lib/db/campaigns.ts");
+const { getCampaignById, setMemberActiveCharacter, updateGameSettings } = await import("../src/lib/db/campaigns.ts");
 const { setHouseRules } = await import("../src/lib/db/rules.ts");
 const { createCharacter, getCharacter, syncProgressToLibrary } = await import(
   "../src/lib/db/characters.ts"
 );
-const { getSheetForUser } = await import("../src/lib/db/sheets.ts");
+const { createSheet, getSheetForUser } = await import("../src/lib/db/sheets.ts");
 const { getRollTable } = await import("../src/lib/db/roll-tables.ts");
 const { getPackDraft, savePackDraft } = await import("../src/lib/db/world-pack-drafts.ts");
 const { worldPackDraftSchema } = await import("../src/lib/worlds/draft.ts");
@@ -349,6 +349,24 @@ await test("a lobby edit at a table of the same level still updates the library"
   const after = getCharacter(library.id);
   assert.equal(after.level, 8);
   assert.match(after.sheet.backstory, /sworn blade/);
+});
+
+await test("a lobby replacement keeps the new sheet selected when the player owns another sheet", async () => {
+  const { library, campaignId } = await joinWith(PLAYED, 8, 8);
+  updateGameSettings(campaignId, { multiCharacter: "all_active" });
+  const oldSelected = getSheetForUser(campaignId, player.id);
+  const siblingLibrary = createCharacter(player.id, 8, { ...PLAYED, name: "Older sibling" });
+  const sibling = createSheet(campaignId, player.id, 8, siblingLibrary.sheet, siblingLibrary.id);
+  setMemberActiveCharacter(campaignId, player.id, oldSelected.id);
+
+  const result = builderEdit(getCharacter(library.id).sheet, 8);
+  const replaced = succeeded(
+    await call(sheetRoute, "PUT", { editLibraryCharacterId: library.id, sheet: result.sheet }, { campaignId }),
+  );
+  assert.notEqual(replaced.json.sheet.id, oldSelected.id);
+  assert.equal(getSheetForUser(campaignId, player.id).id, replaced.json.sheet.id);
+  const reloaded = succeeded(await call(sheetRoute, "GET", undefined, { campaignId }));
+  assert.equal(reloaded.json.sheet.id, replaced.json.sheet.id);
 });
 
 await test("a lobby edit keeps what play granted and what play set on the gear", async () => {

@@ -92,6 +92,7 @@ function publishReplacement(
   newSheet: CharacterSheet,
 ) {
   const campaignId = context.campaign.id;
+  seatAddedSheet(context.campaign, context.user.id, newSheet.id);
   setMemberReady(campaignId, context.user.id, false);
   publishPersisted(campaignId, "member_ready", { userId: context.user.id, ready: false });
   publishPersisted(campaignId, "sheet_deleted", { sheetId: oldSheet.id, userId: context.user.id });
