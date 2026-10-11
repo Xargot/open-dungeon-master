@@ -107,7 +107,7 @@ export class AmbiencePlayer {
   private wanted: Record<AmbienceLayerName, string | null> = { bed: null, music: null };
   private levels: Levels = { master: 0.6, bed: 1, music: 1, muted: false, ducked: false };
   private unlocked = false;
-  private stings: AudioLike[] = [];
+  private stings: { audio: AudioLike; gain: number }[] = [];
   private listeners = new Set<() => void>();
   private disposed = false;
 
@@ -185,19 +185,20 @@ export class AmbiencePlayer {
     if (!url || !this.unlocked || this.levels.muted) {
       return;
     }
-    let audio = this.stings.find((entry) => entry.paused || entry.ended);
-    if (!audio) {
+    let sting = this.stings.find((entry) => entry.audio.paused || entry.audio.ended);
+    if (!sting) {
       if (this.stings.length < STING_POOL) {
-        audio = this.deps.create(url);
-        this.stings.push(audio);
+        sting = { audio: this.deps.create(url), gain: 0 };
+        this.stings.push(sting);
       } else {
-        audio = this.stings[0];
+        sting = this.stings[0];
         this.stings.push(...this.stings.splice(0, 1));
       }
     }
-    audio.src = url;
-    audio.volume = clamp(this.levels.master * (cueById(cueId)?.gain ?? 0.7));
-    void audio.play().catch(() => {});
+    sting.audio.src = url;
+    sting.gain = cueById(cueId)?.gain ?? 0.7;
+    sting.audio.volume = clamp(this.levels.master * sting.gain);
+    void sting.audio.play().catch(() => {});
   }
 
   // ---- time ----
@@ -265,7 +266,7 @@ export class AmbiencePlayer {
       layer.cueId = null;
       layer.urls = [];
     }
-    for (const audio of this.stings) {
+    for (const { audio } of this.stings) {
       audio.pause();
       audio.src = "";
       this.deps.release(audio);
@@ -408,6 +409,11 @@ export class AmbiencePlayer {
       }
       for (const voice of layer.retiring) {
         this.advance(voice, now);
+      }
+    }
+    for (const { audio, gain } of this.stings) {
+      if (!audio.paused && !audio.ended) {
+        audio.volume = this.levels.muted ? 0 : clamp(this.levels.master * gain);
       }
     }
   }

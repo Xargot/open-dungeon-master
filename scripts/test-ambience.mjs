@@ -501,8 +501,13 @@ await (async () => {
   await flush();
   assert.equal(fake.made.length, 3, "stings share a pool of three elements");
   player.setLevels({ muted: true });
+  assert.ok(fake.made.every((audio) => audio.volume === 0), "mute silences stings already playing");
   player.sting("thunder");
   assert.equal(fake.made.length, 3, "a muted listener hears no sting");
+  player.setLevels({ muted: false, master: 0.25 });
+  assert.ok(fake.made.every((audio) => audio.volume === 0.25 * cueById("thunder").gain), "active stings follow the master slider");
+  player.setLevels({ master: 0 });
+  assert.ok(fake.made.every((audio) => audio.volume === 0), "zero master volume silences active stings");
   player.dispose();
   assert.equal(fake.released.length, 3);
   passed += 1;
