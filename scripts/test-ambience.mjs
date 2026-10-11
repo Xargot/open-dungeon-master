@@ -458,6 +458,17 @@ await (async () => {
   assert.equal(player.snapshot().bed.cueId, "tavern", "played once its file arrived");
   assert.equal(player.snapshot().music.cueId, null, "a cue with no file stays silent");
   assert.equal(fake.made.length, 1);
+  player.setTracks({ tavern: ["/ambience/tavern.mp3", "/ambience/tavern-2.mp3"] });
+  assert.equal(player.snapshot().bed.takes, 2, "a same-cue refresh updates the available take count");
+  assert.equal(fake.made.length, 1, "a still-available current take keeps playing");
+  player.setTracks({ tavern: ["/ambience/tavern-3.mp3", "/ambience/tavern-4.mp3"] });
+  await flush();
+  assert.equal(player.snapshot().bed.takes, 2);
+  assert.equal(fake.made.length, 2, "a removed current file switches to an available take");
+  assert.ok(
+    ["/ambience/tavern-3.mp3", "/ambience/tavern-4.mp3"].includes(fake.made[1].src),
+    "the refreshed file list supplies the new take",
+  );
   player.setTracks({ tavern: ["/ambience/tavern.mp3"], battle: ["/ambience/battle.mp3"] });
   await flush();
   assert.equal(player.snapshot().music.cueId, "battle", "and comes in when the library grows");

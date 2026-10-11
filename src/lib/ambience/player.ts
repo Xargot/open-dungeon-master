@@ -282,6 +282,22 @@ export class AmbiencePlayer {
     const urls = cueId ? this.tracks[cueId] ?? [] : [];
     const resolved = urls.length ? cueId : null;
     if (resolved === layer.cueId) {
+      const tracksChanged = urls.length !== layer.urls.length || urls.some((url, index) => url !== layer.urls[index]);
+      if (!tracksChanged) {
+        return;
+      }
+      const currentIndex = layer.current ? urls.indexOf(layer.current.url) : -1;
+      layer.urls = urls;
+      if (currentIndex >= 0) {
+        layer.index = currentIndex;
+        this.changed();
+        return;
+      }
+      layer.index = Math.min(layer.index, urls.length - 1);
+      if (this.unlocked) {
+        this.start(layer, layer.index, true);
+      }
+      this.changed();
       return;
     }
     layer.cueId = resolved;
