@@ -654,7 +654,20 @@ await test("an assistant link is forwarded to the world with its token as a bear
   const world = fakeWorld();
   let lookups = 0;
   const relay = createRelay({ lookup: async () => (lookups++, ONLINE), fetch: world.fetchImpl });
-  const response = await relay(relayCall(), {});
+  const toolName = "search_world";
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: toolName, arguments: {} } });
+  const response = await relay(relayCall(undefined, {
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-method": "tools/call",
+      "mcp-name": toolName,
+      authorization: "Bearer client-supplied-token",
+      origin: "https://evil.example",
+      cookie: "odm_session=abc",
+    },
+    body,
+  }), {});
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("mcp-session-id"), "s1");
   assert.equal(response.headers.get("www-authenticate"), null);
@@ -666,7 +679,11 @@ await test("an assistant link is forwarded to the world with its token as a bear
   assert.equal(mcp.headers.get("origin"), null, "the world refuses browser origins");
   assert.equal(mcp.headers.get("cookie"), null);
   assert.equal(mcp.headers.get("accept"), "application/json, text/event-stream");
-  assert.equal(new TextDecoder().decode(mcp.body), '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
+  assert.deepEqual(
+    [mcp.headers.get("mcp-method"), mcp.headers.get("mcp-name")],
+    ["tools/call", toolName],
+  );
+  assert.equal(new TextDecoder().decode(mcp.body), body);
   await relay(relayCall(), {});
   assert.equal(lookups, 1, "the address is cached between calls");
   assert.equal(world.seen.filter((call) => call.url.endsWith("/api/auth/providers")).length, 1, "and so is the proof");
