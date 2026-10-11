@@ -10,6 +10,7 @@ import { resolveSheetRef } from "@/lib/dm/rolls";
 import {
   abandonTracker,
   advanceRound,
+  checkSceneAttempt,
   checkTracker,
   describeTracker,
   recordCheck,
@@ -187,6 +188,10 @@ export function handleSceneCheck(
   const sheet = resolveSheetRef(args.characterId, sheets, sheetsById);
   if (!sheet) {
     return { error: "Unknown characterId; use one from GAME STATE." };
+  }
+  const invalid = checkSceneAttempt(tracker, sheet.id);
+  if (invalid) {
+    return invalid;
   }
 
   const derived = computeSheetDerived(sheet);
