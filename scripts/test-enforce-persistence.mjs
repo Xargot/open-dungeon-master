@@ -27,6 +27,9 @@ const { getParty } = await import("../src/lib/db/party.ts");
 const campaigns = await import("../src/lib/db/campaigns.ts");
 const { ensureOpenChapter } = await import("../src/lib/db/chapters.ts");
 const { captureBoundarySnapshot } = await import("../src/lib/db/snapshots.ts");
+const quests = await import("../src/lib/db/quests.ts");
+const { getSceneTracker, setSceneTracker } = await import("../src/lib/db/scene-tracker.ts");
+const { checkTracker, recordCheck } = await import("../src/lib/dm/scene-tracker-logic.ts");
 const { performRollback } = await import("../src/lib/dm/rollback.ts");
 const { listRecentAudit } = await import("../src/lib/db/sheet-audit.ts");
 const { endOwnTurn } = await import("../src/lib/dm/encounter-tools.ts");
@@ -249,6 +252,66 @@ await test("a rewind puts the sheet back whole and takes the audit trail with it
   assert.equal(listRecentAudit(world.campaignId, 20).length, 0);
 });
 
+await test("a rewind restores quest and structured-scene progress, and its safety copy keeps the newer state", async () => {
+  const { world, hero, freeze, rewind } = await chapter();
+  const quest = quests.insertQuest({
+    campaignId: world.campaignId,
+    title: "Find the hidden door",
+    status: "active",
+    objectives: [{ id: "door", text: "Find it", done: false }],
+  });
+  const checked = checkTracker({
+    kind: "chase",
+    title: "Catch the courier",
+    successesNeeded: 3,
+    failuresAllowed: 3,
+    characterIds: [hero.id],
+  });
+  assert.ok("tracker" in checked);
+  const boundaryTracker = {
+    ...checked.tracker,
+    id: "rewind-scene",
+    campaignId: world.campaignId,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  setSceneTracker(world.campaignId, boundaryTracker);
+  freeze();
+
+  quests.updateQuest(quest.id, {
+    status: "done",
+    objectives: [{ id: "door", text: "Find it", done: true }],
+  });
+  const advanced = recordCheck(boundaryTracker, {
+    characterId: hero.id,
+    characterName: hero.name,
+    approach: "Run after the courier",
+    skill: "athletics",
+    dc: 12,
+    total: 16,
+    success: true,
+  });
+  assert.ok("tracker" in advanced);
+  setSceneTracker(world.campaignId, advanced.tracker);
+  const laterQuest = quests.insertQuest({ campaignId: world.campaignId, title: "A later quest" });
+
+  await rewind();
+
+  assert.deepEqual(
+    quests.listQuests(world.campaignId).map(({ id, status, objectives }) => ({ id, status, objectives })),
+    [{ id: quest.id, status: "active", objectives: [{ id: "door", text: "Find it", done: false }] }],
+  );
+  assert.equal(quests.getQuest(laterQuest.id), null);
+  assert.deepEqual(getSceneTracker(world.campaignId), boundaryTracker);
+
+  const db = getDatabase();
+  const safety = db
+    .prepare("SELECT snapshot_json FROM chapter_snapshots WHERE campaign_id = ? AND kind = 'pre_rollback'")
+    .get(world.campaignId);
+  const safetyPayload = JSON.parse(safety.snapshot_json);
+  assert.ok(safetyPayload.tables.quests.some((row) => row.id === laterQuest.id));
+  assert.equal(safetyPayload.campaign.scene_tracker_json, JSON.stringify(advanced.tracker));
+});
+
 await test("a rewind to a moment mid fight restores the fight with the sheets", async () => {
   const { world, hero, freeze, rewind } = await chapter();
   await world.beginFight([{ monster: "goblin", count: 1 }], { heroFaces: { [hero.id]: 20 } });
@@ -355,8 +418,10 @@ await test("a snapshot taken before the purse, the effects and the clock were ke
     .get(world.campaignId);
   const old = JSON.parse(row.snapshot_json);
   delete old.tables.active_effects;
+  delete old.tables.quests;
   delete old.campaign.party_json;
   delete old.campaign.clock_json;
+  delete old.campaign.scene_tracker_json;
   db.prepare("UPDATE chapter_snapshots SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(old), row.id);
 
   assert.equal((await world.invoke("party_stash", { do: "deposit", characterId: hero.id, amount: 5 })).ok, true);
@@ -369,11 +434,23 @@ await test("a snapshot taken before the purse, the effects and the clock were ke
     duration: "manual",
   });
   assert.equal(laid.ok, true, laid.error);
+  const legacyQuest = quests.insertQuest({ campaignId: world.campaignId, title: "Legacy snapshot" });
+  const checkedLegacyTracker = checkTracker({ kind: "social", title: "Present scene" });
+  assert.ok("tracker" in checkedLegacyTracker);
+  const legacyTracker = {
+    ...checkedLegacyTracker.tracker,
+    id: "legacy-scene",
+    campaignId: world.campaignId,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  setSceneTracker(world.campaignId, legacyTracker);
   const clock = world.campaign().clock.instant;
   await rewind();
   assert.equal(world.campaign().clock.instant, clock);
   assert.equal(getParty(world.campaignId).copper, 500);
   assert.deepEqual(listEffects(world.campaignId).map((effect) => effect.name), ["Shield of Faith"]);
+  assert.equal(quests.getQuest(legacyQuest.id)?.title, "Legacy snapshot");
+  assert.deepEqual(getSceneTracker(world.campaignId), legacyTracker);
 });
 
 // ---- undo ----

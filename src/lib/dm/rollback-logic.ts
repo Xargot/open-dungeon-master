@@ -8,6 +8,7 @@
 // preceding delete pass never fires against fresh rows.
 export const SNAPSHOT_TABLES = [
   "character_sheets",
+  "quests",
   "npcs",
   "relationships",
   "locations",
@@ -48,6 +49,8 @@ export const CAMPAIGN_SNAPSHOT_COLUMNS = [
   "party_json",
   // Rests, travel and timed conditions are counted against the clock.
   "clock_json",
+  // Structured scene checks are part of the chapter's rewindable state.
+  "scene_tracker_json",
 ] as const;
 
 // A snapshot taken before a table or a column joined the lists above does
