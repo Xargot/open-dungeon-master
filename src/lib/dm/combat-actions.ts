@@ -17,6 +17,7 @@ import { handsBusy } from "@/lib/dm/cast-rules";
 import { tilesBetween, wallBetween } from "@/lib/dm/attack-spatial";
 import { seenClearlyDespiteTraits } from "@/lib/dm/hide-traits";
 import { rollCharacterCheck } from "@/lib/dm/contest-roll";
+import { rollCard } from "@/lib/dm/roll-card";
 import { resolveEnemyRef, publishEncounter } from "@/lib/dm/enemy-damage";
 import { HELP_FOR_A_CHECK, HELPED } from "@/lib/dm/help-logic";
 import { pushTokenAway } from "@/lib/dm/map-tools";
@@ -149,6 +150,9 @@ export function contest(
   args: ActionArgs,
   spend: Spend,
   costs: Record<string, unknown>,
+  // A die bought for the Athletics check (Grappling Strike's Superiority
+  // Die), paid once the contest's own checks pass, or its refusal.
+  checkDie?: () => { die: string; label: string } | { error: string },
 ): Record<string, unknown> {
   const action = args.action as "grapple" | "shove";
   if (!encounter) {
@@ -177,13 +181,22 @@ export function contest(
       error: `${sheet.name} is ${apart * 5} ft from ${enemy.displayName}; a ${action} needs the target within 5 ft. They move their token next to it first.`,
     };
   }
+  const bought = checkDie?.();
+  if (bought && "error" in bought) {
+    return { error: bought.error };
+  }
   spend();
   // SRD contest: the attacker's Athletics, a check like any other
   // (src/lib/dm/contest-roll.ts), against the target's better of Athletics
   // (STR) and Acrobatics (DEX).
-  const mine = rollCharacterCheck(campaign, sheet, { skill: "athletics" }, `${sheet.name}: Athletics to ${action} ${enemy.displayName}`);
-  if (mine.rollId) {
-    turn.rollIds.push(mine.rollId);
+  const checked = rollCharacterCheck(campaign, sheet, { skill: "athletics" }, `${sheet.name}: Athletics to ${action} ${enemy.displayName}`);
+  if (checked.rollId) {
+    turn.rollIds.push(checked.rollId);
+  }
+  const extra = bought ? rollCard(campaign, turn, sheet.id, "custom", `${sheet.name}: ${bought.label}`, `1${bought.die.replace(/^1/, "")}`, null).total : 0;
+  const mine = extra ? { ...checked, total: checked.total + extra } : checked;
+  if (bought) {
+    costs.superiorityDie = `${bought.label}: +${extra} on the Athletics check (one Superiority Die)`;
   }
   const theirs = rollEnemyContest(campaign, turn, enemy, "either", `${enemy.displayName}: contest against the ${action}`);
   const contested = `${mine.total} vs ${theirs}`;

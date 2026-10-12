@@ -42,6 +42,15 @@ export type FeatGrantSpec = {
   fixedTools: string[];
   fixedSkills: string[];
   fixedLanguages: string[];
+  // What a skill pick may be, by id; empty for every skill. A feat's text
+  // never narrows it; a subclass's often does (Knowledge Domain's Arcana,
+  // History, Nature or Religion; src/lib/srd/subclass-training.ts).
+  skillsFrom: string[];
+  // Expertise granted outright on skills the grant also names (a Scout's
+  // Nature and Survival), and whether every skill picked here is doubled
+  // too (Knowledge Domain's two).
+  fixedExpertise: string[];
+  pickedExpertise: boolean;
   // The spells the feat teaches, read by src/lib/srd/feat-spells.ts.
   taught: FeatSpellSpec;
   // The damage types the feat lets the player choose one of (Elemental
@@ -53,6 +62,7 @@ const EMPTY: FeatGrantSpec = {
   languages: 0, skills: 0, expertise: 0, weapons: 0, tools: 0, any: 0,
   toolsFrom: [], weaponsFrom: [], armorFrom: [], anyKinds: [],
   armor: [], fixedWeapons: [], fixedTools: [], fixedSkills: [], fixedLanguages: [],
+  skillsFrom: [], fixedExpertise: [], pickedExpertise: false,
   taught: featSpellSpec(""),
   damageTypes: [],
 };
@@ -112,7 +122,7 @@ function weaponsNamed(words: string): string[] | null {
 export function featGrantsAnything(spec: FeatGrantSpec): boolean {
   return (
     spec.languages + spec.skills + spec.expertise + spec.weapons + spec.tools + spec.any > 0 ||
-    spec.armor.length + spec.fixedWeapons.length + spec.fixedTools.length + spec.fixedSkills.length + spec.fixedLanguages.length > 0
+    spec.armor.length + spec.fixedWeapons.length + spec.fixedTools.length + spec.fixedSkills.length + spec.fixedLanguages.length + spec.fixedExpertise.length > 0
   );
 }
 
@@ -124,7 +134,8 @@ export function featGrantSpec(desc: string): FeatGrantSpec {
   }
   const spec: FeatGrantSpec = {
     ...EMPTY, toolsFrom: [], weaponsFrom: [], armorFrom: [], anyKinds: [], armor: [], fixedWeapons: [], fixedTools: [],
-    fixedSkills: [], fixedLanguages: [], taught: featSpellSpec(text), damageTypes: [],
+    fixedSkills: [], fixedLanguages: [], skillsFrom: [], fixedExpertise: [], pickedExpertise: false,
+    taught: featSpellSpec(text), damageTypes: [],
   };
   // A clause read as a count is taken out of the text, so the fixed-grant
   // patterns below never read "proficiency with thieves' tools, the

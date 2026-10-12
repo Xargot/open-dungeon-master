@@ -151,6 +151,13 @@ export async function readClaims(
     creatures.set(ref, fact.display);
   }
   const party = new Map(input.sheets.map((sheet) => [sheet.id, sheet.name]));
+  // Only the party's: a cast claim names a party character.
+  const spent = input.outcomes.spends
+    .flatMap((spend) => {
+      const by = party.get(spend.characterId);
+      return by === undefined ? [] : [{ ...spend, by }];
+    })
+    .map((spend, index) => ({ ...spend, ref: `s${index + 1}` }));
   const speakers = input.kinds.includes("speaker")
     ? speakerRoster(campaign.id, input.sheets, creatures, input.registering)
     : new Map<string, Speaker>();
@@ -172,6 +179,7 @@ export async function readClaims(
             creatures: [...creatures].map(([ref, display]) => ({ ref, display })),
             party: [...party].map(([ref, name]) => ({ ref, name })),
             speakers: [...named].map(([ref, speaker]) => ({ ref, name: speaker.name, aliases: speaker.aliases })),
+            spent,
           },
           input.text,
         ),
@@ -197,6 +205,7 @@ export async function readClaims(
     leveledSpells: leveledSpellNames(),
     normalizeSpell: normalizeSpellName,
     skills: new Set(SKILL_IDS),
+    spent: new Map(spent.map((spend) => [spend.ref, spend.characterId])),
     speakers: named,
   });
   if (process.env.DM_DEBUG) {

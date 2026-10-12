@@ -11,6 +11,7 @@
 // restore, and raw sheet edits. Those stay in the browser.
 
 import { listAssignmentsForCharacter } from "@/lib/db/characters";
+import { WORLD_LORE_CATEGORIES, type WorldLoreCategory } from "@/lib/dm/world-lore-logic";
 import { harnessMcpUrl } from "@/lib/harness/bridge";
 import { grantSessionToken, grantUser, type AgentScope, type ConnectionGrant } from "@/lib/agents/grants";
 import type { McpToolDefinition } from "@/lib/harness/types";
@@ -24,6 +25,8 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 type Args = Record<string, unknown>;
 
+type ToolMethod = "GET" | "POST" | "PATCH" | "DELETE" | ((args: Args) => "GET" | "POST" | "PATCH" | "DELETE");
+
 type WorkbenchTool = {
   name: string;
   scope: AgentScope;
@@ -32,7 +35,8 @@ type WorkbenchTool = {
   required?: string[];
   // Extra body fields are passed through to the route, which validates them.
   open?: boolean;
-  method: "GET" | "POST" | "PATCH" | "DELETE";
+  // A function here lets one tool cover related verbs (create/patch/delete).
+  method: ToolMethod;
   path: (args: Args) => string;
   body?: (args: Args) => unknown;
   // Guard evaluated before the call, e.g. an explicit confirm.
@@ -163,6 +167,15 @@ export const WORKBENCH_TOOLS: WorkbenchTool[] = [
     path: (a) => `/api/campaigns/${seg(a.campaignId)}/lore`,
   },
   {
+    name: "odm_get_facts",
+    scope: "read",
+    description: "Read a campaign's tracked fact register - what the table has established as true. Party-visible facts unless secrets: true, which needs the DM seat or story authority.",
+    properties: { ...campaignIdProp, secrets: { type: "boolean", description: "Include DM-only facts (needs the DM seat or story authority)." } },
+    required: ["campaignId"],
+    method: "GET",
+    path: (a) => `/api/campaigns/${seg(a.campaignId)}/facts${a.secrets === true ? "?secrets=1" : ""}`,
+  },
+  {
     name: "odm_list_characters",
     scope: "read",
     description: "List the characters in your library.",
@@ -183,22 +196,32 @@ export const WORKBENCH_TOOLS: WorkbenchTool[] = [
   {
     name: "odm_take_action",
     scope: "play",
-    description: "Act at the table as your character, exactly as typing in the chat box: 'do' is an action, 'say' is speech, 'ooc' is out of character. The Dungeon Master answers in the campaign.",
+    description: "Act at the table as your character, exactly as typing in the chat box: 'do' is an action, 'say' is speech, 'ooc' is out of character. The Dungeon Master answers in the campaign. A cast that would end your character's running concentration spell is refused with confirmConcentration naming both spells; ask your player, and if they agree send the same action again with concentrationAck set to that object.",
     properties: {
       ...campaignIdProp,
       ...WEBHOOK_GUARD_PROPS,
       content: { type: "string", maxLength: 2000 },
       kind: { type: "string", enum: ["do", "say", "ooc"] },
+      concentrationAck: {
+        type: "object",
+        description: "Your player's yes to ending the running concentration spell, copied from the refusal's confirmConcentration.",
+        properties: {
+          characterId: { type: "string" },
+          current: { type: "string" },
+          next: { type: "string" },
+        },
+        required: ["characterId", "current", "next"],
+      },
     },
     required: ["campaignId", "content"],
     method: "POST",
     path: (a) => `/api/campaigns/${seg(a.campaignId)}/actions`,
-    body: (a) => pick(a, ["content", "kind"]),
+    body: (a) => pick(a, ["content", "kind", "concentrationAck"]),
   },
   {
     name: "odm_ask",
     scope: "play",
-    description: "Ask the campaign's records a question (what happened, who someone is). A model writes the answer, waiting behind any narration in progress, so it can be incomplete or wrong, and it is not a view of the table: story questions read facts, chapter summaries and only the last few messages, clipped; rules and sheet questions read no messages. For what is happening now, read odm_get_campaign. Private to you unless visibility says otherwise.",
+    description: "Ask the campaign's records a question (what happened, who someone is). A model writes the answer, waiting behind any narration in progress, so it can be incomplete or wrong, and it is not a view of the table: story questions read facts, chapter summaries and the latest messages (the newest whole where it fits, and the search reaches further back); rules and sheet questions read no messages. For what is happening now, read odm_get_campaign. Private to you unless visibility says otherwise.",
     properties: {
       ...campaignIdProp,
       question: { type: "string", maxLength: QUESTION_MAX_CHARS },
@@ -311,6 +334,44 @@ export const WORKBENCH_TOOLS: WorkbenchTool[] = [
     method: "PATCH",
     path: (a) => `/api/campaigns/${seg(a.campaignId)}/settings`,
     body: (a) => without(a, ["campaignId"]),
+  },
+  {
+    name: "odm_write_lore",
+    scope: "campaigns",
+    description: "Create, patch or delete a campaign lore entry (party lead / story authority; the routes enforce it). Create omits id; delete needs confirm: true and cannot be undone. Text fields only - pictures and PDF attachments need the workshop.",
+    properties: {
+      ...campaignIdProp,
+      action: { type: "string", enum: ["create", "patch", "delete"] },
+      id: { type: "string", description: "The entry id (from odm_lore). Required for patch and delete." },
+      category: { type: "string", enum: [...WORLD_LORE_CATEGORIES] },
+      title: { type: "string", maxLength: 120 },
+      body: { type: "string", maxLength: 4000 },
+      tags: { type: "array", items: { type: "string" } },
+      visibility: { type: "string", enum: ["party", "dm"] },
+      pinned: { type: "boolean", description: "Patch only. Pinned entries skip retrieval and ride every DM prompt." },
+      confirm: { type: "boolean" },
+    },
+    required: ["campaignId", "action"],
+    method: (a) => (a.action === "create" ? "POST" : a.action === "patch" ? "PATCH" : "DELETE"),
+    path: (a) =>
+      `/api/campaigns/${seg(a.campaignId)}/lore${a.action !== "create" && typeof a.id === "string" ? `/${seg(a.id)}` : ""}`,
+    body: (a) =>
+      a.action === "delete"
+        ? undefined
+        : pick(a, a.action === "patch" ? ["category", "title", "body", "tags", "visibility", "pinned"] : ["category", "title", "body", "tags", "visibility"]),
+    check: (a) => {
+      if (a.action === "patch") {
+        return typeof a.id === "string" ? null : "Patching needs the entry id (from odm_lore).";
+      }
+      if (a.action === "delete") {
+        if (typeof a.id !== "string") return "Deleting needs the entry id (from odm_lore).";
+        return needConfirm(a);
+      }
+      if (!WORLD_LORE_CATEGORIES.includes(a.category as WorldLoreCategory) || typeof a.title !== "string" || !a.title.trim() || typeof a.body !== "string" || !a.body.trim()) {
+        return "Creating needs category, title and body.";
+      }
+      return null;
+    },
   },
   {
     name: "odm_get_invite",
@@ -459,7 +520,7 @@ export async function workbenchCall(grant: ConnectionGrant, name: string, args: 
   let response: Response;
   try {
     response = await fetch(`${serverOrigin()}${path}`, {
-      method: tool.method,
+      method: typeof tool.method === "function" ? tool.method(args) : tool.method,
       headers: {
         Authorization: `Bearer ${grantSessionToken(grant)}`,
         Accept: "application/json",

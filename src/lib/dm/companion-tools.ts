@@ -130,10 +130,10 @@ export function companionTools(campaign: Campaign): ToolDef[] {
   );
   const classDescription = classIds.length
     ? `Class id from this world's catalog. Only these belong in this setting: ${classIds.join(", ")}. Anything else is refused.`
-    : "Class id from this world's catalog, e.g. 'fighter', 'cleric'.";
+    : "Class id from this world's catalog ('fighter', 'cleric').";
   const raceDescription = preset.companionRaces.length
     ? `SRD race id. ${preset.raceHint} Allowed here: ${preset.companionRaces.join(", ")} (anything else becomes human).`
-    : `SRD race id, e.g. 'human', 'hill_dwarf', 'high_elf'. ${preset.raceHint}`;
+    : `SRD race id ('human', 'hill_dwarf', 'high_elf'). ${preset.raceHint}`;
   const kindDescription =
     mode === "full"
       ? "'party' for a lasting party member who travels with the party until dismissed; 'guest' for a scene-scoped ally (a soldier helping defend the town) who leaves when the scene ends."
@@ -143,7 +143,7 @@ export function companionTools(campaign: Campaign): ToolDef[] {
       type: "function",
       function: {
         name: "add_companion",
-        description: `Write a new AI-controlled ally into the story with a REAL character sheet: they get stats, HP, equipment, an initiative slot, and a map token, and you control them fully (dialogue and combat). Call this BEFORE narrating them joining. An ally that never went through add_companion does not exist and cannot act or fight. They must belong in this world (${preset.name.toLowerCase()}): name, race, and class all fit the setting.`,
+        description: `Write a new AI-controlled ally into the story with a REAL character sheet: they get stats, HP, equipment, an initiative slot, and a map token, and you control them fully (dialogue and combat). Call it BEFORE narrating them joining. An ally that never went through add_companion does not exist and cannot act or fight. They must belong in this world (${preset.name.toLowerCase()}): name, race, and class all fit the setting.`,
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -161,7 +161,7 @@ export function companionTools(campaign: Campaign): ToolDef[] {
               type: "integer",
               minimum: 1,
               maximum: 20,
-              description: "Optional; defaults to the party's average level.",
+              description: "Default: the party's average level.",
             },
             personality: {
               type: "string",
@@ -172,7 +172,7 @@ export function companionTools(campaign: Campaign): ToolDef[] {
             spells: {
               type: "array",
               items: { type: "string" },
-              description: "For casters: the spells they know (level-appropriate).",
+              description: "Casters only: the spells they know (level-appropriate).",
             },
           },
           required: ["name", "class", "gender", "personality", "kind"],
@@ -184,12 +184,12 @@ export function companionTools(campaign: Campaign): ToolDef[] {
       function: {
         name: "dismiss_companion",
         description:
-          "Write a companion out of the story: they part ways, their scene ends, or they died and the story moves on. Call this BEFORE narrating the departure; their sheet, initiative slot, and token are removed.",
+          "Write a companion out of the story: they part ways, their scene ends, or they died and the story moves on. Call it BEFORE narrating the departure; their sheet, initiative slot, and token are removed.",
         parameters: {
           type: "object",
           additionalProperties: false,
           properties: {
-            characterId: { type: "string", description: "The companion's characterId from GAME STATE." },
+            characterId: { type: "string", description: "The companion: exact characterId from GAME STATE." },
             reason: { type: "string", description: "Short in-fiction reason for the departure." },
           },
           required: ["characterId"],

@@ -54,6 +54,7 @@ const { computeSheetDerived, findClass, spellSlotsFor } = await import("../src/l
 const { combatRiders, songOfRestDieFor } = await import("../src/lib/srd/feature-effects.ts");
 const { rageDamageBonus, resourceDef } = await import("../src/lib/srd/class-resources.ts");
 const { optionSlotsFor } = await import("../src/lib/srd/options.ts");
+const { autoSubclassPicks, subclassGrants } = await import("../src/lib/srd/subclass-training.ts");
 const { expertiseSlotsFor } = await import("../src/lib/srd/features.ts");
 const { wildShapeCapsFor } = await import("../src/lib/srd/beast-forms.ts");
 const { earnedAsiCount, crossedAsiLevels } = await import("../src/lib/srd/asi.ts");
@@ -299,7 +300,13 @@ for (const classId of CLASS_IDS) {
       const subclass =
         level >= table.subclassAt && table.subclass ? table.subclass.name : before.subclass;
       const gain = table.hitDie / 2 + 1 + CON_MOD;
+      // A subclass feature that asks for picks (a Lore bard's three skills,
+      // issue 251) is answered as a player would, with the first open ones.
+      const heldGrants = new Set(subclassGrants([{ id: classId, level: level - 1, subclass: before.subclass }]).map((grant) => grant.name));
+      const freshGrants = subclassGrants([{ id: classId, level, subclass }]).filter((grant) => !heldGrants.has(grant.name));
+      const featChoices = autoSubclassPicks(freshGrants, before.proficiencies);
       const response = await patchSheetAs(table20, sheetRoute, table20.owner, {
+        ...(Object.keys(featChoices).length ? { featChoices } : {}),
         level,
         maxHp: before.maxHp + gain,
         currentHp: before.currentHp + gain,

@@ -1,3 +1,4 @@
+import { normalizeHandLayout, type HandLayout } from "@/lib/battlemap/hand-layout";
 import { getDatabase, nowIso, parseJson } from "@/lib/db/core";
 import { touchCampaign } from "@/lib/db/campaigns";
 import { effectiveMaxHp, maxHpRiders, type ConditionMetaMap } from "@/lib/dm/condition-logic";
@@ -73,6 +74,7 @@ type SheetRow = {
   is_companion: number | null;
   companion_kind: string | null;
   personality: string | null;
+  hand_layout_json?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -158,9 +160,27 @@ function mapSheet(row: SheetRow): CharacterSheet {
         ? row.companion_kind
         : null,
     personality: row.personality ?? "",
+    ...handLayoutOf(row.hand_layout_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+// Present only once its player has arranged the Hand, so a sheet that never
+// was carries nothing extra.
+function handLayoutOf(json: string | null | undefined): { handLayout?: HandLayout } {
+  const layout = json ? normalizeHandLayout(parseJson(json, null)) : null;
+  return layout ? { handLayout: layout } : {};
+}
+
+// The player's arrangement of this character's Hand (issue 231), or null to
+// go back to the automatic split. Only the layout column is written: it is a
+// preference, so nothing else on the sheet moves and updated_at stays.
+export function setHandLayout(sheetId: string, layout: HandLayout | null): CharacterSheet | null {
+  getDatabase()
+    .prepare(`UPDATE character_sheets SET hand_layout_json = ? WHERE id = ?`)
+    .run(layout ? JSON.stringify(layout) : null, sheetId);
+  return getSheetById(sheetId);
 }
 
 const SHEET_COLUMNS = `
@@ -170,7 +190,7 @@ const SHEET_COLUMNS = `
   classes_json, hit_dice_pools_json,
   proficiencies_json, equipment_json, gold, copper, feats_json, features_json,
   spellcasting_json, conditions_json, condition_meta_json, resources_json, wild_shape_json, pets_json, summon_json, exhaustion, death_saves_json, concentrating_on, concentration_rounds,
-  portrait_json, notes, backstory, is_companion, companion_kind, personality, created_at, updated_at
+  portrait_json, notes, backstory, is_companion, companion_kind, personality, hand_layout_json, created_at, updated_at
 `;
 
 // Flags a freshly created sheet as an AI companion. Kept out of the main

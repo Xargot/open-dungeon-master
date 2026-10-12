@@ -9,7 +9,9 @@
 // 1. a long transcript on a 48K window: the request's messages plus tools, by
 //    the budget's own estimate, fit the window less the reply reserve, and the
 //    trace names the tool definitions;
-// 2. an empty reply with finish_reason "length": the turn logs the cause.
+// 2. an empty reply with finish_reason "length": the turn logs the cause;
+// 3. an agent program, handed the whole catalogue at once, is charged for
+//    all of it, and a chat table still for the larger of its two sets.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -35,7 +37,8 @@ const { createSheet } = await import("../src/lib/db/sheets.ts");
 const { createSheetSchema } = await import("../src/lib/schemas/sheet.ts");
 const { insertCampaignMessage } = await import("../src/lib/db/messages.ts");
 const { getDmTurn, getLatestDmTurnId } = await import("../src/lib/db/dm-turns.ts");
-const { startDmTurn, dmTurnToolTokens } = await import("../src/lib/dm/turn.ts");
+const { startDmTurn, dmTurnToolTokens, dmTurnTools, dmTurnToolCatalogue } = await import("../src/lib/dm/turn.ts");
+const { toMcpTools } = await import("../src/lib/harness/render.ts");
 
 let mode = "narrate";
 const requests = [];
@@ -170,5 +173,30 @@ function table(title, lines) {
 }
 
 server.close();
+// ---- 3. an agent program is charged for the catalogue it is handed -------------
+{
+  const chat = table("Harness charge", 1);
+  const harness = { ...chat, settings: { ...chat.settings, textProvider: "harness" } };
+  const imageEnabled = chat.settings.imageGenerationEnabled && chat.settings.autoImages;
+  const chatTokens = dmTurnToolTokens(chat);
+  assert.equal(
+    chatTokens,
+    Math.max(
+      estimateTokens(JSON.stringify(dmTurnTools(chat, false, imageEnabled, false))),
+      estimateTokens(JSON.stringify(dmTurnTools(chat, true, imageEnabled, false))),
+    ),
+    "a chat table is still charged the larger of its two sets",
+  );
+  const harnessTokens = dmTurnToolTokens(harness);
+  assert.equal(harnessTokens, estimateTokens(JSON.stringify(toMcpTools(dmTurnToolCatalogue(harness, imageEnabled, false)))));
+  assert.ok(harnessTokens > chatTokens, `the whole catalogue (${harnessTokens}) costs more than either set (${chatTokens})`);
+  assert.equal(
+    promptWindowTokens(131_072, harnessTokens),
+    promptWindowTokens(131_072, chatTokens) - (harnessTokens - chatTokens),
+    "the harness window is smaller by exactly the difference",
+  );
+  console.log(`ok: an agent program is charged ${harnessTokens} tool tokens, a chat table ${chatTokens}`);
+}
+
 removeTempDir(dir);
 console.log("prompt-window: all passed");

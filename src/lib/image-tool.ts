@@ -29,7 +29,7 @@ export const generateImageTool = {
           maxItems: MAX_IMAGE_REFERENCES,
           items: { type: "string" },
           description:
-            "Exact saved character IDs to pass as visual references. Use at most two, and only when those characters should appear.",
+            "The characters to pass as visual references: exact characterIds from GAME STATE. At most two, and only when those characters should appear.",
         },
       },
       required: ["prompt"],

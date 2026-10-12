@@ -146,8 +146,7 @@ export function createCharacter(
   const db = getDatabase();
   const id = crypto.randomUUID();
   const now = nowIso();
-  const floor = XP_THRESHOLDS[Math.max(1, Math.min(20, level)) - 1] ?? 0;
-  const startingXp = levelForXp(xp) === level ? xp : floor;
+  const startingXp = experienceAtLevel(xp, level);
   const stored: CreateSheetInput = {
     ...input,
     features: libraryFeatures(input, level, userId),
@@ -236,11 +235,23 @@ export function setCharacterWorkshop(
   return getCharacter(characterId);
 }
 
+// The experience a character holds at a level: what it had while that is
+// still the experience of the level, otherwise the level's floor. An edit
+// that raises or lowers the level moves the experience with it (issue 229),
+// so the sheet never reads level 5 with level 2's experience.
+export function experienceAtLevel(xp: number, level: number): number {
+  const clamped = Math.max(1, Math.min(20, level));
+  return levelForXp(xp) === clamped ? xp : (XP_THRESHOLDS[clamped - 1] ?? 0);
+}
+
 export function updateCharacter(
   userId: string,
   id: string,
   level: number,
   input: CreateSheetInput,
+  // Who plays them, where the edit changes it (the library editor, issue
+  // 229); absent keeps the role they have.
+  role?: CharacterRole,
 ): LibraryCharacter | null {
   const existing = getCharacterForUser(userId, id);
   if (!existing) {
@@ -254,18 +265,21 @@ export function updateCharacter(
     .prepare(
       `
         UPDATE library_characters SET
-          name = ?, race = ?, class = ?, subclass = ?, background = ?,
-          level = ?, sheet_json = ?, updated_at = ?
+          name = ?, role = ?, race = ?, class = ?, subclass = ?, background = ?,
+          level = ?, xp = ?, sheet_json = ?, updated_at = ?
         WHERE id = ?
       `,
     )
     .run(
       input.name,
+      role ?? existing.role,
       input.race,
       input.class,
       input.subclass,
       input.background,
       level,
+      // The same level keeps what it has, a level-up waiting in it included.
+      level === existing.level ? existing.xp : experienceAtLevel(existing.xp, level),
       JSON.stringify(stored),
       nowIso(),
       id,

@@ -315,7 +315,7 @@ export async function expandBeat(
   }
 
   const prompt = [
-    { role: "system" as const, content: buildDmSystem(campaign) },
+    { role: "system" as const, content: buildDmSystem(campaign, []) },
     ...(recent.length
       ? [{ role: "user" as const, content: `Recently at this table:\n${recent.join("\n")}` }]
       : []),

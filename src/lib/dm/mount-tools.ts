@@ -71,7 +71,7 @@ export const mountTools: ToolDef[] = [
           cause: {
             type: "string",
             enum: ["voluntary", "forced-move", "mount-prone", "rider-prone"],
-            description: "Why they came off. Defaults to voluntary.",
+            description: "Why they came off. Default 'voluntary'.",
           },
         },
         required: ["characterId"],

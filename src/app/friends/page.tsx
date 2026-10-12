@@ -335,7 +335,7 @@ function FriendRow({
       glyph: "tab-campaigns",
       onSelect: () => onInvite(campaign.id),
     })),
-    { id: "unfriend", label: "Unfriend", glyph: "quest-failed", tone: "danger" as const, separated: campaigns.length > 0, onSelect: onUnfriend },
+    { id: "unfriend", label: "Unfriend", glyph: "ui-delete", tone: "danger" as const, separated: campaigns.length > 0, onSelect: onUnfriend },
   ];
   return (
     <ContextMenu as="li" items={menu} label={friend.username} className="plate-row">

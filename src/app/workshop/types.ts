@@ -24,4 +24,6 @@ export type ImportSourceSummary = {
   kind: CampaignKind;
   updatedAt: string;
   contents: Record<ImportKind, number>;
+  // Its storyboard compiles into a story arc of its own (issue 249).
+  boardArc?: boolean;
 };

@@ -470,9 +470,9 @@
       "traits": [
         "Darkvision 60 ft",
         "Celestial Resistance (necrotic and radiant)",
-        "Healing Hands (heal a touched creature your level in HP, 1/long rest)",
+        "Healing Hands (an action: a touched creature regains a number of d4s equal to your proficiency bonus, 1/long rest)",
         "Light Bearer (the light cantrip)",
-        "Celestial Revelation (winged flight and radiant damage from 3rd level, 1/long rest)"
+        "Celestial Revelation (from 3rd level, a bonus action: Heavenly Wings, Inner Radiance or Necrotic Shroud for a minute, with extra damage equal to your proficiency bonus once a turn, 1/long rest)"
       ],
       "languages": [
         "Common",

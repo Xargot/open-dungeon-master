@@ -37,8 +37,8 @@ function PinItem({ pin, onUnpin }: { pin: PinRow; onUnpin: (id: string) => void 
   };
   const items: ContextMenuItem[] = [
     { id: "jump", label: "Jump to message", glyph: "tab-log", onSelect: jump },
-    ...(long ? [{ id: "expand", label: expanded ? "Show less" : "Show more", glyph: "tab-notes", onSelect: () => setExpanded((value) => !value) }] : []),
-    { id: "unpin", label: "Unpin", glyph: "quest-failed", tone: "danger", separated: true, onSelect: () => onUnpin(pin.id) },
+    ...(long ? [{ id: "expand", label: expanded ? "Show less" : "Show more", glyph: "ui-zoom", onSelect: () => setExpanded((value) => !value) }] : []),
+    { id: "unpin", label: "Unpin", glyph: "ui-pin", tone: "danger", separated: true, onSelect: () => onUnpin(pin.id) },
   ];
 
   return (
@@ -149,7 +149,18 @@ export function PinsPanel({ campaignId, version }: { campaignId: string; version
           ))}
         </ul>
       ) : (
-        (loadError ? <LoadFailed error={loadError} onRetry={() => setReload((current) => current + 1)} /> : loaded ? <EmptyState size="sm" art="board" title="Nothing pinned. Select text in one of the DM's messages and press the pin icon to put it in front of the DM every turn, whether or not it looks relevant." /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={() => setReload((current) => current + 1)}
+          />
+        ) : loaded ? (
+          <EmptyState
+            size="sm"
+            art="board"
+            title="Nothing pinned. Select text in one of the DM's messages and press the pin icon to put it in front of the DM every turn, whether or not it looks relevant."
+          />
+        ) : null)
       )}
     </div>
   );

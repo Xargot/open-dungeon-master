@@ -43,15 +43,15 @@ export const effectTools: ToolDef[] = [
     function: {
       name: "set_effect",
       description:
-        "Put a lasting modifier on a character or an enemy: a blessing, a curse, a potion, a hex, a wound that has not healed. Use this for anything that changes a number for a while and is not one of the 14 named 5e conditions (those go through set_condition). Every modifier is applied by the server to the rolls it names, and the effect ends on its own when its duration runs out.",
+        "Put a lasting modifier on a character or an enemy: a blessing, a curse, a potion, a hex, a wound that has not healed. Call it for anything that changes a number for a while and is not one of the 14 named 5e conditions; for those, use set_condition. Every modifier is applied by the server to the rolls it names, and the effect ends on its own when its duration runs out.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          characterId: { type: "string", description: "The character it lands on." },
-          enemyId: { type: "string", description: "Or the enemy it lands on." },
-          name: { type: "string", description: "What it is called, e.g. 'Shrine's Blessing'. A spell's effect is cast_buff, never an effect." },
-          source: { type: "string", description: "What caused it, e.g. 'Aldric's spell'." },
+          characterId: { type: "string", description: "The character it lands on: exact characterId from GAME STATE." },
+          enemyId: { type: "string", description: "Or the enemy it lands on: exact enemyId from GAME STATE." },
+          name: { type: "string", description: "What it is called ('Shrine's Blessing'). For a spell's effect, use cast_buff, never an effect." },
+          source: { type: "string", description: "What caused it ('Aldric's spell')." },
           modifiers: {
             type: "array",
             description: "What it changes. At least one.",

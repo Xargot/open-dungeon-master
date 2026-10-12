@@ -43,7 +43,7 @@ export const ambienceTools: ToolDef[] = [
     function: {
       name: "set_ambience",
       description:
-        "Change what the table is hearing. The bed is the place (a tavern, a cave, rain); the music is what the scene is doing to them (tension, triumph, sorrow). Call this when the party arrives somewhere that sounds different or the mood of the scene turns, not every reply. Leave a layer out to keep it as it is, or send \"none\" to silence it.",
+        "Change what the table is hearing. The bed is the place (a tavern, a cave, rain); the music is what the scene is doing to them (tension, triumph, sorrow). Call it when the party arrives somewhere that sounds different or the mood of the scene turns, not every reply. Leave a layer out to keep it as it is, or send \"none\" to silence it.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -72,7 +72,7 @@ export const ambienceTools: ToolDef[] = [
     function: {
       name: "play_sting",
       description:
-        "One sound, once, over whatever is already playing: a thunderclap, a door slamming, a roar out of the dark. Use it for a single beat you want the table to flinch at. It changes nothing about the scene's ambience.",
+        "Play one sound, once, over whatever is already playing: a thunderclap, a door slamming, a roar out of the dark. Call it for a single beat you want the table to flinch at. It changes nothing about the scene's ambience.",
       parameters: {
         type: "object",
         additionalProperties: false,

@@ -85,7 +85,9 @@ export function resolveMoreReaction(ctx: Ctx, reaction: AuthoredReaction): Recor
 
 // ---- the move ----
 
-function reactionMove(ctx: Ctx, name: string, trigger: "enemy_adjacent" | "oa_hit"): Record<string, unknown> | { error: string } {
+// `opened`: the move another call already allowed (Maneuvering Attack's hit,
+// src/lib/dm/maneuver-reactions.ts), with nothing more to check here.
+export function reactionMove(ctx: Ctx, name: string, trigger: "enemy_adjacent" | "oa_hit" | "opened"): Record<string, unknown> | { error: string } {
   const { campaign, encounter } = ctx;
   const map = encounter ? getBattleMapForEncounter(encounter.id) : null;
   const token = map ? getTokenByRef(map.id, ctx.sheet.id) : null;
@@ -101,7 +103,7 @@ function reactionMove(ctx: Ctx, name: string, trigger: "enemy_adjacent" | "oa_hi
     if (!ctx.sheet.conditions.some((entry) => lower(entry) === OA_HIT)) {
       return { error: `${name} moves ${ctx.sheet.name} right after their opportunity attack hits, and none has hit since their turn. Nothing was spent.` };
     }
-  } else {
+  } else if (trigger === "enemy_adjacent") {
     const near = listEnemies(encounter.id).some((enemy) => enemy.status === "alive" && withinFeet(encounter.id, ctx.sheet.id, enemy.id, 5));
     if (!near) {
       return { error: `${name} answers an enemy within 5 feet of ${ctx.sheet.name}, and none stands there. Nothing was spent.` };

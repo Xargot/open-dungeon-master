@@ -7,7 +7,7 @@ import { SectionHead } from "@/components/ui/SectionHead";
 import { PortraitMedallion } from "@/components/sheet/SheetParts";
 import { cn } from "@/lib/cn";
 import { avatarPlaceholder, characterPlaceholder } from "@/lib/placeholders";
-import { JOIN_NOTE_PREFIX, LEAD_NOTE_PREFIX, type CampaignMember } from "@/lib/campaign-types";
+import { JOIN_NOTE_PREFIX, LEAD_NOTE_PREFIX, systemNoteWords, type CampaignMember } from "@/lib/campaign-types";
 import type { CampaignMessage } from "@/lib/db/messages";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import {
@@ -26,7 +26,7 @@ export function copyAction(message: CampaignMessage): MessageAction {
     name: "Copy text",
     label: "Copy this message's text",
     hint: "Copy: put this message's words on the clipboard",
-    glyph: "tab-notes",
+    glyph: "ui-duplicate",
     icon: <Copy className="size-3.5" />,
     onSelect: () => {
       void navigator.clipboard?.writeText(message.content).catch(() => {});
@@ -76,7 +76,8 @@ export function SystemMessage({ content, glyph }: { content: string; glyph?: Sys
     );
   }
   const join = content.startsWith(JOIN_NOTE_PREFIX);
-  const text = join ? content.slice(JOIN_NOTE_PREFIX.length) : content;
+  // The markers the DM reads (a joiner, a settled offer) come off.
+  const text = systemNoteWords(content);
   return (
     <p className="session-sysline">
       <GameIcon icon={{ kind: "glyph", key: join ? "system-party" : (glyph ?? "cue-bell") }} size="size-6" />

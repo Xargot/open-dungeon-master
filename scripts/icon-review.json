@@ -1,5 +1,6 @@
 {
   "rejected": {
+    "glyph-ui-duplicate": "b",
     "condition-petrified": "t",
     "family-class-muckraker": "t",
     "family-class-waste-preacher": "t",
@@ -164,11 +165,6 @@
     "glyph-quest-hidden": "t",
     "glyph-rest-short": "t2",
     "glyph-skill-persuasion": "t2",
-    "glyph-system-party": "t3b",
-    "glyph-tab-campaigns": "t",
-    "glyph-tab-chat": "t",
-    "glyph-tab-log": "t",
-    "glyph-tab-shop": "t",
     "item-manual-of-bodily-health": "t",
     "item-manual-of-gainful-exercise": "t3b",
     "item-manual-of-golems": "t",

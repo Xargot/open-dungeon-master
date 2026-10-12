@@ -230,6 +230,12 @@ const CHARGED_ELSEWHERE = {
   ki: "each use (Flurry, Patient Defense, Step of the Wind) costs its own",
   sorcery_points: "Metamagic and slot conversion cost different things",
   luck_points: "spent on a roll, no action",
+  // Each option costs its own, charged by use_resource from the option's
+  // name (src/lib/dm/option-costs.ts), pc_attack (a maneuver on the swing)
+  // or use_reaction (Parry, Riposte, Brace, Protective Field).
+  channel_divinity: "each option costs its own",
+  sub_psionic_energy: "each use costs its own",
+  sub_superiority_dice: "each maneuver costs its own",
   cyberpunk_surge_momentum: "the cantrip's cast is the cost",
   horror_the_rite_remembers: "the cantrip's cast is the cost",
   post_apocalyptic_surge_of_change: "the cantrip's cast is the cost",
@@ -240,13 +246,13 @@ const CHARGED_ELSEWHERE = {
   mystery_general_strike: "the reactions named are the party's attacks",
   horror_adrenaline_surge: "take_action's bonus route charges the bonus action and spends the use",
   mystery_vanish: "take_action's bonus route charges the bonus action and spends the use",
-  // The bonus attack is pc_attack's to charge, which does not offer these
-  // three yet (authored-economy.ts authoredBonusAttackProblem knows none).
+  // The bonus attack is pc_attack's to charge, and it spends the use
+  // (src/lib/dm/feature-bonus-attacks.ts).
   sub_war_priest: "the bonus attack, not the use, costs the bonus action",
   race_hungry_jaws: "the bonus attack, not the use, costs the bonus action",
   sub_unwavering_mark: "the bonus attack, not the use, costs the bonus action",
   sub_telekinetic_master: "the slotless cast, then pc_attack's bonus attack",
-  sub_embodiment_of_the_law: "the enchantment spell's cast is the cost",
+  sub_embodiment_of_the_law: "the enchantment spell's cast is the cost (the use marks it for the bonus action)",
 };
 
 test("every feature whose text names a cost carries it", () => {

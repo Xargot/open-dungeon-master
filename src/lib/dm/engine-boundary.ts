@@ -13,6 +13,7 @@
 // mutates mechanical state; a detection at most costs one corrective model call.
 
 import type { NarrationClaim } from "./claims-logic.ts";
+import { THIS_MOMENT_HEADING } from "../prompt-boundary.ts";
 
 // ---------------------------------------------------------------------------
 // Part 1: the contract block
@@ -111,6 +112,11 @@ export type ResolvedOutcomes = {
   // Spells the turn actually accounted for: a slot spent, a ritual declared, a
   // cantrip acknowledged, a resource burned.
   spells: Set<string>;
+  // Every call that resolved for a character this turn, by what it names
+  // (spentName): what a spell the reader saw in the prose may really have
+  // been (a feature, a potion, an action), when the reader ties the cast to
+  // one (dm/claims-logic.ts checkClaims).
+  spends: Array<{ characterId: string; name: string }>;
   toolResultCount: number;
 };
 
@@ -344,6 +350,17 @@ const SPELL_ACCOUNTING_TOOLS = new Set([
   "use_item",
 ]);
 
+// What a call spent, as the claims reader is shown it, the same way for
+// every tool: the words its arguments name ("Hexblade's Curse", "Wild Shape /
+// dire wolf", "hide"). Ids, numbers and flags name nothing, and the reason is
+// the model's own prose; a long value is cut, since it is only there to say
+// what was spent.
+function spentName(args: Record<string, unknown>): string {
+  return Object.entries(args)
+    .flatMap(([key, value]) => (typeof value === "string" && value.trim() && !/Ids?$/.test(key) && key !== "reason" ? [value.trim().slice(0, 80)] : []))
+    .join(" / ");
+}
+
 // Tools whose refusal means a blow never landed on the enemy they named.
 const ATTACK_TOOLS = new Set(["pc_attack", "cast_at_enemy", "pet_attack"]);
 
@@ -356,12 +373,13 @@ export function resolveOutcomes(
   const numbers = new Set<number>();
   const damageNumbers: number[] = [];
   const spells = new Set<string>();
+  const spends: ResolvedOutcomes["spends"] = [];
   const refusedTargets: string[] = [];
   let toolResultCount = 0;
 
   for (const exchange of exchanges) {
+    const args = parseJsonObject(exchange.arguments);
     if (ATTACK_TOOLS.has(exchange.name) && exchange.result && "error" in exchange.result) {
-      const args = parseJsonObject(exchange.arguments);
       if (typeof args?.targetEnemyId === "string") {
         refusedTargets.push(args.targetEnemyId);
       }
@@ -369,9 +387,13 @@ export function resolveOutcomes(
     // A named spell counts as accounted for the moment its tool ran without an
     // error, whether that spent a slot, a pact slot, a resource, or nothing at
     // all (rituals and cantrips legitimately spend nothing).
-    if (SPELL_ACCOUNTING_TOOLS.has(exchange.name)) {
-      const args = parseJsonObject(exchange.arguments);
-      const named = typeof args?.spell === "string" ? normalizeSpellName(args.spell) : "";
+    // use_reaction names the reaction spell it casts (Shield, Hellish Rebuke)
+    // as its feature, and the server spends that slot; its spell argument is
+    // the enemy's spell a Counterspell answers, never the party's.
+    const spellArg = exchange.name === "use_reaction" ? "feature" : SPELL_ACCOUNTING_TOOLS.has(exchange.name) ? "spell" : null;
+    if (spellArg) {
+      const value = args?.[spellArg];
+      const named = typeof value === "string" ? normalizeSpellName(value) : "";
       if (named && !(exchange.result && "error" in exchange.result)) {
         spells.add(named);
       }
@@ -381,6 +403,10 @@ export function resolveOutcomes(
       continue;
     }
     toolResultCount += 1;
+    const spent = args ? spentName(args) : "";
+    if (typeof args?.characterId === "string" && spent) {
+      spends.push({ characterId: args.characterId, name: spent });
+    }
     walkNumbers(result, numbers, damageNumbers);
     walkCreatures(result, creatures);
 
@@ -474,6 +500,7 @@ export function resolveOutcomes(
     numbers,
     damageNumbers,
     spells,
+    spends,
     toolResultCount,
   };
 }
@@ -656,7 +683,14 @@ export function unrolledFigure(claims: readonly NarrationClaim[], conversation: 
   }
   const shown = new Set(outcomes.numbers);
   for (const message of conversation) {
-    if (message.role === "system" || typeof message.content !== "string") {
+    // The game state is no table note: its numbers (hit points, the last
+    // rolls) are not figures the turn dealt, wherever a chat model reads it
+    // (src/lib/dm/prompt.ts momentAfterHistory).
+    if (
+      message.role === "system" ||
+      typeof message.content !== "string" ||
+      message.content.startsWith(THIS_MOMENT_HEADING)
+    ) {
       continue;
     }
     for (const match of message.content.matchAll(BARE_NUMBER)) {

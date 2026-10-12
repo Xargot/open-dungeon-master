@@ -129,6 +129,8 @@ export function MonsterBuildControls({
                 cr={entry.cr}
                 genre={genre}
                 seed={entry.slug}
+                slug={entry.slug}
+                name={entry.name}
                 size="size-7"
               />
               {entry.name} <span className="text-stone-600">CR {crLabel(entry.cr)}</span>

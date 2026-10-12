@@ -166,8 +166,26 @@ export function longRestPatch(
     patch.conditions = eased;
     patch.conditionMeta = pruneMeta(eased, patch.conditionMeta ?? sheet.conditionMeta);
   }
+  // A use that comes back after several long rests (Necrotic Husk: 1d4,
+  // src/lib/dm/reaction-counters.ts): its marker counts the nights, and the
+  // counter stays spent until the last of them.
+  const waiting = (patch.conditions ?? sheet.conditions).find((name) => name.toLowerCase().startsWith(HUSK_RECOVERING));
+  if (waiting) {
+    const nights = Number(/\((\d+)\)/.exec(waiting)?.[1] ?? "1");
+    const rest = (patch.conditions ?? sheet.conditions).filter((name) => name !== waiting);
+    patch.conditions = nights > 1 ? [...rest, `${HUSK_RECOVERING} (${nights - 1})`] : rest;
+    patch.conditionMeta = pruneMeta(patch.conditions, patch.conditionMeta ?? sheet.conditionMeta);
+    const husk = sheet.resources?.[NECROTIC_HUSK];
+    if (nights > 1 && husk && patch.resources?.[NECROTIC_HUSK]) {
+      patch.resources = { ...patch.resources, [NECROTIC_HUSK]: { ...husk } };
+    }
+  }
   return patch;
 }
+
+// Necrotic Husk's counter and the marker its long wait leaves.
+const NECROTIC_HUSK = "sub_necrotic_husk";
+const HUSK_RECOVERING = "necrotic husk recovering";
 
 // Whether this character's spell slots come back on a SHORT rest. Warlock
 // Pact Magic does; every other caster waits for the night. Missing this is

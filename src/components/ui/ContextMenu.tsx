@@ -21,7 +21,7 @@ import { haptic } from "@/lib/effects-mode";
 //
 //   <ContextMenu label={campaign.title} items={[
 //     { id: "open", label: "Open", glyph: "tab-campaigns", onSelect: open },
-//     { id: "delete", label: "Delete", glyph: "quest-failed", tone: "danger", onSelect: remove },
+//     { id: "delete", label: "Delete", glyph: "ui-delete", tone: "danger", onSelect: remove },
 //   ]}>
 //     <CampaignTile ... />
 //   </ContextMenu>

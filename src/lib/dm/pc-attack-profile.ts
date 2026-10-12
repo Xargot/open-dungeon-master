@@ -27,6 +27,7 @@ import { shillelaghSwing } from "@/lib/dm/attack-features";
 import { combatRiders, type CombatRiders } from "@/lib/srd/feature-effects";
 import { grantedAttackDice, grantedAttackFor } from "@/lib/srd/granted-attacks";
 import { authoredNaturalWeapon, authoredReachBonus, naturalWeaponGated } from "@/lib/srd/authored-effects-more";
+import { racialNaturalWeapon } from "@/lib/srd/racial-weapons";
 import { allSpellNames } from "@/lib/srd/spell-lists";
 import { SPECIAL_WEAPONS } from "@/lib/srd/weapons";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
@@ -44,6 +45,8 @@ export type BuiltAttack = {
   scalingNote: string | null;
   // An attack a condition grants that rides a bonus action.
   grantedBonusAction: boolean;
+  // The granted attack that may ride its activation's bonus action, by name.
+  grantedWithActivation: string | null;
   kind: AttackKind;
   // The two SRD weapons with a rule of their own.
   special: "net" | "lance" | null;
@@ -72,7 +75,10 @@ export function buildAttackProfile(
   const grantedTerm = [args.weapon, args.spell].filter(Boolean).join(" ").trim();
   const granted = grantedTerm ? grantedAttackFor(sheet.conditions, grantedTerm) : null;
   let grantedBonusAction = false;
+  let grantedWithActivation: string | null = null;
   const natural = !granted && !args.spell?.trim() ? authoredNaturalWeapon(sheet, args.weapon, derived.abilityMods) : null;
+  // A lineage's bite or claws (src/lib/srd/racial-weapons.ts).
+  const racial = !granted && !natural && !args.spell?.trim() && !sheet.wildShape ? racialNaturalWeapon(sheet.features, args.weapon) : null;
   if (granted) {
     if (derived.spellAttack === null) {
       return { error: `${sheet.name} has no spell attack bonus for ${granted.attack.name}.` };
@@ -112,6 +118,11 @@ export function buildAttackProfile(
       ],
     };
     grantedBonusAction = granted.attack.bonusAction;
+    // The attack that comes with the activation (its condition still at its
+    // full duration, so laid this turn) rides the activation's own bonus
+    // action; pc-attack-spend.ts decides once it sees the turn.
+    const whole = granted.attack.withActivation;
+    grantedWithActivation = whole && ((sheet.conditionMeta as ConditionMetaMap)[granted.condition]?.rounds ?? 0) >= whole ? granted.attack.name : null;
     kind = "granted";
   } else if (args.spell?.trim()) {
     const spellName = args.spell.trim();
@@ -202,6 +213,13 @@ export function buildAttackProfile(
     }
     profile = summoned;
     kind = "natural";
+  } else if (racial) {
+    profile = weaponAttackProfile(derived, [...sheet.proficiencies.weapons, "simple", racial.srd.name.toLowerCase()], { displayName: racial.srd.name, srd: racial.srd, unarmed: false, carried: true }, {
+      riders,
+      martialArts: false,
+    });
+    profile = { ...profile, proficient: true, riderNotes: [...profile.riderNotes, `${racial.feature}: ${racial.srd.damage}`] };
+    kind = "weapon";
   } else if (!sheet.wildShape?.attacks?.length && (natural || naturalWeaponGated(sheet, args.weapon))) {
     // A weapon a subclass feature is (Form of the Beast's claws, the
     // Soulknife's psychic blade, Radiant Sun Bolt): a proficient weapon of
@@ -300,5 +318,5 @@ export function buildAttackProfile(
   if (reach) {
     profile = { ...profile, reachTiles: profile.reachTiles + reach.tiles, riderNotes: [...profile.riderNotes, `${reach.feature}: ${reach.tiles * 5} more feet of reach`] };
   }
-  return { profile, derived, riders, scalingNote, grantedBonusAction, kind, special };
+  return { profile, derived, riders, scalingNote, grantedBonusAction, grantedWithActivation, kind, special };
 }

@@ -183,7 +183,7 @@ export function FactionsPanel({ campaignId, steersStory, refreshKey = 0 }: { cam
         {factions.map((faction) => {
           const items: ContextMenuItem[] = steersStory
             ? [
-                { id: "edit", label: "Edit", glyph: "tab-notes", onSelect: () => startEdit(faction) },
+                { id: "edit", label: "Edit", glyph: "ui-edit", onSelect: () => startEdit(faction) },
                 ...Array.from({ length: REPUTATION_MAX - REPUTATION_MIN + 1 }, (_, index) => REPUTATION_MIN + index).map((step, index) => ({
                   id: `standing-${step}`,
                   label: `Standing ${step > 0 ? "+" : ""}${step}: ${reputationLabel(step)}`,
@@ -192,7 +192,7 @@ export function FactionsPanel({ campaignId, steersStory, refreshKey = 0 }: { cam
                   disabled: step === faction.standing,
                   onSelect: () => void setStanding(faction, step),
                 })),
-                { id: "remove", label: `Remove ${faction.name}`, glyph: "quest-failed", tone: "danger" as const, separated: true, onSelect: () => void remove(faction) },
+                { id: "remove", label: `Remove ${faction.name}`, glyph: "ui-delete", tone: "danger" as const, separated: true, onSelect: () => void remove(faction) },
               ]
             : [];
           return (

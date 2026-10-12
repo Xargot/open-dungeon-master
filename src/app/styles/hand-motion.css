@@ -149,6 +149,24 @@ html[data-theme="light"] .hand-played { border-color: #a6842a; box-shadow: 0 0 0
   animation-delay: calc(120ms + min(var(--i, 0), 12) * 30ms);
 }
 
+/* Customize Hand (issue 231): the rows file in like the sheet's, and a card
+   that just changed seat or place lands with a short rise and a gold rim. */
+.hand-arrange-row {
+  animation: hand-file-in var(--dur-move) var(--ease-settle) backwards;
+  animation-delay: calc(80ms + min(var(--i, 0), 12) * 26ms);
+}
+.hand-arrange-row[data-moved="true"] { animation: hand-arrange-land var(--dur-beat) var(--ease-spring) both; }
+.hand-arrange-row[data-moved="true"] > div { animation: hand-arrange-glow 900ms var(--ease-settle) both; }
+@keyframes hand-arrange-land {
+  0% { opacity: 0.25; transform: translateY(-10px) scale(0.97); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes hand-arrange-glow {
+  0% { box-shadow: 0 0 0 1px rgba(236, 210, 135, 0.9), 0 0 18px rgba(236, 210, 135, 0.45); }
+  100% { box-shadow: 0 0 0 0 rgba(236, 210, 135, 0); }
+}
+
 /* ---- putting the hand away: the fan-in, run backwards ---- */
 
 .hand-fan[data-folding="true"] { pointer-events: none; }
@@ -186,6 +204,9 @@ html[data-theme="light"] .hand-played { border-color: #a6842a; box-shadow: 0 0 0
   .hand-played,
   .hand-more,
   .hand-more-row,
+  .hand-arrange-row,
+  .hand-arrange-row[data-moved="true"],
+  .hand-arrange-row[data-moved="true"] > div,
   .hand-fan[data-folding="true"] .hand-slot,
   .hand-fan[data-folding="true"] .hand-more,
   .hand-option,

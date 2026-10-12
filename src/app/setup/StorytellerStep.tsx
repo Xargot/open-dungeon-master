@@ -76,7 +76,7 @@ export function StorytellerStep({
         <ChoiceCard
           picked={draft.story === "local"}
           onPick={() => pick("local")}
-          glyph="system-lore"
+          glyph="ui-ai"
           title="A model on this computer"
           sub="llama.cpp, Ollama, LM Studio, vLLM or another server you run. Free to play, private, needs a capable GPU."
           badge={scanning ? { text: "Looking…", tone: "off" } : found.length ? { text: `Found ${found.length}`, tone: "ready" } : null}

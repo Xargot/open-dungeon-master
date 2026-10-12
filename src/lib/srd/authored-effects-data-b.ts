@@ -127,9 +127,12 @@ export const AUTHORED_DATA_A2: Record<string, AuthoredEntry> = {
     subclass: "Eldritch Knight",
     effects: [{ kind: "mark", condition: "eldritch strike", effect: "save_disadv" }],
   },
+  // Curving Shot (XGtE): "When you make an attack roll with a magic arrow and
+  // miss, you can use a bonus action to reroll the attack roll against a
+  // different target within 60 feet of the original target" (issue 233).
   "fighter::Curving Shot": {
     subclass: "Arcane Archer",
-    effects: [{ kind: "bonus_attack", after: "attack", note: "The engine lets the bonus attack follow any attack this turn." }],
+    effects: [{ kind: "bonus_attack", after: "missed_arrow" }],
   },
   "fighter::Ever-Ready Shot": {
     subclass: "Arcane Archer",

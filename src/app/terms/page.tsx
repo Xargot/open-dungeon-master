@@ -10,6 +10,7 @@ export default function TermsPage() {
   return (
     <PageShell
       icon={PIXEL_ICONS.story}
+      glyph="ui-terms"
       title="Terms of service"
       blurb="What the software is, what it is not, and who is responsible for what."
       actions={

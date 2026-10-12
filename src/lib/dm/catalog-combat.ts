@@ -106,6 +106,16 @@ export const COMBAT_ADJUDICATIONS: CatalogEntry[] = [
         kind: "boolean",
         help: "The lair acts on initiative 20 each round (Lair action).",
       },
+      {
+        name: "from",
+        label: "Enemies come from",
+        kind: "select",
+        options: [
+          { value: "ahead", label: "Ahead of the travel formation" },
+          { value: "behind", label: "Behind it" },
+        ],
+        help: "Ahead puts the front of the party's travel formation nearest them; behind, the rear. Blank: ahead.",
+      },
     ],
   },
   {
@@ -477,7 +487,17 @@ export const COMBAT_ADJUDICATIONS: CatalogEntry[] = [
           { value: "extreme_heat", label: "Extreme heat" },
         ],
       },
-      { name: "characterIds", label: "Caught in it", kind: "characters", required: true },
+      { name: "characterIds", label: "Caught in it", kind: "characters", requiredUnless: "rank" },
+      {
+        name: "rank",
+        label: "Or whoever walks",
+        kind: "select",
+        options: [
+          { value: "front", label: "At the front of the formation" },
+          { value: "rear", label: "At the rear of the formation" },
+        ],
+        help: "Instead of naming them: the character first or last in the party's travel formation.",
+      },
       { name: "feet", label: "Feet fallen", kind: "number", min: 0, max: 1000 },
       { name: "severity", label: "Trap severity", kind: "select", options: TRAP_SEVERITY_OPTIONS, help: "Sets the save DC and the damage for each victim's level." },
       {

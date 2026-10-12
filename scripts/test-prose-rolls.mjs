@@ -9,6 +9,7 @@ import { register } from "node:module";
 register("./lib/register-alias.mjs", import.meta.url);
 
 const { rollAsksFromClaims } = await import("../src/lib/dm/rolls.ts");
+const { checkClaims } = await import("../src/lib/dm/claims-logic.ts");
 
 let passed = 0;
 function test(name, fn) {
@@ -80,6 +81,15 @@ test("initiative takes no DC, and a missing DC is left out", () => {
     [avery, brom],
   );
   assert.deepEqual(args(noDc), { kind: "skill_check", characterId: "c-avery", skill: "sleight_of_hand" });
+});
+
+test("a DC the reader wrote as null is left out of the call", () => {
+  const text = "Avery, give me a Sleight of Hand check.";
+  const [claim] = checkClaims(
+    [ask({ character: "c-avery", check: "skill", skill: "sleight_of_hand", ability: null, dc: null, quote: "give me a Sleight of Hand check" })],
+    { kinds: ["roll_ask"], text, party: new Map([["c-avery", "Avery"]]), skills: new Set(["sleight_of_hand"]) },
+  );
+  assert.deepEqual(args(rollAsksFromClaims(text, [claim], [avery, brom])), { kind: "skill_check", characterId: "c-avery", skill: "sleight_of_hand" });
 });
 
 test("two asks in one reply both become calls, and both sentences go", () => {

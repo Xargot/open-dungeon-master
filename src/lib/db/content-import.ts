@@ -240,6 +240,15 @@ function boardFactsFor(source: Campaign, compiled: CompiledBoard, common: Campai
   };
 }
 
+// Whether a source's storyboard compiles into a story arc of its own: a
+// premise and enough beats (src/lib/workshop/board-compile.ts). What the
+// creation wizard needs to warn that AI Story Setup will meet it (issue 249)
+// before any campaign exists to plan against.
+export function boardWritesArc(sourceId: string): boolean {
+  const compiled = compileBoard(listBeats(sourceId));
+  return compiled.arcBeats.length > 0 && !summarizeCompile(compiled, false).arcRefusal;
+}
+
 export type ImportOptions = { again?: AgainMode; arcMode?: ArcMode };
 
 export function planContentImport(

@@ -22,6 +22,7 @@
 // So nothing the program does reaches the game except through the loop's own
 // tool handling, and there is no second copy of the rules to drift.
 
+import { agentSpeedEligibility } from "@/lib/speed-tier";
 import { randomBytes, createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -30,7 +31,7 @@ import type { ChatMessage, ChatRequestOptions, UpstreamResult } from "@/lib/mode
 import { buildChildEnv, leaksServerSecret } from "./child-env.ts";
 import { childPath } from "./discover.ts";
 import { renderCompletion, renderFollowUp, renderTurn, toMcpTools, toolNames } from "./render.ts";
-import { adapterFor, harnessConfig, resolveHarnessBinary } from "./status.ts";
+import { adapterFor, harnessConfig, probeHarness, resolveHarnessBinary } from "./status.ts";
 import { harnessOfferFor } from "./policy.ts";
 import { getCampaignById } from "@/lib/db/campaigns";
 import type { HarnessErrorKind, HarnessEvent, HarnessSession, McpToolDefinition } from "./types.ts";
@@ -604,7 +605,16 @@ async function prepareRun(context: HarnessRequestContext) {
   }
   const model =
     context.role === "utility" ? config.utilityModel || config.model : config.model;
-  return { config, binary, cwd, env, model, adapter: adapterFor(config.id) } as const;
+  // The Fast tier the admin chose for this role (issue 255); the adapter
+  // asks for it only where its connection has one (src/lib/speed-tier.ts).
+  const role = context.role === "utility" ? "utility" : "story";
+  const wantsFast = (role === "utility" ? config.utilitySpeed : config.speed) === "fast";
+  // Codex says per model whether this sign-in offers Fast (its model list,
+  // cached by the probe); a model without it is run at its default.
+  const fastModels = wantsFast && config.id === "codex" ? ((await probeHarness("codex").catch(() => null))?.models ?? []) : [];
+  const speed =
+    wantsFast && agentSpeedEligibility({ harnessId: config.id, model, models: fastModels }).ok ? ({ role } as const) : undefined;
+  return { config, binary, cwd, env, model, speed, adapter: adapterFor(config.id) } as const;
 }
 
 async function startSession(
@@ -617,7 +627,7 @@ async function startSession(
   if ("error" in prepared) {
     return prepared;
   }
-  const { config, binary, cwd, env, model, adapter } = prepared;
+  const { config, binary, cwd, env, model, speed, adapter } = prepared;
   const kind = context.turn ? "turn" : "other";
   if (!(await acquireSlot(kind, config.maxConcurrent, timeoutMs))) {
     removeRunDir(cwd);
@@ -643,7 +653,7 @@ async function startSession(
   state().byConversation.set(messages as object, session);
   session.seen = [...messages];
 
-  const rendered = renderTurn(messages);
+  const rendered = renderTurn(messages, { settledTranscript: adapter.settledTranscript === true });
   const result = session.next(messages, options, timeoutMs);
   try {
     const program = await adapter.start({
@@ -651,6 +661,7 @@ async function startSession(
       system: rendered.system,
       model,
       effort: config.effort,
+      ...(speed ? { speed } : {}),
       mcp: { url: harnessMcpUrl(), token },
       cwd,
       env,
@@ -680,7 +691,7 @@ async function completeWithHarness(
   if ("error" in prepared) {
     return prepared;
   }
-  const { config, binary, cwd, env, model, adapter } = prepared;
+  const { config, binary, cwd, env, model, speed, adapter } = prepared;
   if (!(await acquireSlot("other", config.maxConcurrent, timeoutMs))) {
     removeRunDir(cwd);
     return { error: harnessError("Every agent slot is busy; try again in a moment.", "timeout") };
@@ -709,6 +720,7 @@ async function completeWithHarness(
         system: rendered.system,
         model,
         effort: config.effort,
+        ...(speed ? { speed } : {}),
         mcp: null,
         cwd,
         env,

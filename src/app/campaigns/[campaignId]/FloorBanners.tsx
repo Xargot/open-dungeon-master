@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { SessionBanner, bannerButtonClass } from "@/app/campaigns/[campaignId]/SessionBanner";
 import type { Floor } from "@/lib/db/campaigns";
 import type { PublicEncounter } from "@/lib/db/encounter-view";
-import { REFLEX_LABEL, currentOrderIndex, orderRowKey } from "@/lib/battlemap/initiative-rows";
+import { extraTurnTag, currentOrderIndex, orderRowKey } from "@/lib/battlemap/initiative-rows";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 
 // Spotlight, held-responses, and initiative banners above the composer;
@@ -101,7 +101,7 @@ export function FloorBanners({
                     return (
                       <span
                         key={orderRowKey(entry, index)}
-                        title={entry.reflex ? REFLEX_LABEL : undefined}
+                        title={extraTurnTag(entry)?.title}
                         className={cn(
                           "transition-opacity duration-200",
                           current ? "font-semibold" : "opacity-60",
@@ -109,7 +109,7 @@ export function FloorBanners({
                       >
                         {index > 0 ? " > " : ""}
                         {entry.name}
-                        {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300">2nd</sup> : null}
+                        {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300">{extraTurnTag(entry)?.short}</sup> : null}
                       </span>
                     );
                   })}

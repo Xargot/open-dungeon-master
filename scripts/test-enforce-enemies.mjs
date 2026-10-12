@@ -368,6 +368,17 @@ await test("legendary actions: three a round, each at its cost, refused when the
   assert.equal((await world.invoke("legendary_action", { enemyId: enemy.id, action: "Meteor Swarm" })).ok, false);
 });
 
+await test("legendary actions wait while the creature's own turn is in the model's hands, and the refusal names the tools that take it", async () => {
+  const enemy = await dragon();
+  const encounter = world.encounter();
+  encounter.legendary.handoff = { turnId: "an-ai-turn", enemyIds: [enemy.id] };
+  kit.saveEncounter(encounter);
+  const out = await world.invoke("legendary_action", { enemyId: enemy.id, action: "Detect" });
+  assert.equal(out.ok, false);
+  assert.match(out.error, /Take its turn first: enemy_attack, or cast_at_player \/ aoe_damage with casterEnemyId for an ability or spell\./);
+  assert.equal(pool(enemy).actions, 3, "nothing was spent");
+});
+
 await test("legendary actions belong to legendary creatures", async () => {
   const [enemy] = await stage();
   const out = await world.invoke("legendary_action", { enemyId: enemy.id, action: "Tail Attack" });

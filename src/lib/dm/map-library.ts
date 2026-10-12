@@ -1,4 +1,6 @@
 import { isOnePageDungeon, parseOnePageDungeon } from "@/lib/battlemap/watabou";
+import { getParty } from "@/lib/db/party";
+import { placeByFormation } from "@/lib/dm/formation-logic";
 import type { Campaign } from "@/lib/db/campaigns";
 import { createEncounter, getActiveBoard, getActiveScene } from "@/lib/db/encounters";
 import {
@@ -527,14 +529,16 @@ export function openSceneOnPreparedMap(
   });
   const spawns = partySpawnTiles(prepared.terrain, prepared.width, prepared.height, sheets.length);
   const fallback: XY = spawns[0] ?? { x: 1, y: 1 };
+  // In the order of the party's travel formation (issue 230).
+  const { spots } = placeByFormation(sheets, spawns, [], getParty(campaign.id).marchingOrder);
   placeTokens(
     map.id,
     campaign.id,
-    sheets.map((sheet, index) => ({
+    sheets.map((sheet) => ({
       kind: "pc" as const,
       refId: sheet.id,
       name: sheet.name,
-      spot: spawns[index] ?? fallback,
+      spot: spots.get(sheet.id) ?? fallback,
       ...carriedLightFields(campaign.id, sheet),
     })),
   );

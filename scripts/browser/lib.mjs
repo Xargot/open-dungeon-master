@@ -231,26 +231,29 @@ export async function enterApp(page, shellBase, host, ids, touch) {
 
 async function appNavigate(page, route, ids, touch) {
   const tap = (locator) => (touch ? locator.tap() : locator.click());
+  // The shell's own navigation, the contract the host's pages use inside the
+  // apps (window.odmShell, the server's src/lib/shell-host.ts).
+  const push = (target) =>
+    page.evaluate((to) => {
+      const navigation = window.odmShell?.navigation;
+      if (!navigation) throw new Error("the app's shell navigation is not there");
+      navigation.push(to);
+    }, target);
   // A campaign opens from its tile on the app's home, the way a player opens
-  // it; anything else goes through a link the game's root intercepts and
-  // pushes on the shell's router (client src/renderer/game/index.tsx).
+  // it (from inside a campaign, by going home first); anything else is pushed
+  // on the shell's router (client src/renderer/game/index.tsx ROUTES).
   const campaign = route.match(/^\/campaigns\/([^/?]+)/)?.[1];
   if (campaign) {
-    const title = campaign === ids.campaignId ? ids.title : ids.lobbyTitle;
+    const title = ids.titles?.[campaign] ?? (campaign === ids.campaignId ? ids.title : ids.lobbyTitle);
     const tile = page.locator(".game-root a, .game-root button").filter({ hasText: new RegExp(title, "i") }).first();
+    if (!(await tile.isVisible().catch(() => false))) {
+      await push("/");
+      await sleep(2_000);
+    }
     await tile.waitFor({ state: "visible", timeout: 30_000 });
     await tap(tile);
   } else {
-    await page.evaluate((target) => {
-      const root = document.querySelector(".game-root");
-      if (!root) throw new Error("the app's game root is not mounted");
-      const anchor = document.createElement("a");
-      anchor.href = target;
-      anchor.textContent = "go";
-      root.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-    }, route);
+    await push(route);
   }
   await sleep(4_000);
   await settle(page);

@@ -135,14 +135,33 @@ export function IdentityStep({
               <span className="block rounded-lg border border-stone-700/70 bg-stone-950/60 px-3 py-2 text-sm text-stone-400">
                 {fixedLevel} (campaign)
               </span>
+            ) : state.levelLocked ? (
+              <>
+                <span className="block rounded-lg border border-stone-700/70 bg-stone-950/60 px-3 py-2 text-sm text-stone-400">
+                  {state.level} (kept)
+                </span>
+                <span className="mt-1 block text-xs text-stone-500">
+                  Their levels are split between classes, which only a level-up in play changes. The split stays as it is.
+                </span>
+              </>
             ) : (
-              <Select<string>
-                value={String(state.level)}
-                onChange={(next) => state.changeLevel(Number(next))}
-                label="Level"
-                className="w-full"
-                options={Array.from({ length: 20 }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }))}
-              />
+              <>
+                <Select<string>
+                  value={String(state.level)}
+                  onChange={(next) => state.changeLevel(Number(next))}
+                  label="Level"
+                  className="w-full"
+                  options={Array.from({ length: 21 - state.levelFloor }, (_, index) => ({
+                    value: String(index + state.levelFloor),
+                    label: String(index + state.levelFloor),
+                  }))}
+                />
+                {state.levelFloor > 1 ? (
+                  <span className="mt-1 block text-xs text-stone-500">
+                    Improvements taken in play are in their scores, so they stay level {state.levelFloor} or higher.
+                  </span>
+                ) : null}
+              </>
             )}
           </Field>
           <Field label="Background">

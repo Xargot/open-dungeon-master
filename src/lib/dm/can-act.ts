@@ -12,6 +12,7 @@
 // The order of the refusals is the order a person would give them: the dead
 // are told they are dead before they are told whose turn it is.
 
+import { holdsOn } from "@/lib/dm/vitals-logic";
 import type { Encounter, EncounterEnemy } from "@/lib/db/encounters";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { incapacitatedBy } from "@/lib/dm/condition-logic";
@@ -138,7 +139,8 @@ export function canAct(input: {
       `${sheet.name} is dead and cannot ${what}. Only magic that raises the dead brings them back.`,
     );
   }
-  if (sheet.currentHp <= 0) {
+  // Strength before Death holds them up for the extra turn it gives.
+  if (sheet.currentHp <= 0 && !holdsOn(sheet)) {
     return refuse(
       "down",
       `${sheet.name} is at 0 HP and cannot ${what}. They act again once they are healed above 0.`,

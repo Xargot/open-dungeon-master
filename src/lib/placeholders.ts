@@ -283,9 +283,12 @@ export function npcPlaceholder(
   return `${BASE}/npc/commoner.webp`;
 }
 
-// A monster draws its SRD creature type, or the genre's boss plate when it is
-// the centrepiece of a fight. Threat is checked first because a CR 18
-// humanoid warlord wants the boss plate, not the generic raider one.
+// A monster draws its own creature family's plate when one is painted, else
+// the genre's boss plate when it is the centrepiece of a fight, else its SRD
+// creature type. Among the generic plates threat is checked first because a
+// CR 18 humanoid warlord wants the boss plate, not the generic raider one;
+// a painted family plate beats the boss plate because "this is a lich" says
+// more than "this is the big one" (a CR 21 lich used to draw the genre boss).
 export const BOSS_CR_FLOOR = 11;
 
 const BOSS_GENRES = new Set([
@@ -323,11 +326,485 @@ const GENRE_TYPE_PLATES: Record<string, Record<string, string[]>> = {
   },
 };
 
+// ---- creature families ----
+
+// Plates painted for one creature in particular, keyed by its SRD 5.1 /
+// Open5e monster slug, which is what an encounter enemy and a bestiary entry
+// both carry (EncounterEnemy.slug, BestiaryEntry.slug). The value is the
+// plate's file stem under monster/. A key that is not its own value is an
+// alias: a variant that is plainly the same creature and so shares the
+// plate. Only add an alias when a player would call the picture right for
+// it; a creature that merely sits in the same type (a winged kobold, a
+// giant wolf spider, a brass dragon) keeps its type plate until it is
+// painted. Enemy NPC roles (the bandit, the dark knight) sit in the same
+// table: they are keyed by the role's own name and reached from the SRD NPC
+// stat blocks that play the role.
+export const MONSTER_FAMILIES: Readonly<Record<string, string>> = {
+  // The first 24, one plate each.
+  "animated-armor": "animated-armor",
+  "brown-bear": "brown-bear",
+  "earth-elemental": "earth-elemental",
+  gargoyle: "gargoyle",
+  "gelatinous-cube": "gelatinous-cube",
+  ghoul: "ghoul",
+  "giant-rat": "giant-rat",
+  "giant-spider": "giant-spider",
+  gnoll: "gnoll",
+  "green-hag": "green-hag",
+  "hell-hound": "hell-hound",
+  hobgoblin: "hobgoblin",
+  imp: "imp",
+  kobold: "kobold",
+  lich: "lich",
+  mimic: "mimic",
+  minotaur: "minotaur",
+  mummy: "mummy",
+  owlbear: "owlbear",
+  "rust-monster": "rust-monster",
+  stirge: "stirge",
+  troll: "troll",
+  werewolf: "werewolf",
+  zombie: "zombie",
+  // Aliases: the same creature under another SRD slug.
+  ghast: "ghoul",
+  "black-bear": "brown-bear",
+  "polar-bear": "brown-bear",
+  spider: "giant-spider",
+  rat: "giant-rat",
+  "mummy-lord": "mummy",
+  // The second 24.
+  "air-elemental": "air-elemental",
+  ankheg: "ankheg",
+  basilisk: "basilisk",
+  bulette: "bulette",
+  chuul: "chuul",
+  cloaker: "cloaker",
+  crocodile: "crocodile",
+  "flesh-golem": "flesh-golem",
+  ghost: "ghost",
+  "giant-poisonous-snake": "giant-poisonous-snake",
+  "giant-scorpion": "giant-scorpion",
+  "giant-shark": "giant-shark",
+  griffon: "griffon",
+  harpy: "harpy",
+  hydra: "hydra",
+  "iron-golem": "iron-golem",
+  otyugh: "otyugh",
+  roper: "roper",
+  "swarm-of-rats": "swarm-of-rats",
+  treant: "treant",
+  "vampire-spawn": "vampire-spawn",
+  "water-elemental": "water-elemental",
+  "will-o-wisp": "will-o-wisp",
+  wyvern: "wyvern",
+  // The later 72.
+  androsphinx: "androsphinx",
+  azer: "azer",
+  "barbed-devil": "barbed-devil",
+  "bearded-devil": "bearded-devil",
+  "black-pudding": "black-pudding",
+  boar: "boar",
+  centaur: "centaur",
+  "chain-devil": "chain-devil",
+  chimera: "chimera",
+  "cloud-giant": "cloud-giant",
+  cockatrice: "cockatrice",
+  darkmantle: "darkmantle",
+  "death-dog": "death-dog",
+  "dragon-turtle": "dragon-turtle",
+  drider: "drider",
+  dryad: "dryad",
+  duergar: "duergar",
+  "dust-mephit": "dust-mephit",
+  ettercap: "ettercap",
+  ettin: "ettin",
+  "fire-giant": "fire-giant",
+  "flying-sword": "flying-sword",
+  "frost-giant": "frost-giant",
+  "giant-bat": "giant-bat",
+  "giant-eagle": "giant-eagle",
+  "giant-octopus": "giant-octopus",
+  glabrezu: "glabrezu",
+  grick: "grick",
+  "guardian-naga": "guardian-naga",
+  gynosphinx: "gynosphinx",
+  hezrou: "hezrou",
+  hippogriff: "hippogriff",
+  homunculus: "homunculus",
+  "horned-devil": "horned-devil",
+  "ice-devil": "ice-devil",
+  kraken: "kraken",
+  lamia: "lamia",
+  marilith: "marilith",
+  medusa: "medusa",
+  merfolk: "merfolk",
+  merrow: "merrow",
+  nalfeshnee: "nalfeshnee",
+  "night-hag": "night-hag",
+  pegasus: "pegasus",
+  "pit-fiend": "pit-fiend",
+  pseudodragon: "pseudodragon",
+  "purple-worm": "purple-worm",
+  quasit: "quasit",
+  rakshasa: "rakshasa",
+  remorhaz: "remorhaz",
+  roc: "roc",
+  "saber-toothed-tiger": "saber-toothed-tiger",
+  sahuagin: "sahuagin",
+  satyr: "satyr",
+  "sea-hag": "sea-hag",
+  shrieker: "shrieker",
+  "spirit-naga": "spirit-naga",
+  "stone-giant": "stone-giant",
+  "storm-giant": "storm-giant",
+  "swarm-of-bats": "swarm-of-bats",
+  "swarm-of-insects": "swarm-of-insects",
+  "tyrannosaurus-rex": "tyrannosaurus-rex",
+  unicorn: "unicorn",
+  "violet-fungus": "violet-fungus",
+  vrock: "vrock",
+  warhorse: "warhorse",
+  xorn: "xorn",
+  "young-black-dragon": "young-black-dragon",
+  "young-blue-dragon": "young-blue-dragon",
+  "young-gold-dragon": "young-gold-dragon",
+  "young-silver-dragon": "young-silver-dragon",
+  "young-white-dragon": "young-white-dragon",
+  // Aliases for the new families: the same creature under another SRD
+  // slug, or the plain word a DM types for it.
+  // Every age of a painted dragon colour shares its young plate. Green and
+  // red already have theirs (the dragon type plate and the fantasy boss);
+  // brass, bronze and copper are not painted yet.
+  "black-dragon-wyrmling": "young-black-dragon",
+  "adult-black-dragon": "young-black-dragon",
+  "ancient-black-dragon": "young-black-dragon",
+  "blue-dragon-wyrmling": "young-blue-dragon",
+  "adult-blue-dragon": "young-blue-dragon",
+  "ancient-blue-dragon": "young-blue-dragon",
+  "gold-dragon-wyrmling": "young-gold-dragon",
+  "adult-gold-dragon": "young-gold-dragon",
+  "ancient-gold-dragon": "young-gold-dragon",
+  "silver-dragon-wyrmling": "young-silver-dragon",
+  "adult-silver-dragon": "young-silver-dragon",
+  "ancient-silver-dragon": "young-silver-dragon",
+  "white-dragon-wyrmling": "young-white-dragon",
+  "adult-white-dragon": "young-white-dragon",
+  "ancient-white-dragon": "young-white-dragon",
+  // SRD 5.1 lists the beetle, centipede, spider and wasp swarms as variants
+  // of the swarm of insects.
+  "swarm-of-beetles": "swarm-of-insects",
+  "swarm-of-centipedes": "swarm-of-insects",
+  "swarm-of-spiders": "swarm-of-insects",
+  "swarm-of-wasps": "swarm-of-insects",
+  // One shark covers the reef, hunter and giant sharks.
+  shark: "giant-shark",
+  "reef-shark": "giant-shark",
+  "hunter-shark": "giant-shark",
+  bat: "giant-bat",
+  eagle: "giant-eagle",
+  octopus: "giant-octopus",
+  scorpion: "giant-scorpion",
+  "poisonous-snake": "giant-poisonous-snake",
+  "giant-crocodile": "crocodile",
+  "giant-boar": "boar",
+  "awakened-tree": "treant",
+  gryphon: "griffon",
+  "t-rex": "tyrannosaurus-rex",
+  merman: "merfolk",
+  mermaid: "merfolk",
+  sphinx: "androsphinx",
+  // Enemy NPC roles, by the role's own name.
+  bandit: "bandit",
+  cultist: "cultist",
+  assassin: "assassin",
+  necromancer: "necromancer",
+  "dark-knight": "dark-knight",
+  archer: "archer",
+  gladiator: "gladiator",
+  pirate: "pirate",
+  "battle-shaman": "battle-shaman",
+  "alchemical-saboteur": "alchemical-saboteur",
+  executioner: "executioner",
+  houndmaster: "houndmaster",
+  tyrant: "tyrant",
+  // ...from the SRD NPC stat block that plays the role. A stat block maps
+  // only where the role is plainly what it is: a mage, a priest, a veteran
+  // or a berserker stays on the humanoid plate, since a hired mage is not a
+  // necromancer nor a temple priest a battle shaman.
+  "bandit-captain": "bandit",
+  thug: "executioner",
+  "cult-fanatic": "cultist",
+  spy: "assassin",
+  knight: "dark-knight",
+  scout: "archer",
+  druid: "battle-shaman",
+  archmage: "tyrant",
+  // ...and from the names a DM gives them.
+  brigand: "bandit",
+  highwayman: "bandit",
+  "bandit-leader": "bandit",
+  "cult-leader": "cultist",
+  poisoner: "assassin",
+  blackguard: "dark-knight",
+  "death-knight": "dark-knight",
+  "black-knight": "dark-knight",
+  crossbowman: "archer",
+  corsair: "pirate",
+  "pirate-captain": "pirate",
+  buccaneer: "pirate",
+  shaman: "battle-shaman",
+  alchemist: "alchemical-saboteur",
+  saboteur: "alchemical-saboteur",
+  torturer: "executioner",
+  headsman: "executioner",
+  "beast-handler": "houndmaster",
+  beastmaster: "houndmaster",
+  "kennel-master": "houndmaster",
+  overlord: "tyrant",
+};
+
+// A name or slug as a family key: lowercase, words hyphenated, and the run
+// number an encounter adds ("Ghoul 2", "Ghoul #2", src/lib/dm/encounter-logic.ts)
+// and a parenthetical ("Imp (unbound)") dropped, so "Giant Rat 3" is
+// giant-rat. Only ever looked up in MONSTER_FAMILIES, never trusted alone.
+function familyKey(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .replace(/\s+#?\d{1,3}$/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function familyOf(value: string | null | undefined): string | null {
+  const key = familyKey(value);
+  return key ? (MONSTER_FAMILIES[key] ?? null) : null;
+}
+
+// The genres whose bestiaries (src/lib/bestiary/*.json) keep the SRD stat
+// block and rename the creature: a cyberpunk giant-rat is a Sump Rat, a
+// horror werewolf is The Good Doctor, a mystery mimic is The Locked Chest.
+// A painted fantasy rat is the wrong picture for a sump rat, and in horror
+// and mystery the plate would give away what the name is hiding. So in these
+// genres the family plate is drawn only when the name on the card is the
+// SRD creature itself (a DM who spawns a plain "Troll" gets the troll), and a
+// reskin keeps the genre's own type plate. Dark fantasy renames too (a Plague
+// Rat, The Hollow Saint), but its creatures are the fantasy creatures under
+// grimmer names, so it draws family plates like high fantasy does.
+const RESKIN_GENRES = new Set(["cyberpunk", "steampunk", "post-apocalyptic", "horror", "mystery"]);
+
+// ---- genre enemy tokens ----
+
+// Enemies painted for one genre in particular: a cyberpunk ganger, a
+// steampunk sky pirate, a post-apocalyptic burrower. They are only ever
+// looked up in their own genre, so a corporate squad never turns up in a
+// fantasy dungeon. Within the genre a token is reached two ways:
+//   names: the whole name on the card (the genre bestiary's reskin name, or
+//          the plain words a DM would type), normalised like a family key
+//          with a leading "The" dropped, so "The Poisoner" and "Poisoner 2"
+//          both land. Never a word inside a longer name.
+//   slugs: the SRD stat block, where that genre's bestiary
+//          (src/lib/bestiary/<genre>.json) plays that block as exactly this
+//          enemy, so an encounter that renames it still gets the token.
+// A token beats the fantasy family plate, the boss plate and the genre's
+// type plate: in its genre it is the most specific picture there is.
+export type GenreEnemyTable = { names: Record<string, string[]>; slugs: Record<string, string> };
+
+export const GENRE_ENEMY_TOKENS: Readonly<Record<string, GenreEnemyTable>> = {
+  cyberpunk: {
+    names: {
+      "cyberpunk-corp-squad": [
+        "Corpo Rent-a-Cop", "Corpo Enforcer", "Merc Trooper", "Corp Squad", "Corporate Tactical Squad",
+        "Corporate Security", "Corp Security", "Security Trooper", "Tactical Squad",
+      ],
+      "cyberpunk-gang": ["Street Ganger", "Gang Boss", "Chromed Bruiser", "Ganger", "Gang Bruiser", "Gang Shooter", "Gang Member"],
+      "cyberpunk-synth": ["Face-Dancer", "Synth", "Synthetic Infiltrator", "Android", "Replicant", "Combat Synth"],
+      "cyberpunk-microdrone": ["Spy Microdrone", "Surveillance Microdrone", "Microdrone"],
+      "cyberpunk-walking-turret": ["Walking Turret", "Mobile Gun Turret", "Autonomous Walking Turret"],
+    },
+    // guard is the Corpo Rent-a-Cop; bandit and bandit-captain are the
+    // Street Ganger and the Gang Boss.
+    slugs: { guard: "cyberpunk-corp-squad", bandit: "cyberpunk-gang", "bandit-captain": "cyberpunk-gang" },
+  },
+  steampunk: {
+    names: {
+      "steampunk-sky-pirate": ["Sky Pirate Captain", "Ironclad Marine", "Sky Pirate", "Air Pirate", "Boarding Marine"],
+      "steampunk-surgeon": ["Rogue Surgeon", "Mad Doctor", "Galvanist", "Mad Scientist"],
+      "steampunk-clockwork-spider": ["Clockwork Spider", "Brass Spider", "Clockwork Arachnid"],
+      "steampunk-repair-swarm": ["Repair Swarm", "Clockwork Repair Swarm", "Repair Beetle Swarm"],
+      "steampunk-galvanic-corpse": ["Galvanic Revenant", "Galvanic Corpse", "Reanimated Laborer", "Reanimated Labourer"],
+      // Humanlike bosses, which the boiler-machine boss plate got wrong.
+      "steampunk-magnate": [
+        "The Colonial Magnate", "The Perpetual Chairman", "The Royal Society's Shadow", "The Opium Magnate",
+        "Ice-Trade Baron", "Industrial Magnate", "Magnate", "Mastermind", "Tycoon", "Robber Baron",
+      ],
+    },
+    // bandit-captain is the Sky Pirate Captain.
+    slugs: { "bandit-captain": "steampunk-sky-pirate" },
+  },
+  "post-apocalyptic": {
+    names: {
+      "post-apocalyptic-raider": ["Road Raider", "Raid Boss", "Warlord's Enforcer", "Raider", "Marauder", "Armored Scavenger"],
+      "post-apocalyptic-hazmat": ["Hazmat Trooper", "Hazmat Soldier", "Decon Trooper"],
+      "post-apocalyptic-stalker": ["Rad-Feral", "Feral Cannibal", "Pit Feeder", "Contaminated Stalker", "Irradiated Ghoul", "Stalker"],
+      "post-apocalyptic-burrower": ["Acid Burrower", "Road Shark", "Mutant Burrower", "Burrower"],
+      "post-apocalyptic-ambush-plant": ["Compost Colossus", "Mutant Plant", "Ambush Plant"],
+      "post-apocalyptic-predator": [
+        "Rad-Rat", "Waste Hound", "Alpha Waste Hound", "Mutant Alpha", "Two-Headed Coyote", "Nuclear-Winter Wolf",
+        "Wasteland Predator", "Mutant Quadruped",
+      ],
+    },
+    // The bestiary's reskins of each block: the raiders, the corporeal
+    // undead (rad-ferals and cannibals, not the shades and echoes), the two
+    // burrowers, the shambling mound, and every four-legged hunter, which
+    // otherwise drew the insect swarm the genre paints for beasts.
+    slugs: {
+      bandit: "post-apocalyptic-raider",
+      "bandit-captain": "post-apocalyptic-raider",
+      zombie: "post-apocalyptic-stalker",
+      ghoul: "post-apocalyptic-stalker",
+      ghast: "post-apocalyptic-stalker",
+      ankheg: "post-apocalyptic-burrower",
+      bulette: "post-apocalyptic-burrower",
+      "shambling-mound": "post-apocalyptic-ambush-plant",
+      "violet-fungus": "post-apocalyptic-ambush-plant",
+      "giant-rat": "post-apocalyptic-predator",
+      rat: "post-apocalyptic-predator",
+      wolf: "post-apocalyptic-predator",
+      worg: "post-apocalyptic-predator",
+      "dire-wolf": "post-apocalyptic-predator",
+      "winter-wolf": "post-apocalyptic-predator",
+      "death-dog": "post-apocalyptic-predator",
+      jackal: "post-apocalyptic-predator",
+      hyena: "post-apocalyptic-predator",
+      "giant-hyena": "post-apocalyptic-predator",
+      mastiff: "post-apocalyptic-predator",
+      panther: "post-apocalyptic-predator",
+      lion: "post-apocalyptic-predator",
+      tiger: "post-apocalyptic-predator",
+      "saber-toothed-tiger": "post-apocalyptic-predator",
+    },
+  },
+  // Horror goes by name only: its bestiary hides what a thing is behind its
+  // name, and a stat block's token would give that away (a commoner is a
+  // possessed villager only when the card says so).
+  horror: {
+    names: {
+      "horror-possessed": ["Smiling Neighbor", "Possessed", "Possessed Villager", "Possessed Commoner"],
+      "horror-doll": ["Doll", "Sinister Doll", "Porcelain Doll", "Haunted Doll"],
+      "horror-fungal-host": ["Fungal Host", "Spore Host", "Infested Host"],
+      "horror-parasite-swarm": ["The Skittering", "Parasite Swarm", "Crawling Parasite Swarm", "Crawling Swarm"],
+    },
+    slugs: {},
+  },
+  mystery: {
+    names: {
+      "mystery-hired-gun": ["Hired Rough", "Loan Shark's Muscle", "Foreign Legionnaire", "Hired Gun", "Gunman"],
+      "mystery-burglar": ["The Unseen Burglar", "Burglar", "Masked Burglar", "Cat Burglar", "Cracksman"],
+      "mystery-poisoner": ["Poisoner"],
+      "mystery-occult-enforcer": ["Secret Society Member", "Society Grandmaster", "Occult Enforcer", "Occult Society Enforcer", "Society Enforcer"],
+    },
+    // bandit and thug are the Hired Rough and the Loan Shark's Muscle,
+    // assassin is The Poisoner, cultist and cult-fanatic are the society.
+    slugs: {
+      bandit: "mystery-hired-gun",
+      thug: "mystery-hired-gun",
+      assassin: "mystery-poisoner",
+      cultist: "mystery-occult-enforcer",
+      "cult-fanatic": "mystery-occult-enforcer",
+    },
+  },
+  // Dark fantasy draws the fantasy family plates (see RESKIN_GENRES), so its
+  // tokens come by name only and a plain cultist stays a cultist.
+  "dark-fantasy": {
+    names: {
+      "dark-fantasy-penitent": ["Flagellant Champion", "Penitent of the Pit", "Penitent", "Penitent Executioner", "Flagellant"],
+      "dark-fantasy-plague-soldier": ["Plague Soldier", "Plague Trooper"],
+    },
+    slugs: {},
+  },
+};
+
+function genreNameKey(value: string | null | undefined): string {
+  return familyKey(value).replace(/^the-/, "");
+}
+
+const GENRE_ENEMY_LOOKUP: Record<string, { names: Map<string, string>; slugs: Record<string, string> }> =
+  Object.fromEntries(
+    Object.entries(GENRE_ENEMY_TOKENS).map(([genre, table]) => [
+      genre,
+      {
+        names: new Map(
+          Object.entries(table.names).flatMap(([plate, names]) => names.map((name) => [genreNameKey(name), plate] as const)),
+        ),
+        slugs: table.slugs,
+      },
+    ]),
+  );
+
+// Which genre token, if any, this monster draws: its name first, then its
+// stat block, and only in the genre that painted it.
+function genreEnemyPlate(genre: string, slug: string | null | undefined, name: string | null | undefined): string | null {
+  const table = GENRE_ENEMY_LOOKUP[genre];
+  if (!table) {
+    return null;
+  }
+  const byName = table.names.get(genreNameKey(name));
+  if (byName) {
+    return byName;
+  }
+  const key = familyKey(slug);
+  return key && Object.prototype.hasOwnProperty.call(table.slugs, key) ? (table.slugs[key] ?? null) : null;
+}
+
+// Which family plate, if any, this monster draws. The slug is the real
+// answer when the caller has it; a name only counts when the whole name is a
+// family (a homebrew monster called "Owlbear"), never a word inside one.
+function familyPlate(genre: string, slug: string | null | undefined, name: string | null | undefined): string | null {
+  const fromName = familyOf(name);
+  const family = familyOf(slug) ?? fromName;
+  if (!family) {
+    return null;
+  }
+  if (RESKIN_GENRES.has(genre) && fromName !== family) {
+    return null;
+  }
+  return family;
+}
+
+export type MonsterLook = {
+  cr?: number | null;
+  genre?: string | null;
+  // Keeps a monster on the same plate where a genre offers two.
+  seed?: string | null;
+  // The SRD / Open5e slug of the stat block it fights with (giant-rat for a
+  // cyberpunk Sump Rat), when the caller has one.
+  slug?: string | null;
+  // The name the table sees, for the reskin guard and for a monster with no
+  // slug at all.
+  name?: string | null;
+};
+
+// Order: the genre's own enemy token (in that genre only), then the
+// creature's own family plate, then the genre's boss plate at
+// CR 11 and up, then the genre's plate for the type, then the type. A
+// picture somebody supplied for this monster in particular (a world pack's
+// art) beats all of these, and is applied by the caller (MonsterTile's
+// `art`), since it is not a plate.
 export function monsterPlaceholder(
   type: string | null | undefined,
-  options: { cr?: number | null; genre?: string | null; seed?: string | null } = {},
+  options: MonsterLook = {},
 ): string {
   const slug = genreSlug(options.genre);
+  const token = genreEnemyPlate(slug, options.slug, options.name);
+  if (token) {
+    return `${BASE}/monster/${token}.webp`;
+  }
+  const family = familyPlate(slug, options.slug, options.name);
+  if (family) {
+    return `${BASE}/monster/${family}.webp`;
+  }
   if (typeof options.cr === "number" && options.cr >= BOSS_CR_FLOOR && BOSS_GENRES.has(slug)) {
     return `${BASE}/monster/${slug}-boss.webp`;
   }

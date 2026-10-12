@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { isErrorResponse, requireMember } from "@/lib/campaign-api";
-import { listMembers, setMemberHoldRolls, setMemberRealDice } from "@/lib/db/campaigns";
+import { listMembers, setMemberHoldRolls, setMemberPartyOrder, setMemberRealDice } from "@/lib/db/campaigns";
+import { listSheets } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
+import { normalizePartyOrder } from "@/lib/party-order";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,10 +14,13 @@ const patchMeSchema = z
     // Shake to roll: park every roll for this player to release. Not gated
     // by the dice policy because the server still draws the numbers.
     holdRolls: z.boolean().optional(),
+    // This member's own order for the Party panel's cards (issue 240):
+    // sheet ids, first card first; an empty list restores the default.
+    partyOrder: z.array(z.string().min(1).max(80)).max(60).optional(),
   })
-  .refine((data) => data.useRealDice !== undefined || data.holdRolls !== undefined);
+  .refine((data) => data.useRealDice !== undefined || data.holdRolls !== undefined || data.partyOrder !== undefined);
 
-// Per-member preferences: physical dice opt-in and hold-my-rolls.
+// Per-member preferences: physical dice opt-in, hold-my-rolls, party order.
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ campaignId: string }> },
@@ -44,6 +49,11 @@ export async function PATCH(
   }
   if (parsed.data.holdRolls !== undefined) {
     setMemberHoldRolls(campaignId, context.user.id, parsed.data.holdRolls);
+  }
+  if (parsed.data.partyOrder !== undefined) {
+    // Only this table's sheets, each once; a card that left is forgotten.
+    const known = listSheets(campaignId).map((sheet) => sheet.id);
+    setMemberPartyOrder(campaignId, context.user.id, normalizePartyOrder(parsed.data.partyOrder, known));
   }
   const member = listMembers(campaignId).find((entry) => entry.userId === context.user.id);
   publishPersisted(campaignId, "member_updated", { member });

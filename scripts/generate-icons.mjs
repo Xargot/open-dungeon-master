@@ -1,7 +1,8 @@
 // Renders the icon set in scripts/icon-set.mjs through the local ComfyUI and
 // writes the cut-outs the cards, sheets and pickers show.
 //
-// Every icon is rendered on Flux schnell on flat black, matted by BEN2, cut
+// Every icon is rendered on flat black (Flux schnell, or Qwen Image for the
+// UI glyphs and condition chips, scripts/glyph-set.mjs), matted by BEN2, cut
 // out with ImageMagick (the same flood fill and erosion the map objects use),
 // trimmed square with a margin, and shipped as a 128px alpha WebP under
 // public/assets/icons/<group>/. The 768px raw render and the matte are kept
@@ -47,7 +48,11 @@ const review = existsSync(REVIEW) ? JSON.parse(readFileSync(REVIEW, "utf8")) : {
 
 const ALL = await buildIconList();
 const terms = only ? only.split(",").map((t) => t.trim()).filter(Boolean) : [];
-const selected = terms.length ? ALL.filter((e) => terms.some((t) => e.group === t || e.id.includes(t) || e.key.toLowerCase().includes(t.toLowerCase()))) : ALL;
+// A group's name selects that group alone ("glyph" is not Glyph of Warding).
+const GROUPS = new Set(ALL.map((e) => e.group));
+const selected = terms.length
+  ? ALL.filter((e) => terms.some((t) => (GROUPS.has(t) ? e.group === t : e.id.includes(t) || e.key.toLowerCase().includes(t.toLowerCase()))))
+  : ALL;
 if (!selected.length) {
   console.error(`--only ${only} matched nothing`);
   process.exit(1);
@@ -56,7 +61,7 @@ const seedOf = (e) => seedFor(e.id + seedSalt + (review.rejected[e.id] ?? ""));
 const shippedPath = (e) => path.join(OUT_DIR, e.group, `${e.id.slice(e.group.length + 1)}.webp`);
 
 if (dryRun) {
-  for (const e of selected) console.log(`\n# ${e.group}/${e.id}  "${e.label}"  seed ${seedOf(e)}\n  + ${e.prompt}`);
+  for (const e of selected) console.log(`\n# ${e.group}/${e.id}  "${e.label}"  ${e.model ?? "flux"}  seed ${seedOf(e)}\n  + ${e.prompt}`);
   console.log(`\n${selected.length} icon(s) of ${ALL.length}. Nothing rendered.`);
   process.exit(0);
 }
@@ -84,9 +89,28 @@ function cutOut(rawPath, maskPath, cutPath) {
   for (const tmp of [bin, solid, holes, alpha]) execFileSync("rm", ["-f", tmp]);
 }
 
-function encode(cutPath, target) {
+// A UI glyph sits on a dark plate at 16 to 28 pixels: a dark painting there
+// is a hole, whatever it depicts. The mean lightness of its opaque pixels is
+// held to a floor by a gamma lift, so contrast never rests on the model.
+// HSL lightness: a saturated gold is 0.5, so the floor sits below that.
+const GLYPH_LIGHTNESS_FLOOR = 0.35;
+
+function glyphTone(sourcePath) {
+  const measure = (args) => Number(execFileSync("magick", [sourcePath, ...args, "-format", "%[fx:mean]", "info:"]).toString());
+  const coverage = measure(["-alpha", "extract"]);
+  const lit = measure(["(", "+clone", "-alpha", "off", "-colorspace", "HSL", "-channel", "B", "-separate", "+channel", ")", "(", "-clone", "0", "-alpha", "extract", ")", "-delete", "0", "-compose", "Multiply", "-composite"]);
+  const lightness = coverage > 0 ? lit / coverage : 1;
+  if (!Number.isFinite(lightness) || lightness >= GLYPH_LIGHTNESS_FLOOR) return [];
+  const gamma = Math.min(2.2, Math.log(Math.max(lightness, 0.05)) / Math.log(GLYPH_LIGHTNESS_FLOOR));
+  return ["-channel", "RGB", "-gamma", gamma.toFixed(3), "+channel"];
+}
+
+// Glyphs keep their full colour: at this size it is the second cue a state
+// is read by. The spell list's saturation ceiling is for the cards.
+function encode(cutPath, target, e) {
+  const small = e.model === "qwen";
   execFileSync("magick", [
-    cutPath, "-modulate", `100,${saturationScale(cutPath)},100`, "-resize", `${SHIP_PX}x${SHIP_PX}`, "-strip",
+    cutPath, ...(small ? glyphTone(cutPath) : ["-modulate", `100,${saturationScale(cutPath)},100`]), "-resize", `${SHIP_PX}x${SHIP_PX}`, "-strip",
     "-quality", String(WEBP_QUALITY), "-define", "webp:method=6", "-define", "webp:alpha-quality=90", "-define", "webp:exact=1", target,
   ]);
 }
@@ -110,7 +134,10 @@ if (!reencode) {
     console.error(`No ComfyUI at ${DEFAULT_COMFY_URL}. Start it, or pass --reencode to rebuild from kept originals.`);
     process.exit(1);
   }
-  await requireNodes(["UNETLoader", "DualCLIPLoader", "easy imageRemBg"]);
+  const nodes = ["UNETLoader", "easy imageRemBg"];
+  if (selected.some((e) => (e.model ?? "flux") === "flux")) nodes.push("DualCLIPLoader");
+  if (selected.some((e) => e.model === "qwen")) nodes.push("CLIPLoader", "TextEncodeQwenImage21");
+  await requireNodes(nodes);
 }
 
 mkdirSync(SRC_DIR, { recursive: true });
@@ -133,7 +160,7 @@ for (const [index, e] of selected.entries()) {
     } else if (reencode) {
       continue;
     } else {
-      const out = await renderCutout({ model: "flux", prompt: e.prompt, width: RENDER_PX, height: RENDER_PX, seed: seedOf(e), prefix: `odm-icon-${e.group}` });
+      const out = await renderCutout({ model: e.model ?? "flux", prompt: e.prompt, negative: e.negative, width: RENDER_PX, height: RENDER_PX, seed: seedOf(e), prefix: `odm-icon-${e.group}` });
       writeFileSync(raw, out.image);
       writeFileSync(mask, out.mask);
       writeFileSync(saltFile, salt);
@@ -142,7 +169,7 @@ for (const [index, e] of selected.entries()) {
       console.log(`${label} rendered (${each.toFixed(0)}s each, ~${(((selected.length - index - 1) * each) / 60).toFixed(0)} min left)`);
     }
     cutOut(raw, mask, cut);
-    encode(cut, shippedPath(e));
+    encode(cut, shippedPath(e), e);
   } catch (error) {
     failures.push(`${e.id}: ${error.message}`);
     console.error(`${label} FAILED ${error.message}`);

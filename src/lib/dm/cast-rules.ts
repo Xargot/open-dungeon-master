@@ -348,6 +348,56 @@ export const LEVELLED_SPELL = "spell:levelled";
 // Quickened Spell (sorcerer Metamagic, 2 sorcery points) paid this turn:
 // the next spell with a casting time of one action takes the bonus action.
 export const QUICKENED = "metamagic:quickened";
+// A one-action spell a feature lets the caster cast with the bonus action
+// instead (issue 233): Mantle of Majesty's Command every turn ("always"),
+// Elder Champion's paladin spells once the action is gone ("spare"), and an
+// enchantment spell after a use of Embodiment of the Law paid this turn
+// ("mark", the budget key it left).
+export type BonusCast = {
+  feature: string;
+  mode: "always" | "spare" | "mark";
+  mark?: string;
+  // The feature casts the cantrip as a bonus action after a levelled spell,
+  // which the bonus-action spell rule would otherwise refuse.
+  afterLevelled?: boolean;
+};
+export const EMBODIMENT_MARK = "bonus-cast:embodiment of the law";
+// The genre classes' "cast a cantrip as a bonus action after casting a
+// leveled ..." (Surge Casting, Surge Momentum, Surge of Change, The Rite
+// Remembers), paid for by a use this turn.
+export const SURGE_MARK = "bonus-cast:surge";
+export const SURGE_FEATURES = ["surge casting", "surge momentum", "surge of change", "the rite remembers"];
+export const MANTLE_OF_MAJESTY = "mantle of majesty";
+
+// The feature that lets this one-action spell take the bonus action, when
+// one does. `school` is the spell's school when the caller knows it.
+export function bonusCastOf(
+  sheet: Pick<CharacterSheet, "conditions" | "features">,
+  facts: SpellFacts | null,
+  school: string | null,
+): BonusCast | null {
+  if (!facts || facts.castingTime !== "action") {
+    return null;
+  }
+  const holding = (name: string) => sheet.conditions.some((entry) => entry.trim().toLowerCase().startsWith(name));
+  const engine = (facts.runsAs ?? facts.name).trim();
+  if (holding(MANTLE_OF_MAJESTY) && /^command$/i.test(engine)) {
+    return { feature: "Mantle of Majesty", mode: "always" };
+  }
+  if (holding("elder champion") && facts.classes.some((entry) => entry.toLowerCase() === "paladin")) {
+    return { feature: "Elder Champion", mode: "spare" };
+  }
+  // Only a use of the surge leaves its mark, so a cantrip asks the mark.
+  if (facts.level === 0) {
+    const surge = sheet.features.find((feature) => SURGE_FEATURES.includes(feature.name.trim().toLowerCase()));
+    return { feature: surge?.name.trim() ?? "The surge", mode: "mark", mark: SURGE_MARK, afterLevelled: true };
+  }
+  const embodies = sheet.features.some((feature) => feature.name.trim().toLowerCase() === "embodiment of the law");
+  if (embodies && facts.level >= 1 && school === "enchantment") {
+    return { feature: "Embodiment of the Law", mode: "mark", mark: EMBODIMENT_MARK };
+  }
+  return null;
+}
 const SHARES = "cast-shares";
 
 // A casting whose attack rolls, darts or targets are resolved one call at a
@@ -397,6 +447,7 @@ export function turnCharge(input: {
   inFight: boolean;
   budget: TurnBudget | null;
   reactionSpent: boolean;
+  bonusCast?: BonusCast | null;
 }): TurnCharge | CastRefusal {
   const { who, facts, budget, inFight } = input;
   const name = facts?.name ?? input.spell;
@@ -406,12 +457,19 @@ export function turnCharge(input: {
   const marks = budget?.oncePerTurn ?? [];
   const printed = facts?.castingTime ?? "action";
   const quickened = printed === "action" && marks.includes(QUICKENED);
-  const time = quickened ? "bonus" : printed;
+  const bonusCast = input.bonusCast;
+  const featured =
+    printed === "action" && !quickened && bonusCast
+      ? bonusCast.mode === "always" ||
+        (bonusCast.mode === "spare" && Boolean(budget?.actionUsed) && !(budget?.grantedActions ?? 0)) ||
+        (bonusCast.mode === "mark" && Boolean(bonusCast.mark) && marks.includes(bonusCast.mark!))
+      : false;
+  const time = quickened || featured ? "bonus" : printed;
   const levelled = (facts ? facts.level : (input.slotLevel ?? 0)) > 0;
   // SRD 5.1, Casting Time, Bonus Action: a spell cast with a bonus action
   // leaves the turn room for one other spell only, a cantrip with a casting
   // time of one action.
-  if (time === "bonus" && marks.includes(LEVELLED_SPELL)) {
+  if (time === "bonus" && marks.includes(LEVELLED_SPELL) && !(featured && bonusCast?.afterLevelled)) {
     return {
       error: `${who} has already cast a levelled spell this turn, so ${name} cannot be cast with the bonus action: beside a bonus action spell the only other spell of the turn is a cantrip.`,
     };
@@ -439,7 +497,7 @@ export function turnCharge(input: {
   const mark = (next: TurnBudget): TurnBudget => ({
     ...next,
     oncePerTurn: [
-      ...next.oncePerTurn.filter((entry) => !(quickened && entry === QUICKENED)),
+      ...next.oncePerTurn.filter((entry) => !(quickened && entry === QUICKENED) && !(featured && entry === bonusCast?.mark)),
       ...(time === "bonus" && !next.oncePerTurn.includes(BONUS_SPELL) ? [BONUS_SPELL] : []),
       ...(time !== "bonus" && levelled && !next.oncePerTurn.includes(LEVELLED_SPELL) ? [LEVELLED_SPELL] : []),
     ],
@@ -451,7 +509,11 @@ export function turnCharge(input: {
   if (!spent.ok) {
     return { error: spent.error };
   }
-  const note = [spent.note, quickened ? `Quickened Spell: ${name} took the bonus action instead of the action.` : ""].filter(Boolean).join(" ");
+  const note = [
+    spent.note,
+    quickened ? `Quickened Spell: ${name} took the bonus action instead of the action.` : "",
+    featured ? `${bonusCast!.feature}: ${name} took the bonus action instead of the action.` : "",
+  ].filter(Boolean).join(" ");
   return {
     kind: "budget",
     budget: mark(spent.budget),

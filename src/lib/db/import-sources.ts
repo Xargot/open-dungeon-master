@@ -5,7 +5,7 @@ import {
   type Campaign,
 } from "@/lib/db/campaigns";
 import { listWorkshopsForUser } from "@/lib/db/workshops";
-import { readImportSource } from "@/lib/db/content-import";
+import { boardWritesArc, readImportSource } from "@/lib/db/content-import";
 import { IMPORT_KINDS, type ImportKind } from "@/lib/workshop/import";
 import type { CampaignKind } from "@/lib/workshop/kind";
 
@@ -33,6 +33,8 @@ export type ImportSourceSummary = {
   // How much of each importable kind this source holds, so a picker never
   // has to fetch per source.
   contents: Record<ImportKind, number>;
+  // Its storyboard compiles into a story arc of its own (issue 249).
+  boardArc: boolean;
 };
 
 export function getImportSourceForUser(sourceId: string, userId: string): Campaign | null {
@@ -56,6 +58,7 @@ function summarize(campaign: Campaign): ImportSourceSummary {
     contents: Object.fromEntries(
       IMPORT_KINDS.map((kind) => [kind, source[kind].length]),
     ) as Record<ImportKind, number>,
+    boardArc: source.storyboard.length > 0 && boardWritesArc(campaign.id),
   };
 }
 

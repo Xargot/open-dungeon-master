@@ -352,11 +352,29 @@ await test("The prompt and the tool schemas teach the recount's features: the Mu
   const tool = (name) => tools.find((entry) => entry.function.name === name)?.function;
   const attack = tool("pc_attack").parameters.properties;
   assert.ok(attack.whirlwind && attack.volley, "pc_attack takes no whirlwind or volley");
-  const reaction = tool("use_reaction").description;
+  const reaction = JSON.stringify(tool("use_reaction"));
   assert.ok(reaction.includes("Retaliation") && reaction.includes("Stand Against the Tide"));
   const resource = JSON.stringify(tool("use_resource"));
   for (const name of ["Peerless Skill", "Quivering Palm", "Draconic Presence", "Hide in Plain Sight", "Primeval Awareness"]) {
     assert.ok(resource.includes(name), `use_resource never names ${name}`);
+  }
+});
+
+const { runPreparedEncounterTool } = await import("../src/lib/dm/prepared-encounter-tool.ts");
+
+await test("Every tool description reaches an agent program whole: none is longer than the 2,048 characters Claude Code keeps.", () => {
+  // Every optional family on: the story arc, world simulation, sound, relationships with romance, full companions,
+  // pictures; the prepared-fight tool is offered only once the table has one, so it is added by hand.
+  const campaign = world.campaign();
+  const everything = {
+    ...campaign,
+    storyArc: campaign.storyArc ?? { beats: [] },
+    gameSettings: { ...campaign.gameSettings, worldSimulation: true, ambienceEnabled: true, relationships: "on", romance: "on", companions: "full" },
+  };
+  const tools = [...dmTurnToolCatalogue(everything, true, false), runPreparedEncounterTool];
+  assert.ok(tools.length > 90, `the whole catalogue (${tools.length} tools)`);
+  for (const tool of tools) {
+    assert.ok(tool.function.description.length <= 2048, `${tool.function.name}: ${tool.function.description.length} characters`);
   }
 });
 

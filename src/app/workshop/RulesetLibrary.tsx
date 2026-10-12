@@ -236,7 +236,7 @@ export function RulesetLibrary({
             // row, under the list of what it would change.
             const items: ContextMenuItem[] = [
               { id: "open", label: openId === ruleset.id ? "Close" : "Open", glyph: "system-rulesets", onSelect: () => void open(ruleset) },
-              { id: "delete", label: "Delete", glyph: "quest-failed", tone: "danger", separated: true, onSelect: () => void remove(ruleset) },
+              { id: "delete", label: "Delete", glyph: "ui-delete", tone: "danger", separated: true, onSelect: () => void remove(ruleset) },
             ];
             return (
             <ContextMenu as="li" key={ruleset.id} label={ruleset.name} items={items} className="panel rounded-xl">
@@ -337,7 +337,18 @@ export function RulesetLibrary({
         </ul>
         </>
       ) : (
-        (loadError ? <LoadFailed error={loadError} onRetry={() => void load()} /> : loaded ? <EmptyState size="md" art="scrolls" title="No saved rulesets yet. Set the rules below the way your table plays, then save them." /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={() => void load()}
+          />
+        ) : loaded ? (
+          <EmptyState
+            size="md"
+            art="scrolls"
+            title="No saved rulesets yet. Set the rules below the way your table plays, then save them."
+          />
+        ) : null)
       )}
 
       <div className="flex flex-wrap items-center gap-2 text-sm" data-tour="rules-save-as">

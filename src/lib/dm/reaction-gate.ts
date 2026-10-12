@@ -1,39 +1,68 @@
 // Whether a character may take a reaction, asked the same way by every tool
-// that spends one: use_reaction (src/lib/dm/reaction-tools.ts) and a feature
-// whose cost is the reaction (prepareReaction, src/lib/dm/turn-budget.ts).
+// that spends one: use_reaction (src/lib/dm/reaction-tools.ts), a feature
+// whose cost is the reaction (prepareReaction, src/lib/dm/turn-budget.ts),
+// and a spell cast with the reaction (src/lib/dm/cast-guard.ts).
 //
 // The dead, the dying, the incapacitated and the surprised have no reaction;
-// whose turn it is does not matter to one. A reaction to the hit that dropped
-// them is taken as the hit lands, so it is asked of them as they stood before
-// it (the record is src/lib/dm/last-hit.ts).
+// whose turn it is does not matter to one. When the hit that just landed
+// dropped the character, the reaction's timing decides (issue 233,
+// src/lib/dm/reaction-kinds.ts): one that answers that hit is asked of them
+// as they stood before it (the record is src/lib/dm/last-hit.ts), one that
+// is triggered by dropping to 0 is allowed exactly then, and one that only
+// follows the damage is asked of them as they are, unconscious.
 
 import type { Encounter } from "@/lib/db/encounters";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { canAct } from "@/lib/dm/can-act";
 import { freshLastHit } from "@/lib/dm/last-hit";
+import { reactionTimingOf, type ReactionTiming } from "@/lib/dm/reaction-kinds";
 import { conditionBlocksReactions } from "@/lib/srd/condition-effects";
 
-function reactingAs(campaignId: string, sheet: CharacterSheet): CharacterSheet {
+export type { ReactionTiming } from "@/lib/dm/reaction-kinds";
+
+// The character as the reaction is asked of them, and whether that is the
+// standing before a hit that dropped them.
+export function reactingSheet(
+  campaignId: string,
+  sheet: CharacterSheet,
+  timing: ReactionTiming,
+): { sheet: CharacterSheet; beforeDrop: boolean } {
+  if (timing === "after") {
+    return { sheet, beforeDrop: false };
+  }
   const answering = freshLastHit(campaignId, sheet.id);
   const before = answering && answering.before.currentHp > 0 && sheet.currentHp <= 0 ? answering.before : null;
   return before
-    ? { ...sheet, currentHp: before.currentHp, conditions: before.conditions, deathSaves: before.deathSaves }
-    : sheet;
+    ? {
+        sheet: { ...sheet, currentHp: before.currentHp, conditions: before.conditions, deathSaves: before.deathSaves },
+        beforeDrop: true,
+      }
+    : { sheet, beforeDrop: false };
 }
 
-// The refusal for a reaction the character cannot take, or null.
+// The refusal for a reaction the character cannot take, or null. The timing
+// is the reaction's own (reaction-kinds.ts); a caller that does not name one
+// gets the feature's by its label.
 export function reactionRefusal(
   campaignId: string,
   sheet: CharacterSheet,
   encounter: Encounter | null,
   label: string,
+  timing: ReactionTiming = reactionTimingOf(label),
 ): string | null {
-  const standing = reactingAs(campaignId, sheet);
-  const allowed = canAct({ sheet: standing, encounter, kind: "reaction" });
+  const standing = reactingSheet(campaignId, sheet, timing);
+  if (timing === "at_zero" && !standing.beforeDrop) {
+    return sheet.currentHp > 0
+      ? `${label} answers the hit that drops ${sheet.name} to 0 hit points, and they are not down. Nothing was spent.`
+      : `${label} is taken as the hit that drops ${sheet.name} to 0 hit points lands, and the server has no such hit on them this turn. Nothing was spent.`;
+  }
+  const allowed = canAct({ sheet: standing.sheet, encounter, kind: "reaction" });
   if (!allowed.ok) {
-    return allowed.error;
+    return sheet.currentHp <= 0 && timing === "after" && !sheet.deathSaves?.dead
+      ? `${allowed.error} ${label} follows the damage rather than changing it, so a character that damage dropped is already unconscious and cannot take it.`
+      : allowed.error;
   }
   // Slow and its kin switch reactions off entirely.
-  const blocked = conditionBlocksReactions(standing.conditions);
+  const blocked = conditionBlocksReactions(standing.sheet.conditions);
   return blocked ? `${sheet.name} is ${blocked} and cannot take reactions; ${label} does not happen.` : null;
 }

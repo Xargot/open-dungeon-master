@@ -1,3 +1,4 @@
+import { spendFeatureUse } from "@/lib/dm/attack-onhit";
 import { z } from "zod";
 import type { Campaign } from "@/lib/db/campaigns";
 import { getActiveEncounter, getEnemy, patchEnemyConditions, saveEncounter } from "@/lib/db/encounters";
@@ -22,7 +23,7 @@ import { markReactionUsed, storeBudget } from "@/lib/dm/turn-budget";
 import { spendReadied } from "@/lib/dm/object-actions";
 import { spendGiantKiller } from "@/lib/dm/reaction-attacks";
 import { withAmmoCount } from "@/lib/srd/ammunition";
-import { OPEN_HAND_CHOICES } from "@/lib/dm/attack-onhit";
+import { OPEN_HAND_CHOICES } from "@/lib/dm/attack-choice-rules";
 import { spendInspirationCounter } from "@/lib/dm/roll-riders";
 import { spendLuckCounter } from "@/lib/srd/class-resources";
 import { moteBurst, moteOf } from "@/lib/dm/authored-mote";
@@ -59,7 +60,7 @@ export const pcAttackTool: ToolDef = {
   function: {
     name: "pc_attack",
     description:
-      "A player character attacks an enemy. The server derives their attack bonus and damage from their sheet, rolls to-hit against the enemy's real AC, applies damage on a hit, and reports the outcome for you to narrate. Use this for EVERY weapon attack and attack-roll spell a player makes; never adjudicate a player's attack yourself. Off their own turn a character attacks only with a readied attack or spell, or Giant Killer's reaction against a Large or larger creature within 5 feet that just attacked them; the server checks which and spends the reaction.",
+      "Resolve a player character's attack on an enemy. The server derives their attack bonus and damage from their sheet, rolls to-hit against the enemy's real AC, applies damage on a hit, and reports the outcome for you to narrate. Call it for EVERY weapon attack and attack-roll spell a player makes; never adjudicate a player's attack yourself. Off their own turn a character attacks only with a readied attack or spell, or Giant Killer's reaction against a Large or larger creature within 5 feet that just attacked them; the server checks which and spends the reaction.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -74,11 +75,11 @@ export const pcAttackTool: ToolDef = {
         spell: {
           type: "string",
           description:
-            "Attack-roll spell (e.g. Fire Bolt) instead of a weapon; requires damage.",
+            "Attack-roll spell (Fire Bolt) instead of a weapon; requires damage.",
         },
         damage: {
           type: "string",
-          description: "Spell attacks only: the spell's damage dice, e.g. '1d10' or '4d6'.",
+          description: "Spell attacks only: the spell's damage dice ('1d10', '4d6').",
         },
         damageType: { type: "string", description: "Spell attacks only: the damage type." },
         advantage: {
@@ -120,7 +121,7 @@ export const pcAttackTool: ToolDef = {
         powerAttack: {
           type: "boolean",
           description:
-            "The accuracy-for-damage trade: Great Weapon Master (a heavy melee weapon) or Sharpshooter (a ranged weapon) take -5 on this attack roll for +10 damage; Level Up's Powerful Attacker rolls a heavy weapon attack at disadvantage for +10; Deadeye drops the proficiency bonus from a ranged attack roll for twice it on the damage. The player's choice before the roll; the server checks the feat and the weapon. After a melee critical hit or a kill, a Great Weapon Master's bonus-action attack is bonusAttack 'feature'.",
+            "The accuracy-for-damage trade: Great Weapon Master (a heavy melee weapon) or Sharpshooter (a ranged weapon) take -5 on this attack roll for +10 damage; Level Up's Powerful Attacker rolls a heavy weapon attack at disadvantage for +10; Deadeye drops the proficiency bonus from a ranged attack roll for twice it on the damage. The player's choice before the roll; the server checks the feat and the weapon.",
         },
         reckless: {
           type: "boolean",
@@ -139,7 +140,7 @@ export const pcAttackTool: ToolDef = {
         },
         useInspiration: {
           type: "boolean",
-          description: "Spend the character's Inspiration for advantage on this attack roll. Refused when they hold none.",
+          description: "True when the player spends their character's Inspiration on this attack roll for advantage. Refused when they hold none.",
         },
         strokeOfLuck: {
           type: "boolean",
@@ -199,7 +200,7 @@ export const pcAttackTool: ToolDef = {
         maneuver: {
           type: "string",
           description:
-            "Battle Master maneuver riding this weapon attack (e.g. 'Trip Attack', 'Precision Attack', 'Menacing Attack'). The server spends a Superiority Die, adds it to the damage (Precision: to the attack roll), and rolls the target's save against the maneuver's rider.",
+            "Battle Master maneuver riding this weapon attack ('Trip Attack', 'Precision Attack', 'Menacing Attack'). The server spends a Superiority Die, adds it to the damage (Precision: to the attack roll), and rolls the target's save against the maneuver's rider. Feinting Attack (a creature within 5 feet, advantage) and Quick Toss (a thrown weapon) take the bonus action; Grappling Strike saves the die for the grapple that may follow as a bonus action; Maneuvering Attack lets an ally move with its reaction. Parry, Riposte, Brace, Rally and Commander's Strike are not named here.",
         },
       },
       required: ["characterId", "targetEnemyId"],
@@ -318,6 +319,19 @@ function spendPcAttack(plan: AttackPlan) {
   const { campaign, turn, encounter, sheet, sheets, sheetsById, budget, ammo, context } = plan;
   if (budget) {
     storeBudget(encounter, budget);
+  }
+  // A feature bonus attack's use, and the mark that opened it
+  // (src/lib/dm/feature-bonus-attacks.ts).
+  const featureBonus = plan.options.featureBonus;
+  if (featureBonus?.counter && spendFeatureUse(campaign, sheet.id, featureBonus.counter, featureBonus.feature)) {
+    context.notes.push(`${featureBonus.feature}: one use spent`);
+  }
+  if (featureBonus?.consume) {
+    const now = getSheetById(sheet.id);
+    if (now) {
+      const cleared = removeConditions(now.conditions, now.conditionMeta, [featureBonus.consume]);
+      patchSheet(now.id, { conditions: cleared.conditions, conditionMeta: cleared.meta });
+    }
   }
   if (plan.castsSpell) {
     castAttackSpell(plan);

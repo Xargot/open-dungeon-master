@@ -38,6 +38,8 @@ import {
   type BattleToken,
 } from "@/lib/battlemap/types";
 import { getCurrentLocation } from "@/lib/db/locations";
+import { getParty } from "@/lib/db/party";
+import { placeByFormation } from "@/lib/dm/formation-logic";
 import { getSheetById } from "@/lib/db/sheets";
 import { publishEphemeral } from "@/lib/events";
 import { resolveSheetRef } from "@/lib/dm/rolls";
@@ -96,7 +98,9 @@ export function createBattleMapForEncounter(
   // The ground the fight is on when it is not the place's own
   // (start_encounter's scene).
   scene?: string,
-): BattleMap | null {
+  // Where the enemy comes from against the travel formation (issue 230).
+  from: "ahead" | "behind" = "ahead",
+): { map: BattleMap; formation: string } | null {
   const location = getCurrentLocation(campaign.id);
   const generated = generateBattleMap({
     seed: fnv1a(encounter.id),
@@ -116,12 +120,15 @@ export function createBattleMapForEncounter(
     lights: generated.lights,
     seed: fnv1a(encounter.id),
   });
+  // The party stands by its travel formation: the front of it nearest the
+  // enemy, or the rear when they came from behind (formation-logic.ts).
+  const formation = placeByFormation(sheets, generated.pcSpawns, generated.enemySpawns, getParty(campaign.id).marchingOrder, from);
   placeTokens(map.id, campaign.id, [
-    ...sheets.map((sheet, index) => ({
+    ...sheets.map((sheet) => ({
       kind: "pc" as const,
       refId: sheet.id,
       name: sheet.name,
-      spot: generated.pcSpawns[index] ?? generated.pcSpawns[0],
+      spot: formation.spots.get(sheet.id) ?? generated.pcSpawns[0],
       ...carriedLightFields(campaign.id, sheet),
     })),
     ...enemies.map((enemy, index) => ({
@@ -132,7 +139,7 @@ export function createBattleMapForEncounter(
     })),
   ]);
   publishBattleMapUpdate(campaign.id);
-  return map;
+  return { map, formation: formation.line };
 }
 
 // ---- teleport_token and set_movement tools ----
@@ -142,20 +149,20 @@ export const teleportTokenTool: ToolDef = {
   function: {
     name: "teleport_token",
     description:
-      "Move a combatant to a tile WITHOUT walking: Misty Step, Dimension Door, Thunder Step, a trap door, a portal. It is the spell or the hazard that does it: pass spell with casterId for a character's spell (the server casts it, spending the slot and the casting time, and refuses a jump past the spell's range) or with casterEnemyId for a spell or ability on the enemy's block, or cause 'hazard' for a trap door or a portal. A teleport with none of these is refused. The tile must be open floor with nobody on it.",
+      "Move a combatant to a tile WITHOUT walking: Misty Step, Dimension Door, Thunder Step, a trap door, a portal. It is the spell or the hazard that does it: pass spell with casterId for a character's spell (the server casts it, spending the slot and the casting time, and refuses a jump past the spell's range) or with casterEnemyId for a spell or ability on the enemy's block, or cause 'hazard'. A teleport with none of these is refused. The tile must be open floor with nobody on it.",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
         tokenName: {
           type: "string",
-          description: "Character or enemy name or id, exactly as shown on the battle map.",
+          description: "Character or enemy name or id, exactly as shown on the battle map in GAME STATE.",
         },
         x: { type: "integer", description: "Destination column." },
         y: { type: "integer", description: "Destination row." },
-        spell: { type: "string", description: "The teleport spell or ability, e.g. Misty Step." },
-        casterId: { type: "string", description: "The character casting it (characterId)." },
-        casterEnemyId: { type: "string", description: "The enemy using it (enemyId)." },
+        spell: { type: "string", description: "The teleport spell or ability (Misty Step)." },
+        casterId: { type: "string", description: "The character casting it: exact characterId from GAME STATE." },
+        casterEnemyId: { type: "string", description: "The enemy using it: exact enemyId from GAME STATE." },
         cause: {
           type: "string",
           enum: ["hazard"],
@@ -184,7 +191,7 @@ export const setMovementTool: ToolDef = {
       type: "object",
       additionalProperties: false,
       properties: {
-        tokenName: { type: "string", description: "Character or enemy name or id." },
+        tokenName: { type: "string", description: "Character or enemy name or id, exactly as shown on the battle map in GAME STATE." },
         movement: { type: "string", enum: ["walk", "fly", "burrow"] },
         reason: { type: "string" },
       },
@@ -377,7 +384,7 @@ export const moveTokenTool: ToolDef = {
         tokenName: {
           type: "string",
           description:
-            "Enemy name or enemyId, or character name or characterId, exactly as shown on the battle map in GAME STATE.",
+            "Character or enemy name or id, exactly as shown on the battle map in GAME STATE.",
         },
         x: { type: "integer", description: "Destination column." },
         y: { type: "integer", description: "Destination row." },

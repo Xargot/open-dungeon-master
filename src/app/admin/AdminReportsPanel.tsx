@@ -111,7 +111,17 @@ export function AdminReportsPanel() {
       {error ? <p role="alert" className="motion-shake mb-3 text-sm text-red-400">{error}</p> : null}
 
       {reports.length === 0 ? (
-        (loadError ? <LoadFailed error={loadError} onRetry={refresh} /> : loaded ? <EmptyState art="board" title={showAll ? "No reports yet." : "Nothing waiting. Open reports show up here."} /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={refresh}
+          />
+        ) : loaded ? (
+          <EmptyState
+            art="board"
+            title={showAll ? "No reports yet." : "Nothing waiting. Open reports show up here."}
+          />
+        ) : null)
       ) : (
         <ul className="stagger space-y-2">
           {reports.map((report) => (

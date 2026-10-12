@@ -72,4 +72,9 @@ test("a system line is shown whole, with the transcript's card prefixes as words
   assert.equal(chronicleSystemLine(long), long);
   assert.equal(chronicleSystemLine("[Party lead direction] Take the north door."), "Party lead: Take the north door.");
   assert.equal(chronicleSystemLine("[New adventurer] Mira joins the party."), "Mira joins the party.");
+  // A settled offer (issue 239): the words, never the marker the DM reads.
+  assert.equal(
+    chronicleSystemLine("[Offer settled] Nysa accepted the offer: Give Coin purse to Nysa. Nysa now carries Coin purse."),
+    "Nysa accepted the offer: Give Coin purse to Nysa. Nysa now carries Coin purse.",
+  );
 });

@@ -52,7 +52,7 @@ const enemyFleesTool: ToolDef = {
   function: {
     name: "enemy_flees",
     description:
-      "An enemy escapes the fight: it runs, teleports away, dives underwater, or otherwise leaves. Call this BEFORE narrating the escape; its token leaves the map. When no enemies remain the encounter ends automatically with reduced XP.",
+      "Record an enemy escaping the fight: it runs, teleports away, dives underwater, or otherwise leaves. Call it BEFORE narrating the escape; its token leaves the map. When no enemies remain the encounter ends automatically with reduced XP.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -92,11 +92,11 @@ const setEnemyConditionTool: ToolDef = {
         sourceCharacterId: {
           type: "string",
           description:
-            "The character that caused it, when the condition is tied to one: the grappler, the charmer, the source of the fear.",
+            "The character that caused it, when the condition is tied to one (the grappler, the charmer, the source of the fear): exact characterId from GAME STATE.",
         },
         sourceEnemyId: {
           type: "string",
-          description: "The enemy that caused it, when it was another enemy.",
+          description: "The enemy that caused it, when it was another enemy: exact enemyId from GAME STATE.",
         },
         level: {
           type: "integer",

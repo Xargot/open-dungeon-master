@@ -33,6 +33,7 @@ import { spendAttackEconomy } from "@/lib/dm/pc-attack-spend";
 import { tilesBetween } from "@/lib/dm/attack-spatial";
 import { buildAttackProfile, type BuiltAttack } from "@/lib/dm/pc-attack-profile";
 import { pickManeuver, type OnHitSpends } from "@/lib/dm/pc-attack-riders";
+import type { ManeuverUse } from "@/lib/dm/maneuver-rules";
 import { attackGeometry, attackSituation } from "@/lib/dm/pc-attack-situation";
 import { globeProblemFor, missileProblem } from "@/lib/dm/zone-rules";
 import { checkAttackSpell } from "@/lib/dm/pc-attack-spell";
@@ -55,6 +56,8 @@ export type ManeuverPick = {
   die: string;
   precision: boolean;
   rider: { condition: string; save: "str" | "wis" } | null;
+  // How it is taken beyond the die (src/lib/dm/maneuver-rules.ts).
+  use: ManeuverUse;
 };
 
 // One attack, checked and assembled. `profile`, `maneuver` and the notes
@@ -124,6 +127,8 @@ export type AttackExtras = {
   hurl: boolean;
   // The weapon carries a coat of basic poison.
   poison: boolean;
+  // Temporary hit points the hit gives the attacker (Hungry Jaws).
+  tempHp?: { amount: number; feature: string };
   // The reaction attack is Giant Killer's.
   giantKiller: boolean;
 };
@@ -248,6 +253,16 @@ export function planPcAttack(input: {
     return { refused: { error: picked.refused } };
   }
   const maneuver = picked.maneuver;
+  // What the maneuver asks of the swing beyond its die (maneuver-rules.ts).
+  if (maneuver?.use === "feint" && !geometry.withinFiveFeet) {
+    return { refused: { error: `Feinting Attack feints at a creature within 5 feet of ${sheet.name}, and ${enemy.displayName} is not. Nothing was spent.` } };
+  }
+  if (maneuver?.use === "grapple" && (atRange || !weaponAttack)) {
+    return { refused: { error: "Grappling Strike follows a hit with a melee attack. Nothing was spent." } };
+  }
+  if (maneuver?.use === "bonus_swing" && (!atRange || !(profile.properties ?? []).includes("thrown"))) {
+    return { refused: { error: `Quick Toss is a ranged attack with a weapon that has the thrown property, and ${profile.weapon} thrown at range is not. Nothing was spent.` } };
+  }
 
   // Divine Smite: checked here, paid for on the hit. 2d8 at 1st level, 1d8
   // more per slot level above to 5d8, and 1d8 more against undead and fiends.
@@ -319,6 +334,12 @@ export function planPcAttack(input: {
     return { refused: { error: checked.refused } };
   }
   const options = checked.options;
+  // A feature bonus attack's extra damage (Unwavering Mark: half the fighter
+  // level).
+  if (options.featureBonus?.damage) {
+    profile = { ...profile, damageExpression: `${profile.damageExpression}+${options.featureBonus.damage}` };
+    featNotes.push(`${options.featureBonus.feature}: +${options.featureBonus.damage} damage on a hit`);
+  }
   // Polearm Master's butt end strikes for 1d4 bludgeoning; Charger's attack
   // after a 10-foot straight run deals 5 more (the player says they ran
   // straight: charged).
@@ -346,6 +367,8 @@ export function planPcAttack(input: {
     budget,
     options,
     grantedBonusAction,
+    grantedWithActivation: built.grantedWithActivation,
+    bonusSwing: maneuver?.use === "bonus_swing" ? "Quick Toss" : undefined,
     encounterId: encounter.id,
     enemyId: enemy.id,
   });
@@ -353,6 +376,18 @@ export function planPcAttack(input: {
     return { refused: { error: spent.refused } };
   }
   budget = spent.budget;
+  // Feinting Attack is the bonus action, taken before the swing; Grappling
+  // Strike's grapple will need it after the hit.
+  if (maneuver?.use === "feint" && budget) {
+    const feint = spendAction(budget, "bonus", "Feinting Attack", sheet.name);
+    if (!feint.ok) {
+      return { refused: { error: feint.error } };
+    }
+    budget = feint.budget;
+  }
+  if (maneuver?.use === "grapple" && budget?.bonusUsed) {
+    return { refused: { error: `Grappling Strike's grapple is a bonus action, and ${sheet.name} has used theirs this turn. They can make the attack without it. Nothing was spent.` } };
+  }
   const { spendNote, notes: context0 } = spent;
 
   // Hunter's Mark and Hex ride hits on their marked creature only; moving a
@@ -420,6 +455,14 @@ export function planPcAttack(input: {
   // Rapid Strike: the advantage of this attack traded for one more attack of
   // the action, once a turn (src/lib/dm/authored-attacks.ts).
   let advantage = situation.advantage;
+  if (maneuver?.use === "feint") {
+    advantage = mergeAdvantage([advantage, "advantage"]);
+    context.notes.push("Feinting Attack: advantage on this attack, for their bonus action");
+  }
+  if (options.featureBonus?.advantage) {
+    advantage = mergeAdvantage([advantage, "advantage"]);
+    context.notes.push(`${options.featureBonus.feature}: advantage on this attack`);
+  }
   // Powerful Attacker's trade: the roll at disadvantage (feat-combat.ts).
   if (powerDisadvantage) {
     advantage = mergeAdvantage([advantage, "disadvantage"]);
@@ -489,7 +532,8 @@ export function planPcAttack(input: {
     castsSpell: spell.castsSpell,
     spellSlotLevel: spell.spellSlotLevel,
     weaponAttack,
-    ammo,
+    // Curving Shot's reroll is the same arrow.
+    ammo: options.featureBonus?.noAmmo ? null : ammo,
     typedRiders: [...folded.typedRiders, ...gear.typed, ...(curse ? [curse] : [])],
     droppedRiders,
     effectiveAc: geometry.effectiveAc,
@@ -525,6 +569,7 @@ export function planPcAttack(input: {
       luck: args.luck === true && luckPointsLeft(sheet.resources) > 0,
       poison: carriesPoison(sheet, weaponAttack, profile.damageType),
       giantKiller,
+      ...(options.featureBonus?.tempHpOnHit ? { tempHp: { amount: options.featureBonus.tempHpOnHit, feature: options.featureBonus.feature } } : {}),
     },
   };
 }

@@ -20,6 +20,7 @@ register("./lib/register-alias.mjs", import.meta.url);
 const { buildGameStateBlock, buildDmMessages, REAL_DICE_RULE } = await import(
   "../src/lib/dm/prompt.ts"
 );
+const { THIS_MOMENT_HEADING } = await import("../src/lib/prompt-boundary.ts");
 
 let passed = 0;
 function test(name, fn) {
@@ -145,6 +146,8 @@ test("human ownership and selection distinguish siblings from AI companions", ()
   assert.ok(block.includes("never an AI companion of yours"));
   assert.ok(block.includes("in a fight the one whose turn it is"));
   assert.ok(block.includes("AI companion under your control"));
+  // A player can switch the selected character on any input: the section goes in the turn-to-turn part.
+  assert.ok(block.indexOf("Players running several characters") > block.indexOf(THIS_MOMENT_HEADING));
   // A one-each table carries none of it: the window stays as it was.
   state.sheets = [makeSheet({ id: "a1", name: "A1" }), makeSheet({ id: "bot", userId: "bot-user", name: "Guide", isCompanion: true })];
   assert.equal(buildGameStateBlock(state).includes("Players running several characters"), false);

@@ -39,19 +39,35 @@ export async function runStorySetup(campaignId: string) {
     .filter(Boolean)
     .join("\n");
 
+  // A story arc the table brought in before the start (a Workshop
+  // Storyboard's, issue 249) is the plan: the seed opens it rather than
+  // inventing another one beside it.
+  const prepared = campaign.storyArc
+    ? [
+        "The table prepared this story arc before the adventure; build on it, do not replace it.",
+        campaign.storyArc.premise ? `Its premise: ${campaign.storyArc.premise}` : "",
+        `Its beats, in order:\n${campaign.storyArc.beats.map((beat, index) => `${index + 1}. ${beat.text}`).join("\n")}`,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
   const { message, error } = await requestDmMessage(
     campaign.settings,
     [
       {
         role: "system",
         content: withLanguage(
-          "You design the seed of a D&D 5e campaign. Reply with ONLY a JSON object, no code fences, shaped exactly: {\"premise\": string, \"openingScene\": string, \"secretOutline\": string}. premise: 2-3 sentences the players will read. openingScene: one sentence naming where the story opens. secretOutline: 6-10 numbered beats for the DM only, with a central antagonist, two twists, and a finale; players never see this.",
+          `You design the seed of a D&D 5e campaign. Reply with ONLY a JSON object, no code fences, shaped exactly: {"premise": string, "openingScene": string, "secretOutline": string}. premise: 2-3 sentences the players will read. openingScene: one sentence naming where the story opens. secretOutline: 6-10 numbered beats for the DM only, with a central antagonist, two twists, and a finale; players never see this.${
+            prepared
+              ? " The table has prepared a story arc: the premise restates it, the opening scene is where its first beat begins, and the secret outline follows its beats in their order, adding detail rather than a different plot."
+              : ""
+          }`,
           campaign.gameSettings.tableLanguage,
         ),
       },
       {
         role: "user",
-        content: `Difficulty: ${campaign.difficulty}. Party:\n${party}\n\n${worldHints}`,
+        content: `Difficulty: ${campaign.difficulty}. Party:\n${party}\n\n${worldHints}${prepared ? `\n\n${prepared}` : ""}`,
       },
     ],
     {},

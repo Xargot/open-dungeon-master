@@ -6,6 +6,8 @@ import { ContentImportPicker } from "@/app/workshop/ContentImportPicker";
 import { FieldLabel } from "@/app/create-campaign/fields";
 import { VoiceChatFields } from "@/app/create-campaign/VoiceChatFields";
 import type { StepProps } from "@/app/create-campaign/draft";
+import { StorySetupNotice } from "@/components/StorySetupNotice";
+import { STORY_SETUP_WARNING_COMING } from "@/lib/dm/story-setup-logic";
 
 // Step 5: the decisions a first-timer can skip. Variant rules, house rules
 // and starting lore, prep from a workshop, and live voice. Every one of
@@ -30,6 +32,17 @@ export function AdvancedStep({ draft, patch, gates }: StepProps) {
         <ContentImportPicker
           selection={draft.contentImport}
           onChange={(contentImport) => patch({ contentImport })}
+          // A Storyboard that writes the arc, at a table the AI will set up
+          // (issue 249): say so before the campaign is made.
+          storyboardNote={(arcComing) =>
+            arcComing && gates.aiNarrates && draft.aiStorySetup && !draft.storySetupKept ? (
+              <StorySetupNotice
+                text={STORY_SETUP_WARNING_COMING}
+                onTurnOff={() => patch({ aiStorySetup: false })}
+                onKeep={() => patch({ storySetupKept: true })}
+              />
+            ) : null
+          }
         />
       </div>
 

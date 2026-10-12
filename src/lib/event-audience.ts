@@ -94,6 +94,9 @@ export const EVENT_AUDIENCE: Readonly<Record<string, Audience>> = {
   // Offers and trades are party knowledge.
   item_proposal_added: TABLE,
   item_proposal_resolved: TABLE,
+  // A coordinated plan is drafted in the open, for the party to fit its
+  // moves together (issue 254); nothing in it is the DM's secret.
+  coordination_updated: TABLE,
   // A disputed ruling and its outcome: who objected and to what is the
   // table's business, and the vote is the table's.
   ruling_disputed: TABLE,

@@ -53,6 +53,10 @@ export function useBuilderOptions(keepRaceId?: string) {
   const [classes, setClasses] = useState<ClassOption[]>(srdClassOptions);
   const [backgrounds, setBackgrounds] = useState<BackgroundOption[]>(srdBackgroundOptions);
   const [packInstalled, setPackInstalled] = useState(false);
+  // Whether the rows the server offers have arrived (or failed to): until
+  // then the bundled lists stand in, and a stored pick missing from them
+  // proves nothing.
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +105,10 @@ export function useBuilderOptions(keepRaceId?: string) {
         }
       } catch {
         // SRD fallback already in state.
+      } finally {
+        if (!cancelled) {
+          setLoaded(true);
+        }
       }
     }
     load();
@@ -110,8 +118,8 @@ export function useBuilderOptions(keepRaceId?: string) {
   }, [keepRaceId, campaignId]);
 
   return useMemo(
-    () => ({ races, classes, backgrounds, packInstalled }),
-    [races, classes, backgrounds, packInstalled],
+    () => ({ races, classes, backgrounds, packInstalled, loaded }),
+    [races, classes, backgrounds, packInstalled, loaded],
   );
 }
 

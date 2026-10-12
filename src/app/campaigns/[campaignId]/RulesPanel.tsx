@@ -297,7 +297,18 @@ export function RulesPanel({
         ) : savedText ? (
           <p className="reveal whitespace-pre-wrap text-xs leading-5 text-stone-400">{savedText}</p>
         ) : (
-          (loadError ? <LoadFailed error={loadError} onRetry={() => { setLoading(true); setReloads((current) => current + 1); }} /> : loaded ? <EmptyState size="sm" art="board" title="No house rules set." /> : null)
+          (loadError ? (
+            <LoadFailed
+              error={loadError}
+              onRetry={() => { setLoading(true); setReloads((current) => current + 1); }}
+            />
+          ) : loaded ? (
+            <EmptyState
+              size="sm"
+              art="board"
+              title="No house rules set."
+            />
+          ) : null)
         )}
       </div>
 

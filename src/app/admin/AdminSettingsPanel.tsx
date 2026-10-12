@@ -9,6 +9,10 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 import { GameIcon } from "@/components/ui/GameIcon";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { AdminInvitesSection } from "@/app/admin/AdminInvitesSection";
+import { SpeedField } from "@/app/admin/SpeedField";
+import { apiSpeedEligibility } from "@/lib/speed-tier";
+import { describeEndpoint } from "@/lib/dm/sampling-logic";
+import type { SpeedChannel, SpeedNote } from "@/lib/speed-status";
 import { AdminNetworkSections } from "@/app/admin/AdminNetworkSections";
 import { AdminBackupSection } from "@/app/admin/AdminBackupSection";
 import { AdminStorageSection } from "@/app/admin/AdminStorageSection";
@@ -31,17 +35,17 @@ import {
 // world hides the section itself.
 const STOPS: Array<{ id: string; label: string; glyph: string; server?: boolean }> = [
   { id: "admin-server", label: "Server", glyph: "tab-settings", server: true },
-  { id: "admin-accounts", label: "Accounts", glyph: "tab-characters", server: true },
-  { id: "admin-text", label: "Text model", glyph: "system-lore" },
-  { id: "admin-harness", label: "Agent", glyph: "system-lore" },
-  { id: "admin-utility", label: "Utility model", glyph: "tab-log" },
-  { id: "admin-images", label: "Images", glyph: "sense-truesight" },
-  { id: "admin-speech", label: "Speech", glyph: "tab-ambience" },
-  { id: "admin-ambience", label: "Sound library", glyph: "cue-tavern" },
-  { id: "admin-voice", label: "Voice chat", glyph: "cue-horn", server: true },
+  { id: "admin-accounts", label: "Accounts", glyph: "ui-accounts", server: true },
+  { id: "admin-text", label: "Text model", glyph: "ui-ai" },
+  { id: "admin-harness", label: "Agent", glyph: "ui-agent" },
+  { id: "admin-utility", label: "Utility model", glyph: "ui-utility" },
+  { id: "admin-images", label: "Images", glyph: "ui-paint" },
+  { id: "admin-speech", label: "Speech", glyph: "ui-speech" },
+  { id: "admin-ambience", label: "Sound library", glyph: "tab-ambience" },
+  { id: "admin-voice", label: "Voice chat", glyph: "ui-voice", server: true },
   { id: "admin-discord", label: "Discord", glyph: "system-share", server: true },
-  { id: "admin-backup", label: "Backup", glyph: "tab-handout", server: true },
-  { id: "admin-storage", label: "Storage", glyph: "tab-journal" },
+  { id: "admin-backup", label: "Backup", glyph: "ui-backup", server: true },
+  { id: "admin-storage", label: "Storage", glyph: "ui-storage" },
 ];
 
 function jumpTo(id: string) {
@@ -72,6 +76,8 @@ export function AdminSettingsPanel() {
   // public address, sign-up mode, voice transport and there is no usable
   // Discord redirect, so those sections disappear and only AI settings stay.
   const [deviceWorld, setDeviceWorld] = useState(false);
+  // What the last Fast calls ran at, per role (issue 255).
+  const [speedNotes, setSpeedNotes] = useState<Partial<Record<SpeedChannel, SpeedNote>>>({});
   // A phone cannot run Ollama or a local ComfyUI install; the desktop shell
   // can, so the PC keeps the local-AI fields.
   const phoneWorld = deviceWorld && shellHost()?.platform === "android";
@@ -85,6 +91,7 @@ export function AdminSettingsPanel() {
           setEnv(data.envDefaults);
           setVoiceUnroutable(Boolean(data.voiceAnnounceUnroutable));
           setDeviceWorld(Boolean(data.deviceWorld));
+          setSpeedNotes(data.speedStatus ?? {});
         }
       });
   }, []);
@@ -132,6 +139,8 @@ export function AdminSettingsPanel() {
             utilityModel: config.text.utilityModel,
             utilityBaseUrl: config.text.utilityBaseUrl,
             ...(utilityApiKey === SECRET_KEPT ? {} : { utilityApiKey }),
+            speed: config.text.speed,
+            utilitySpeed: config.text.utilitySpeed,
           },
           images: {
             defaultBackend: config.images.defaultBackend,
@@ -226,7 +235,7 @@ export function AdminSettingsPanel() {
       )}
 
       {deviceWorld ? null : (
-        <PageSection id="admin-accounts" heading="Accounts" glyph="tab-characters">
+        <PageSection id="admin-accounts" heading="Accounts" glyph="ui-accounts">
           <SelectField
             label="New account sign-ups"
             value={config.signupMode}
@@ -313,7 +322,7 @@ export function AdminSettingsPanel() {
         </PageSection>
       )}
 
-      <PageSection id="admin-text" heading="Text model defaults" glyph="system-lore">
+      <PageSection id="admin-text" heading="Text model defaults" glyph="ui-ai">
         <p className="mb-3 text-xs text-stone-500">
           The backend every player&apos;s campaign runs on. A campaign can still pick its model,
           but only an admin&apos;s own campaigns can point at another address or key.
@@ -384,6 +393,20 @@ export function AdminSettingsPanel() {
             continuation, so a backend is proven before a campaign learns it
             the hard way. Uses the field values as typed, saved values and
             env as fallbacks. */}
+        {config.text.provider === "" || config.text.provider === "custom" ? (
+          <div className="mt-3 sm:w-1/2">
+            <SpeedField
+              label="Processing speed"
+              value={config.text.speed}
+              onChange={(speed) => setConfig({ ...config, text: { ...config.text, speed } })}
+              eligibility={apiSpeedEligibility({
+                endpointKind: describeEndpoint(config.text.customBaseUrl || env.customBaseUrl || "").kind,
+                model: config.text.customModel || env.customModel || "",
+              })}
+              note={speedNotes.story}
+            />
+          </div>
+        ) : null}
         <BackendProbe
           which="story"
           baseUrl={config.text.customBaseUrl}
@@ -399,10 +422,11 @@ export function AdminSettingsPanel() {
           onConfig={(patch) =>
             setConfig((current) => (current ? mergeAdminConfigDraft(current, patch) : current))
           }
+          speedNotes={speedNotes}
         />
       )}
 
-      <PageSection id="admin-utility" heading="Utility model (optional)" glyph="tab-log">
+      <PageSection id="admin-utility" heading="Utility model (optional)" glyph="ui-utility">
         <p className="mb-3 text-xs text-stone-500">
           A second, smaller model for the mechanical work: history compaction, chapter summaries
           and fact extraction, world-arc ticks, lore checks, and Ask answers. None of it is
@@ -458,6 +482,18 @@ export function AdminSettingsPanel() {
             onChange={setUtilityApiKey}
             hint="Most local servers need none."
           />
+          {config.text.utilityProvider === "custom" && config.text.utilityModel.trim() ? (
+            <SpeedField
+              label="Processing speed"
+              value={config.text.utilitySpeed}
+              onChange={(utilitySpeed) => setConfig({ ...config, text: { ...config.text, utilitySpeed } })}
+              eligibility={apiSpeedEligibility({
+                endpointKind: describeEndpoint(config.text.utilityBaseUrl).kind,
+                model: config.text.utilityModel,
+              })}
+              note={speedNotes.utility}
+            />
+          ) : null}
         </div>
         <BackendProbe
           which="utility"
@@ -499,12 +535,12 @@ export function AdminSettingsPanel() {
       )}
 
       {deviceWorld ? null : (
-        <PageSection id="admin-backup" heading="Backup & restore" glyph="tab-handout">
+        <PageSection id="admin-backup" heading="Backup & restore" glyph="ui-backup">
           <AdminBackupSection />
         </PageSection>
       )}
 
-      <PageSection id="admin-storage" heading="Storage" glyph="tab-journal">
+      <PageSection id="admin-storage" heading="Storage" glyph="ui-storage">
         <AdminStorageSection />
       </PageSection>
 

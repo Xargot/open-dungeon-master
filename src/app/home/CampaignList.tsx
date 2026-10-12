@@ -95,14 +95,14 @@ function SaveSlot({
   // a long press. The buttons stay: the menu is a second way, not the only one.
   const menu: ContextMenuItem[] = [
     { id: "open", label: "Open", glyph: "tab-campaigns", onSelect: () => router.push(`/campaigns/${campaign.id}`) },
-    { id: "export-html", label: "Export story: HTML page", glyph: "tab-story", separated: true, onSelect: () => downloadStory(campaign.id, "html") },
-    { id: "export-odt", label: "Export story: OpenDocument (.odt)", glyph: "tab-journal", onSelect: () => downloadStory(campaign.id, "odt") },
-    { id: "export-docx", label: "Export story: Word (.docx)", glyph: "tab-handout", onSelect: () => downloadStory(campaign.id, "docx") },
+    { id: "export-html", label: "Export story: HTML page", glyph: "ui-export", separated: true, onSelect: () => downloadStory(campaign.id, "html") },
+    { id: "export-odt", label: "Export story: OpenDocument (.odt)", glyph: "ui-export", onSelect: () => downloadStory(campaign.id, "odt") },
+    { id: "export-docx", label: "Export story: Word (.docx)", glyph: "ui-export", onSelect: () => downloadStory(campaign.id, "docx") },
     ...(steersStory(campaign, userId)
-      ? [{ id: "duplicate", label: "Duplicate", glyph: "tab-notes", separated: true, disabled: cloning, onSelect: onClone }]
+      ? [{ id: "duplicate", label: "Duplicate", glyph: "ui-duplicate", separated: true, disabled: cloning, onSelect: onClone }]
       : []),
     ...(campaign.role === "owner"
-      ? [{ id: "delete", label: "Delete", glyph: "quest-failed", tone: "danger" as const, separated: !steersStory(campaign, userId), onSelect: onDelete }]
+      ? [{ id: "delete", label: "Delete", glyph: "ui-delete", tone: "danger" as const, separated: !steersStory(campaign, userId), onSelect: onDelete }]
       : []),
   ];
   return (

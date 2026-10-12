@@ -15,7 +15,7 @@ import {
   wildShapeHours,
 } from "@/lib/srd/beast-forms";
 import { isUnlimited, matchResource, RAGING, resourceLevel } from "@/lib/srd/class-resources";
-import { incapacitatedBy, wearsHeavyArmor } from "@/lib/dm/condition-logic";
+import { effectiveMaxHp, incapacitatedBy, wearsHeavyArmor } from "@/lib/dm/condition-logic";
 import { classLevelFor, classListFor } from "@/lib/srd/multiclass";
 import { conditionEffectsFor } from "@/lib/srd/condition-effects";
 import { consumableEffect, findCarriedItem } from "@/lib/dm/item-logic";
@@ -241,6 +241,10 @@ export function computeUseResource(
     swims?: boolean;
   },
   variant?: string,
+  // The reaction gate judged the character as they stood before the hit
+  // that dropped them (a reaction that answers it, or one taken on dropping
+  // to 0): the use goes ahead at 0 hit points (issue 233).
+  reacting?: { beforeDrop?: boolean },
 ): Outcome | { error: string } {
   const def = matchResource(resourceName);
   const state = def ? sheet.resources[def.id] : undefined;
@@ -260,12 +264,13 @@ export function computeUseResource(
   if (sheet.deathSaves?.dead) {
     return { error: `${sheet.name} is dead and cannot use ${def.displayName}.` };
   }
-  if (sheet.currentHp <= 0) {
+  const standing = Boolean(reacting?.beforeDrop) && def.action === "reaction";
+  if (sheet.currentHp <= 0 && !standing) {
     return {
       error: `${sheet.name} is at 0 HP and cannot use ${def.displayName}; they are unconscious and take no actions.`,
     };
   }
-  const stoppedBy = incapacitatedBy(sheet.conditions);
+  const stoppedBy = standing ? null : incapacitatedBy(sheet.conditions);
   if (stoppedBy) {
     return {
       error: `${sheet.name} is ${stoppedBy} and cannot use ${def.displayName} until the condition ends.`,
@@ -311,24 +316,38 @@ export function computeUseResource(
     };
   }
 
-  const left = state.max - state.used;
-  if (left < amount) {
+  if (def.requires === "below_half" && sheet.currentHp >= effectiveMaxHp(sheet) / 2) {
     return {
-      error: `${sheet.name} has ${left}/${state.max} ${def.displayName} left; they cannot spend ${amount}. The feature is not available; narrate accordingly.`,
+      error: `${def.displayName} is used when ${sheet.name} has fewer than half of their hit points left, and they have ${sheet.currentHp}/${effectiveMaxHp(sheet)}. Nothing was spent.`,
+    };
+  }
+  const left = state.max - state.used;
+  // With no use left, a pool that pays for one instead (Breath of the
+  // Dragon's 2 ki).
+  const fallback = def.fallbackPool && left < amount ? def.fallbackPool : null;
+  const fallbackState = fallback ? sheet.resources[fallback.id] : undefined;
+  const paysFallback = Boolean(fallback && fallbackState && fallbackState.max - fallbackState.used >= fallback.amount);
+  if (left < amount && !paysFallback) {
+    return {
+      error: `${sheet.name} has ${left}/${state.max} ${def.displayName} left; they cannot spend ${amount}.${
+        fallback ? ` With none left it costs ${fallback.amount} ${fallback.id.replace(/_/g, " ")}, and they have ${fallbackState ? fallbackState.max - fallbackState.used : 0}.` : ""
+      } The feature is not available; narrate accordingly.`,
     };
   }
   // A feature with no limit is used, not counted down.
   const unlimited = isUnlimited(state);
-  const spent = unlimited
-    ? sheet.resources
-    : { ...sheet.resources, [def.id]: { max: state.max, used: state.used + amount } };
+  const spent = paysFallback
+    ? { ...sheet.resources, [fallback!.id]: { max: fallbackState!.max, used: fallbackState!.used + fallback!.amount } }
+    : unlimited
+      ? sheet.resources
+      : { ...sheet.resources, [def.id]: { max: state.max, used: state.used + amount } };
   const outcome: Outcome = {
     patch: { resources: spent },
     result: {
       ok: true,
       resource: def.displayName,
-      spent: amount,
-      left: unlimited ? "unlimited" : `${left - amount}/${state.max}`,
+      spent: paysFallback ? `${fallback!.amount} ${fallback!.id.replace(/_/g, " ")} (no use was left)` : amount,
+      left: unlimited ? "unlimited" : paysFallback ? `0/${state.max}` : `${left - amount}/${state.max}`,
       refills: def.recharge === "short" ? "on any rest" : "on a long rest",
       effect: def.guidance,
     },
@@ -340,7 +359,8 @@ export function computeUseResource(
   const fxLevel = resourceLevel(def, sheet);
   switch (def.effect.kind) {
     case "heal_self": {
-      const expression = def.effect.dice(fxLevel, derived.abilityMods);
+      // "halfmax": half the character's hit point maximum (Unearthly Recovery).
+      const expression = def.effect.dice(fxLevel, derived.abilityMods).replace(/\bhalfmax\b/g, String(Math.floor(effectiveMaxHp(sheet) / 2)));
       const total = rollHealing(campaign, sheet, def.displayName, expression);
       outcome.healTarget = { characterId: sheet.id, amount: Math.max(1, total) };
       outcome.result.healingRolled = total;

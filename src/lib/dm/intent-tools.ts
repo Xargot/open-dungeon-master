@@ -30,8 +30,8 @@ export const declareIntentTool: ToolDef = {
       additionalProperties: false,
       properties: {
         actor: { type: "string", description: "Exact enemyId from GAME STATE, or the enemy's name." },
-        verb: { type: "string", description: "What it plans, as the table would say it: \"Longsword\", \"Fire Breath\", \"Retreat\"." },
-        target: { type: "string", description: "characterId or name of its mark. Omit when there is no single mark." },
+        verb: { type: "string", description: "What it plans, as the table would say it ('Longsword', 'Fire Breath', 'Retreat')." },
+        target: { type: "string", description: "Its mark: exact characterId from GAME STATE, or the character's name. Omit when there is no single mark." },
         expected: { type: "number", description: "Expected damage. Omit to use the named attack's average." },
       },
       required: ["actor", "verb"],

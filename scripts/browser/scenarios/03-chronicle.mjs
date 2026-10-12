@@ -56,6 +56,9 @@ export default {
     await t.shot("reading-back");
     await t.tap(latest);
     await eventually(atBottom, { label: "the Latest button taking the reader down" });
-    await eventually(() => latest.getAttribute("data-shown").then((value) => value === null), { label: "the button sinking away at the foot" });
+    // Sunk away, the button is out of reach (aria-hidden, no height on the
+    // app's screens), so it is read without the visible filter.
+    const sunk = page.locator(`${root}.cine-chronicle-latest`).first();
+    await eventually(() => sunk.getAttribute("data-shown").then((value) => value === null), { label: "the button sinking away at the foot" });
   },
 };

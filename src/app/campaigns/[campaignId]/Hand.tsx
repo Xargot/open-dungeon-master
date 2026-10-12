@@ -2,21 +2,26 @@
 
 import { selectedCharacter, initiativeCharacter } from "@/lib/player-characters";
 
-import { ChevronDown, CircleHelp } from "lucide-react";
+import { ChevronDown, CircleHelp, SlidersHorizontal } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, Dispatch, RefObject, SetStateAction } from "react";
 import { cn } from "@/lib/cn";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { askConcentrationSwap, isConcentrationQuestion } from "@/components/concentration-prompt";
+import type { ConcentrationSwap } from "@/lib/dm/concentration-confirm-logic";
 import { HandAimBar, type HandTargetChip } from "@/app/campaigns/[campaignId]/HandAimBar";
 import { HandCardFace, HandPlayedCard } from "@/app/campaigns/[campaignId]/HandCardFace";
+import { HandArrange } from "@/app/campaigns/[campaignId]/HandArrange";
 import { HandMoreSheet } from "@/app/campaigns/[campaignId]/HandMoreSheet";
+import { useHandLayout } from "@/app/campaigns/[campaignId]/useHandLayout";
 import { HAND_TUTORIAL_ID, HandTutorial } from "@/app/campaigns/[campaignId]/HandTutorial";
 import { useHandSpells } from "@/app/campaigns/[campaignId]/HandSpells";
 import { HandReactPrompt } from "@/app/campaigns/[campaignId]/HandReactPrompt";
 import { HandPips } from "@/app/campaigns/[campaignId]/HandPips";
 import { handTargets } from "@/app/campaigns/[campaignId]/handTargets";
 import { holdPendingCards, useHandChoices, useHandPending } from "@/app/campaigns/[campaignId]/useHandChoices";
-import { deriveHand, splitHand, waitingHand, type HandCard } from "@/lib/battlemap/hand";
+import { deriveHand, waitingHand, type HandCard } from "@/lib/battlemap/hand";
+import { arrangeHand, isUrgentCard, seatPicked, startingLayout } from "@/lib/battlemap/hand-layout";
 import {
   HAND_TARGET_EVENT,
   composeSentence,
@@ -143,6 +148,12 @@ function HandInner({
     if (!sheet || !turn) return [];
     return holdPendingCards(withReactions(reactions, deriveHand(sheet, turn, { spells, trackAmmo })), waiting);
   }, [sheet, turn, reactions, spells, trackAmmo, waiting]);
+
+  // Where each card sits, the fan or "more": the player's own arrangement
+  // for this character when they have made one (issue 231).
+  const { layout, save: saveLayout } = useHandLayout(campaignId, sheet);
+  const arrangement = useMemo(() => arrangeHand(cards, layout), [cards, layout]);
+  const [arranging, setArranging] = useState(false);
 
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [targetId, setTargetId] = useState<string | null>(null);
@@ -281,19 +292,43 @@ function HandInner({
       const ending = picked.intent.card === "basic" && picked.intent.action === "end-turn";
       // End turn is the floor banner's own route; everything else is the
       // composer's POST with the card riding along as an optional field.
-      const response = ending
-        ? await fetch(`/api/campaigns/${campaignId}/encounter/end-turn`, { method: "POST" })
-        : await fetch(`/api/campaigns/${campaignId}/actions`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content: sentence, kind: "do", characterId: sheet?.id, intent: intentBody(picked, aim, attachedRiders, choices) }),
-          });
+      const post = (concentrationAck?: ConcentrationSwap) =>
+        ending
+          ? fetch(`/api/campaigns/${campaignId}/encounter/end-turn`, { method: "POST" })
+          : fetch(`/api/campaigns/${campaignId}/actions`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                content: sentence,
+                kind: "do",
+                characterId: sheet?.id,
+                intent: intentBody(picked, aim, attachedRiders, choices),
+                ...(concentrationAck ? { concentrationAck } : {}),
+              }),
+            });
+      let response = await post();
       if (!response.ok) {
         // The engine's own reason (the actions route asks canAct and the
         // cast guard before anything is posted); the card stays playable.
         const data = (await response.json().catch(() => ({}))) as { error?: string };
-        say(data.error || "Could not send your action.");
-        return;
+        // A cast that ends the spell held now is asked about first (issue
+        // 252); a no keeps it, spending nothing.
+        if (isConcentrationQuestion(response.status, data)) {
+          const ack = await askConcentrationSwap(data);
+          if (!ack) {
+            say(`Kept ${(data as { confirmConcentration?: { current?: string } }).confirmConcentration?.current ?? "your spell"}; nothing was spent.`);
+            return;
+          }
+          response = await post(ack);
+          if (!response.ok) {
+            const again = (await response.json().catch(() => ({}))) as { error?: string };
+            say(again.error || "Could not send your action.");
+            return;
+          }
+        } else {
+          say(data.error || "Could not send your action.");
+          return;
+        }
       }
       // Nothing is marked spent: the engine's count arrives with the
       // encounter. Until it moves, the same cost waits on this card.
@@ -329,9 +364,11 @@ function HandInner({
   const waitingOn = waitingHand(sheet, turn);
   const isWaiting = (card: HandCard) => card.disabled !== null && Boolean(waitingOn?.sentences.has(card.disabled));
 
-  const { fan, more } = splitHand(cards);
-  // A card chosen from behind the spine takes the last seat before End turn.
-  const shown = picked && more.includes(picked) ? [...fan.slice(0, -2), picked, fan[fan.length - 1]] : fan;
+  const { fan, more, displaced, fresh } = arrangement;
+  const urgent = fan.filter(isUrgentCard);
+  // A card chosen from behind the spine takes a seat for the moment: a free
+  // one, else the last before End turn. The arrangement is not changed by it.
+  const shown = seatPicked(fan, picked && more.includes(picked) ? picked : null);
   const middle = (shown.length - 1) / 2;
   // The mockup's 4.4 degrees between neighbours, eased off as the hand fills
   // so nine cards lean no further than five did.
@@ -377,6 +414,21 @@ function HandInner({
               className="flex size-9 items-center justify-center rounded-lg text-stone-500 hover:text-amber-200 sm:size-7"
             >
               <CircleHelp className="size-4" />
+            </button>
+          </Tooltip>
+          <Tooltip content="Customize your hand: choose which cards stay in it">
+            <button
+              type="button"
+              onClick={() => {
+                if (collapsed) writeFlag(COLLAPSED_KEY, false);
+                clearAim();
+                setArranging(true);
+                setMoreOpen(true);
+              }}
+              aria-label="Customize your hand"
+              className="flex size-9 items-center justify-center rounded-lg text-stone-500 hover:text-amber-200 sm:size-7"
+            >
+              <SlidersHorizontal className="size-4" />
             </button>
           </Tooltip>
           <Tooltip content={collapsed ? "Show your hand" : "Put your hand away. The message box stays."}>
@@ -507,7 +559,33 @@ function HandInner({
       </p>
       <HandMoreSheet
         open={moreOpen}
-        onOpenChange={setMoreOpen}
+        onOpenChange={(open) => {
+          setMoreOpen(open);
+          if (!open) setArranging(false);
+        }}
+        arranging={arranging}
+        onArrange={setArranging}
+        displaced={displaced}
+        urgent={urgent}
+        fresh={fresh}
+        arrange={
+          arranging ? (
+            <HandArrange
+              cards={cards}
+              working={startingLayout(cards, layout)}
+              arranged={arrangement.arranged}
+              urgent={urgent}
+              displaced={displaced}
+              fresh={fresh}
+              onChange={saveLayout}
+              onReset={() => saveLayout(null)}
+              onDone={() => {
+                setArranging(false);
+                if (!more.length) setMoreOpen(false);
+              }}
+            />
+          ) : null
+        }
         cards={more}
         onPick={pick}
         waitingNote={waitingOn?.note ?? null}

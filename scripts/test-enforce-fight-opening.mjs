@@ -26,6 +26,7 @@ const { test, finish } = suite("test-enforce-fight-opening");
 const world = await openWorld({ gameSettings: { ttsEnabled: false } });
 const kit = await combatKit(world);
 const { unrolledFigure, unrolledDamagePrompt } = await import("../src/lib/dm/engine-boundary.ts");
+const { THIS_MOMENT_HEADING } = await import("../src/lib/prompt-boundary.ts");
 const { getBattleMapForEncounter, listTokens } = await import("../src/lib/db/battle-maps.ts");
 const { runAsk } = await import("../src/lib/dm/ask.ts");
 
@@ -53,6 +54,9 @@ await test("A damage figure no tool rolled is found; no claim, or a figure alrea
   assert.equal(unrolledFigure([], input), null);
   const noted = [...input, { role: "user", content: "[Table note] The spikes deal 8 piercing damage to Alden Veyr." }];
   assert.equal(unrolledFigure([EIGHT], noted), null);
+  // A chat model reads the game state's turn-to-turn part as a user message; its numbers are still no table note.
+  const moment = [...input, { role: "user", content: `${THIS_MOMENT_HEADING}\nRecent rolls:\n- Alden Veyr: damage rolled 8\n\n=== END GAME STATE ===` }];
+  assert.equal(unrolledFigure([EIGHT], moment), "8 damage.");
 });
 
 // ---- the turn loop ----

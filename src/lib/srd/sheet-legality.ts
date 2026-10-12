@@ -37,7 +37,7 @@ import {
   levelHpGain,
   type HpClass,
 } from "@/lib/srd/hit-points";
-import { MULTICLASS_CAP, describePrereq, meetsPrereq } from "@/lib/srd/multiclass";
+import { MULTICLASS_CAP, describePrereq, meetsPrereq, multiclassGrantsFor } from "@/lib/srd/multiclass";
 import {
   featureAbilityGrants,
   featureHitPoints,
@@ -67,6 +67,7 @@ import { abilityProblems, baseSpans } from "@/lib/srd/legality/abilities";
 import { applyHalfFeats, halfFeatPicks, halfFeatPoints } from "@/lib/srd/legality/half-feats";
 import { judgeFeats, judgeFeatures } from "@/lib/srd/legality/features";
 import { judgeProficiencies } from "@/lib/srd/legality/proficiencies";
+import { applySubclassTraining, autoSubclassPicks, subclassFixedTraining, subclassGrants } from "@/lib/srd/subclass-training";
 import { castingClassesOf, judgeSpellcasting } from "@/lib/srd/legality/spells";
 import {
   lower,
@@ -290,6 +291,13 @@ export function legalizeSheet(input: CreateSheetInput, context: LegalityContext)
     problems,
   );
   const multiclass = classes.length > 1;
+  // What each subclass trains its character in, by its class's level (issue
+  // 251: a Life Domain cleric's heavy armor was a feature's name and never
+  // training), and the armor and weapons among it the feat prerequisites
+  // read before the training is written.
+  const subclassTraining = subclassGrants(classes, context.subclassExtras);
+  const subclassFixed = subclassFixedTraining(subclassTraining);
+  const secondClassTraining = classes.slice(1).map((entry) => multiclassGrantsFor(entry.id));
 
   // ---- improvements, feats and ability scores ----
   const earned = earnedAsiCountFor(classes);
@@ -312,13 +320,13 @@ export function legalizeSheet(input: CreateSheetInput, context: LegalityContext)
         featOf: context.featOf,
         who: {
           abilities: input.abilities,
-          armor: [...klass.armor, ...(race.armor ?? [])],
+          armor: [...klass.armor, ...(race.armor ?? []), ...secondClassTraining.flatMap((grant) => grant.armor), ...subclassFixed.armor],
           casts,
           raceId: race.id,
           raceName: race.name,
           skills: input.proficiencies.skills,
           tools: input.proficiencies.tools,
-          weapons: [...klass.weapons, ...input.proficiencies.weapons],
+          weapons: [...klass.weapons, ...input.proficiencies.weapons, ...subclassFixed.weapons],
           level,
         },
       });
@@ -499,7 +507,24 @@ export function legalizeSheet(input: CreateSheetInput, context: LegalityContext)
   if (policy.judgesPicks) {
     problems.push(...granted.problems);
   }
-  const training = granted.proficiencies;
+  // What the subclasses grant: fixed training always, their picks (a Lore
+  // bard's three skills) as featChoices records them under the feature's
+  // name, held to the grant where the feats' picks are (issue 251).
+  const bySubclass = applySubclassTraining({
+    proficiencies: granted.proficiencies,
+    grants: subclassTraining,
+    // A companion the engine drafts takes its picks on its own.
+    choices:
+      context.door === "engine"
+        ? autoSubclassPicks(subclassTraining, granted.proficiencies, input.featChoices)
+        : (input.featChoices ?? {}),
+    strict: policy.judgesPicks && context.door !== "engine",
+    abilities,
+  });
+  if (policy.judgesPicks) {
+    problems.push(...bySubclass.problems);
+  }
+  const training = bySubclass.proficiencies;
   // The spells the feats teach (src/lib/srd/feat-spells.ts): Fey Touched's
   // misty step and its pick, Magic Initiate's cantrips, Ritual Caster's
   // book. They are written into the spell lists below, on top of the

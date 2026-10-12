@@ -234,6 +234,45 @@ test("an errored tool result contributes no ground truth", () => {
   assert.equal(outcomes.toolResultCount, 0);
 });
 
+test("what each character spent is named by any tool's own arguments; refused and parked calls spent nothing", () => {
+  const exchanges = collectExchanges(
+    conversationOf([
+      { name: "use_resource", args: { characterId: "c1", resource: "Hexblade's Curse", targetEnemyId: "e1", reason: "the cleric mocked her" }, result: { ok: true, resource: "Hexblade's Curse" } },
+      { name: "use_item", args: { characterId: "c2", item: "Potion of Healing" }, result: { ok: true, healed: 7 } },
+      { name: "take_action", args: { characterId: "c2", action: "hide", bonus: true }, result: { ok: true } },
+      { name: "use_reaction", args: { characterId: "c3", feature: "Slow Fall" }, result: { ok: true } },
+      { name: "use_resource", args: { characterId: "c3", resource: "Rage" }, result: { error: "no uses left" } },
+      { name: "set_scene", args: { title: "The crypt" }, result: { ok: true } },
+      { name: "use_resource", args: { characterId: "c4", resource: "Wild Shape", form: "dire wolf", formHp: 37 }, result: { ok: true } },
+      { name: "take_action", args: { characterId: "c4", action: " ", bonus: true }, result: { ok: true } },
+    ]),
+  );
+  // A physical-dice attack parked: no result came back.
+  exchanges.push({ name: "pc_attack", arguments: JSON.stringify({ characterId: "c3", weapon: "Greataxe" }), result: null });
+  assert.deepEqual(resolveOutcomes(exchanges).spends, [
+    { characterId: "c1", name: "Hexblade's Curse" },
+    { characterId: "c2", name: "Potion of Healing" },
+    { characterId: "c2", name: "hide" },
+    { characterId: "c3", name: "Slow Fall" },
+    { characterId: "c4", name: "Wild Shape / dire wolf" },
+  ]);
+});
+
+test("a reaction spell use_reaction cast is accounted; the enemy spell a Counterspell names is not", () => {
+  const outcomes = resolveOutcomes(
+    collectExchanges(
+      conversationOf([
+        { name: "use_reaction", args: { characterId: "c2", feature: "Shield" }, result: { ok: true } },
+        { name: "use_reaction", args: { characterId: "c2", feature: "Counterspell", targetEnemyId: "e1", spell: "Fireball" }, result: { ok: true } },
+        { name: "use_reaction", args: { characterId: "c2", feature: "Hellish Rebuke" }, result: { error: "no reaction left" } },
+      ]),
+    ),
+  );
+  assert.deepEqual([...outcomes.spells].sort(), ["counterspell", "shield"]);
+  assert.deepEqual(ruleClaims([{ kind: "cast", caster: "Mira", spell: "shield", quote: "Mira casts Shield" }], outcomes), []);
+  assert.equal(ruleClaims([{ kind: "cast", caster: "Mira", spell: "fireball", quote: "Mira casts Fireball" }], outcomes).length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // Part 3: the ruling catches real contradictions
 // ---------------------------------------------------------------------------

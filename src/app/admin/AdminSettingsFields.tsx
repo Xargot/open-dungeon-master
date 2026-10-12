@@ -24,6 +24,8 @@ export type MaskedConfig = {
     utilityModel: string;
     utilityBaseUrl: string;
     hasUtilityApiKey: boolean;
+    speed: "" | "fast";
+    utilitySpeed: "" | "fast";
   };
   images: {
     defaultBackend: "" | "comfyui" | "openai" | "mflux-hs" | "sdnq-hs" | "harness";

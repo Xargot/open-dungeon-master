@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isErrorResponse, requireAdmin } from "@/lib/admin-api";
+import { speedStatus } from "@/lib/speed-status";
 import { getGlobalConfig, saveGlobalConfig } from "@/lib/db/app-settings";
 import { isDeviceWorld, serverEnv } from "@/lib/server-env";
 import { resolveSignupMode, type GlobalConfig } from "@/lib/schemas/global-config";
@@ -35,6 +36,8 @@ function maskedConfig(config: GlobalConfig) {
       utilityModel: config.text.utilityModel,
       utilityBaseUrl: config.text.utilityBaseUrl,
       hasUtilityApiKey: config.text.utilityApiKey !== "",
+      speed: config.text.speed,
+      utilitySpeed: config.text.utilitySpeed,
     },
     images: {
       defaultBackend: config.images.defaultBackend,
@@ -120,6 +123,8 @@ export async function GET() {
     envDefaults: envDefaults(),
     voiceAnnounceUnroutable: voiceAnnounceUnroutable(),
     deviceWorld: deviceWorld(),
+    // What the last Fast calls actually ran at (issue 255).
+    speedStatus: speedStatus(),
   });
 }
 
@@ -144,6 +149,8 @@ const patchSchema = z.object({
       utilityModel: z.string().trim().max(200).optional(),
       utilityBaseUrl: z.string().trim().max(500).optional(),
       utilityApiKey: z.string().trim().max(400).optional(),
+      speed: z.enum(["", "fast"]).optional(),
+      utilitySpeed: z.enum(["", "fast"]).optional(),
     })
     .optional(),
   images: z
@@ -199,6 +206,8 @@ const patchSchema = z.object({
       model: z.string().trim().max(200).optional(),
       utilityModel: z.string().trim().max(200).optional(),
       effort: z.enum(["", "low", "medium", "high", "xhigh", "max"]).optional(),
+      speed: z.enum(["", "fast"]).optional(),
+      utilitySpeed: z.enum(["", "fast"]).optional(),
       images: z.enum(["off", "native"]).optional(),
       campaigns: z.enum(["all", "admins"]).optional(),
       maxConcurrent: z.number().int().min(1).max(8).optional(),

@@ -59,6 +59,7 @@ export default function FeatChoicesFields({
   known,
   onChange,
   desc,
+  source = "feat",
 }: {
   feat: string;
   spec: FeatGrantSpec;
@@ -67,6 +68,9 @@ export default function FeatChoicesFields({
   onChange: (picks: FeatPicks) => void;
   // The feat's text, for the ability point it names (what the table applies).
   desc?: string;
+  // A subclass feature's training (src/lib/srd/subclass-training.ts) reads
+  // the same, but is applied whole: it has no "rest" the DM runs.
+  source?: "feat" | "subclass";
 }) {
   const mine = {
     languages: picks?.languages ?? [],
@@ -113,7 +117,7 @@ export default function FeatChoicesFields({
   const expertiseFrom = [...new Set([...known.skills, ...mine.skills])].filter((skill) => !heldExpertise.has(lower(skill)));
   const hasPicks = spec.languages + spec.skills + spec.expertise + spec.weapons + spec.tools + spec.any + spec.damageTypes.length > 0;
   const fixed = [
-    ...spec.fixedSkills.map(skillName),
+    ...spec.fixedSkills.map((skill) => (spec.fixedExpertise.includes(skill) ? `${skillName(skill)} (expertise)` : skillName(skill))),
     ...spec.fixedLanguages,
     ...spec.armor.map((piece) => (piece === "shields" ? "shields" : `${piece} armor`)),
     ...spec.fixedWeapons,
@@ -140,9 +144,12 @@ export default function FeatChoicesFields({
     ...(spec.damageTypes.length ? ["the damage type"] : []),
     ...(engineTag ? [`its combat rules ${engineTag}`] : []),
   ];
-  const coverage = applied.length
-    ? `The table applies ${applied.join(", ")}; the DM runs the rest from the feat's text.`
-    : "Nothing of this feat is applied by the table itself; the DM runs it from its text.";
+  const coverage =
+    source === "subclass"
+      ? "Your subclass grants this training; it goes on the sheet with the character."
+      : applied.length
+        ? `The table applies ${applied.join(", ")}; the DM runs the rest from the feat's text.`
+        : "Nothing of this feat is applied by the table itself; the DM runs it from its text.";
   if (!hasPicks && !teaches && !fixed.length) {
     return (
       <p className="mt-1 text-[11px] text-stone-500" data-feat-coverage={feat}>
@@ -207,7 +214,7 @@ export default function FeatChoicesFields({
     });
   return (
     <div className="mt-2 space-y-2 rounded-lg border border-amber-900/40 bg-amber-950/10 p-2.5" data-feat-choices={feat}>
-      <p className="text-xs text-amber-200/90">{feat} choices</p>
+      <p className="text-xs text-amber-200/90">{hasPicks || teaches ? `${feat} choices` : feat}</p>
       {spec.any > 0 ? (
         <p className="text-[11px] text-stone-400" data-feat-shared={feat}>
           Any {spec.any} of {spec.anyKinds.map((kind) => (kind === "armor" ? "shields" : kind)).join(", ")}, in any combination
@@ -239,10 +246,10 @@ export default function FeatChoicesFields({
       {slots("skills") > 0 ? (
         <div>
           <span className="mb-1 block text-[11px] text-stone-400">
-            Skill proficiency ({spec.anyKinds.includes("skills") ? `up to ${slots("skills")}` : `${spec.skills} of your choice`}){mine.skills.length < spec.skills ? <span className="text-amber-300"> · {spec.skills - mine.skills.length} still to choose</span> : null}
+            Skill proficiency ({spec.anyKinds.includes("skills") ? `up to ${slots("skills")}` : `${spec.skills} of your choice`}{spec.pickedExpertise ? ", with expertise" : ""}){mine.skills.length < spec.skills ? <span className="text-amber-300"> · {spec.skills - mine.skills.length} still to choose</span> : null}
           </span>
           <div className="flex flex-wrap gap-1.5">
-            {SRD_SKILLS.filter((skill) => !heldSkills.has(skill.id)).map((skill) => (
+            {SRD_SKILLS.filter((skill) => !heldSkills.has(skill.id) && (!spec.skillsFrom.length || spec.skillsFrom.includes(skill.id))).map((skill) => (
               <PickPill
                 key={skill.id}
                 label={skill.name}

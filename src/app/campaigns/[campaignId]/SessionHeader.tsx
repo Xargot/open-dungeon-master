@@ -263,7 +263,7 @@ export const SessionHeader = memo(function SessionHeader({
               narration.setMuted(!narration.muted);
             }}
             onVolume={(value) => narration.setVolume(value)}
-            glyph="cue-horn"
+            glyph="ui-speech"
           />
         ) : null}
         {ambienceEnabled ? <SoundControl ambience={ambience} steering={sound} /> : null}

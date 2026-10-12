@@ -28,6 +28,13 @@ import {
 import type { CampaignState } from "@/app/campaigns/[campaignId]/useCampaignStream";
 import { navigateTo } from "@/lib/navigation";
 import { SceneBackdrop } from "@/app/campaigns/[campaignId]/CinematicParts";
+import { StorySetupNotice } from "@/components/StorySetupNotice";
+import {
+  STORY_SETUP_WARNING,
+  STORY_SETUP_WARNING_COMING,
+  storySetupKeptKey,
+  storySetupWillRun,
+} from "@/lib/dm/story-setup-logic";
 
 // The companion builder carries the whole character builder (spells,
 // gear, the portrait cropper); it and the campaign editor load when they
@@ -56,6 +63,26 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
   const [buildingCompanion, setBuildingCompanion] = useState(false);
   const [contentImport, setContentImport] = useState<ImportSelection>(EMPTY_SELECTION);
   const [error, setError] = useState("");
+  // AI Story Setup meeting an imported Storyboard (issue 249): whether this
+  // creator chose to keep it on (remembered per table on this device), and
+  // the turn-off request in flight.
+  const [storySetupKept, setStorySetupKept] = useState(false);
+  const [storySetupBusy, setStorySetupBusy] = useState(false);
+  const [storySetupError, setStorySetupError] = useState("");
+  const keptCampaignId = campaign?.id ?? "";
+  useEffect(() => {
+    if (!keptCampaignId) {
+      return;
+    }
+    let kept = false;
+    try {
+      kept = window.localStorage.getItem(storySetupKeptKey(keptCampaignId)) === "1";
+    } catch {
+      // Storage refused: the warning simply shows again.
+    }
+    const timer = window.setTimeout(() => setStorySetupKept(kept), 0);
+    return () => window.clearTimeout(timer);
+  }, [keptCampaignId]);
   const [canAssignSeats, setCanAssignSeats] = useState(false);
   // Bumped after a seat move so the canAssign answer is re-asked: handing the
   // DM seat away can revoke the mover's own right to move it again.
@@ -168,6 +195,46 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
     resolveCompanionMode(campaign.gameSettings, partySize, humanDmTable) === "full" &&
     partyCompanions.length < campaign.gameSettings.maxCompanions;
   const showCompanions = canBuildCompanion || (steersStory && partyCompanions.length > 0);
+  // AI Story Setup meeting the table's prep (issue 249): the one-time pass
+  // is still to run at a table the AI narrates, and either an imported
+  // Storyboard already wrote the arc (state.prepArc, told only to whoever
+  // steers) or the board picked under "Bring in prep" is about to.
+  const setupWillRun =
+    steersStory &&
+    !storySetupKept &&
+    storySetupWillRun({
+      status: campaign.status,
+      dmMode: campaign.gameSettings.dmMode,
+      aiStorySetup: campaign.gameSettings.aiStorySetup,
+      outlineWritten: false,
+    });
+  async function turnOffStorySetup() {
+    setStorySetupBusy(true);
+    setStorySetupError("");
+    try {
+      const response = await fetch(`/api/campaigns/${campaign!.id}/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ aiStorySetup: false }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        setStorySetupError(data.error || "Could not change the setting.");
+      }
+    } catch {
+      setStorySetupError("Could not reach the server.");
+    } finally {
+      setStorySetupBusy(false);
+    }
+  }
+  function keepStorySetup() {
+    try {
+      window.localStorage.setItem(storySetupKeptKey(campaign!.id), "1");
+    } catch {
+      // Storage refused: it is kept for this visit only.
+    }
+    setStorySetupKept(true);
+  }
   // Why the adventure cannot open yet, or "" when it can. The server's PATCH
   // asks the same function of the same seats, so the Begin button is enabled
   // exactly when the route would accept it.
@@ -411,6 +478,16 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
                 ))}
               </div>
             ) : null}
+            {setupWillRun && state.prepArc ? (
+              <StorySetupNotice
+                text={STORY_SETUP_WARNING}
+                busy={storySetupBusy}
+                error={storySetupError}
+                onTurnOff={() => void turnOffStorySetup()}
+                onKeep={keepStorySetup}
+                className="mb-3"
+              />
+            ) : null}
             <LobbyActions
               campaign={campaign}
               myMember={myMember}
@@ -455,6 +532,17 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
                   selection={contentImport}
                   onChange={setContentImport}
                   onImported={refresh}
+                  storyboardNote={(arcComing) =>
+                    arcComing && setupWillRun ? (
+                      <StorySetupNotice
+                        text={STORY_SETUP_WARNING_COMING}
+                        busy={storySetupBusy}
+                        error={storySetupError}
+                        onTurnOff={() => void turnOffStorySetup()}
+                        onKeep={keepStorySetup}
+                      />
+                    ) : null
+                  }
                 />
               </div>
             ) : null}

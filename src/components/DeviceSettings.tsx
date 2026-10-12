@@ -346,7 +346,7 @@ function MicrophoneSection({ devices }: { devices: ReturnType<typeof useDevices>
   const meter = useMicMeter(micId, gain);
   return (
     <section>
-      <SectionHead title="Microphone" glyph="cue-horn" />
+      <SectionHead title="Microphone" glyph="ui-voice" />
       <div className="space-y-3">
         <div>
           <span className={cn(LABEL, "mb-1 block")}>Recording device</span>

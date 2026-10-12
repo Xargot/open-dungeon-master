@@ -106,3 +106,141 @@ test("canResolveProposal permissions", () => {
 });
 
 console.log(`test-item-proposals: ${passed} tests passed`);
+
+// ---- settling an offer with the DM (issue 239) ----
+import {
+  appliedOutcome,
+  DUPLICATE_OFFER_WINDOW_MS,
+  duplicateOfferProblem,
+  offerKey,
+  offerLineStatus,
+  offerPrecheck,
+  OFFER_NOTE_PREFIX,
+  parseOfferArgs,
+  renderOffersBlock,
+  resolutionNote,
+} from "../src/lib/dm/proposal-logic.ts";
+
+let settled = 0;
+function check(name, fn) {
+  fn();
+  settled += 1;
+}
+
+const nysa = { name: "Nysa", equipment: [{ name: "Dart", qty: 10 }, { name: "Rope", qty: 1 }], gold: 5, copper: 50 };
+
+check("a removal of what is not carried, or of more than carried, is refused before any offer", () => {
+  assert.match(offerPrecheck("remove_item", { name: "Longsword" }, nysa), /does not carry "Longsword"/);
+  assert.match(offerPrecheck("remove_item", { name: "dart", qty: 11 }, nysa), /carries only 10 dart/);
+  assert.equal(offerPrecheck("remove_item", { name: "Dart", qty: 10 }, nysa), null);
+  assert.equal(offerPrecheck("remove_item", { name: "DART" }, nysa), null);
+});
+
+check("coin is never prechecked: modify_gold floors at zero and a purchase is priced by the shelf", () => {
+  assert.equal(offerPrecheck("modify_gold", { delta: -600 }, nysa), null);
+  assert.equal(offerPrecheck("purchase", { item: "Lantern", price: 600, action: "buy" }, nysa), null);
+});
+
+check("a sale checks the pack; a buy is left to the shelf", () => {
+  assert.match(offerPrecheck("purchase", { item: "Lantern", price: 1, action: "sell" }, nysa), /does not carry "Lantern" to sell/);
+  assert.match(offerPrecheck("purchase", { item: "Rope", price: 1, qty: 2, action: "sell" }, nysa), /carries only 1 Rope/);
+  assert.equal(offerPrecheck("purchase", { item: "Rope", price: 1, action: "sell" }, nysa), null);
+});
+
+check("only the first row by that name counts, as a removal takes it", () => {
+  const twins = { ...nysa, equipment: [{ name: "Silver ring", qty: 1 }, { name: "Silver ring", qty: 1, identified: false }] };
+  assert.match(offerPrecheck("remove_item", { name: "Silver ring", qty: 2 }, twins), /carries only 1 Silver ring/);
+  assert.deepEqual(parseOfferArgs('{"name":"Rope"}'), { name: "Rope" });
+  assert.deepEqual(parseOfferArgs("[1]"), {});
+  assert.deepEqual(parseOfferArgs("not json"), {});
+});
+
+check("grants and vitals pass the precheck; it is about what cannot apply", () => {
+  assert.equal(offerPrecheck("grant_item", { name: "Coin purse" }, nysa), null);
+  assert.equal(offerPrecheck("apply_damage", { amount: 3 }, nysa), null);
+});
+
+check("an offer's key is what it is, not who made it or when", () => {
+  assert.equal(offerKey("grant_item", { name: "Coin Purse", qty: 1 }), offerKey("grant_item", { name: "coin purse" }));
+  assert.notEqual(offerKey("grant_item", { name: "Coin purse", qty: 2 }), offerKey("grant_item", { name: "Coin purse" }));
+  assert.notEqual(offerKey("grant_item", { name: "ring", unidentified: true }), offerKey("grant_item", { name: "ring" }));
+  assert.equal(offerKey("modify_gold", { delta: 15 }), offerKey("modify_gold", { delta: 15, reason: "loot" }));
+  assert.equal(offerKey("apply_damage", { amount: 3 }), null);
+});
+
+const now = Date.parse("2026-10-11T18:00:00Z");
+const at = (minutesAgo) => new Date(now - minutesAgo * 60_000).toISOString();
+const character = { id: "nysa", name: "Nysa" };
+const recent = (status, minutesAgo, args = { name: "Coin purse", qty: 1 }, toolName = "grant_item") => ({
+  toolName,
+  characterId: "nysa",
+  argsJson: JSON.stringify({ characterId: "nysa", ...args }),
+  status,
+  createdAt: at(minutesAgo + 1),
+  resolvedAt: status === "pending" ? null : at(minutesAgo),
+});
+
+check("the same loot again just after it was accepted is refused, with the reason", () => {
+  const problem = duplicateOfferProblem("grant_item", { name: "coin purse" }, character, [recent("approved", 2)], now);
+  assert.match(problem, /already accepted "Give coin purse to Nysa" 2 minutes ago/);
+  assert.match(problem, /additional: true/);
+  // Said to be another, it passes; so does the same loot much later.
+  assert.equal(duplicateOfferProblem("grant_item", { name: "coin purse", additional: true }, character, [recent("approved", 2)], now), null);
+  assert.equal(duplicateOfferProblem("grant_item", { name: "coin purse" }, character, [recent("approved", DUPLICATE_OFFER_WINDOW_MS / 60_000 + 1)], now), null);
+  // A different item, a different character, a declined offer: no bar.
+  assert.equal(duplicateOfferProblem("grant_item", { name: "Rope" }, character, [recent("approved", 2)], now), null);
+  assert.equal(duplicateOfferProblem("grant_item", { name: "coin purse" }, { id: "kael", name: "Kael" }, [recent("approved", 2)], now), null);
+  assert.equal(duplicateOfferProblem("grant_item", { name: "coin purse" }, character, [recent("declined", 2)], now), null);
+});
+
+check("while an identical offer still waits, a second one is refused, additional or not", () => {
+  assert.match(duplicateOfferProblem("grant_item", { name: "Coin purse" }, character, [recent("pending", 1)], now), /still waiting for Nysa's player/);
+  assert.match(duplicateOfferProblem("grant_item", { name: "Coin purse", additional: true }, character, [recent("pending", 1)], now), /still waiting/);
+  assert.match(duplicateOfferProblem("modify_gold", { delta: 15 }, character, [recent("approved", 1, { delta: 15 }, "modify_gold")], now), /that coin is claimed/);
+  // Vitals are never barred: a second blow is its own.
+  assert.equal(duplicateOfferProblem("apply_damage", { amount: 3 }, character, [recent("pending", 1, { amount: 3 }, "apply_damage")], now), null);
+});
+
+check("what applying an offer left on the sheet, in a sentence", () => {
+  const after = { name: "Nysa", equipment: [{ name: "Coin purse", qty: 2 }], gold: 12, copper: 5, currentHp: 7, maxHp: 15, tempHp: 0, conditions: ["poisoned"] };
+  assert.equal(appliedOutcome("grant_item", { name: "Coin purse" }, after), "Nysa now carries Coin purse x2.");
+  assert.equal(appliedOutcome("remove_item", { name: "Dart" }, after), "Nysa no longer carries any Dart.");
+  assert.equal(appliedOutcome("remove_item", { name: "Coin purse" }, after), "Nysa still carries Coin purse x2.");
+  assert.equal(appliedOutcome("modify_gold", { delta: 7 }, after), "Nysa's purse now holds 12 gp 5 cp.");
+  assert.equal(appliedOutcome("apply_damage", { amount: 8 }, after), "Nysa is at 7/15 hit points.");
+  assert.equal(appliedOutcome("heal", { amount: 8 }, { ...after, tempHp: 3 }), "Nysa is at 7/15 hit points with 3 temporary.");
+  assert.equal(appliedOutcome("set_condition", { condition: "Poisoned" }, after), "Nysa is now Poisoned.");
+  assert.equal(appliedOutcome("clear_condition", { condition: "poisoned" }, after), "Nysa is no longer poisoned.");
+});
+
+check("the chronicle's line for each way an offer settles", () => {
+  assert.equal(resolutionNote({ status: "approved", summary: "Give Coin purse to Nysa", characterName: "Nysa", outcome: "Nysa now carries Coin purse." }), "Nysa accepted the offer: Give Coin purse to Nysa. Nysa now carries Coin purse.");
+  assert.equal(resolutionNote({ status: "approved", summary: "Give Coin purse to Nysa", characterName: "Nysa", byLead: true }), "The lead accepted the offer for Nysa: Give Coin purse to Nysa.");
+  assert.equal(resolutionNote({ status: "declined", summary: "Take Dart x10 from Nysa", characterName: "Nysa" }), "Nysa declined the offer: Take Dart x10 from Nysa. Nothing changed.");
+  assert.equal(resolutionNote({ status: "cancelled", summary: "Give Rope to Nysa", characterName: "Nysa" }), "The lead withdrew the offer: Give Rope to Nysa. Nothing changed.");
+  assert.equal(resolutionNote({ status: "cancelled", summary: "Ann offers Bo a Ruby", characterName: "Bo", withdrawnBy: "Ann" }), "Ann withdrew the offer: Ann offers Bo a Ruby. Nothing changed.");
+  assert.equal(resolutionNote({ status: "failed", summary: "Take Dart from Nysa", characterName: "Nysa", outcome: 'Nysa does not carry "Dart".' }), 'The offer "Take Dart from Nysa" could not be applied (Nysa does not carry "Dart"). Nothing changed.');
+  assert.equal(resolutionNote({ status: "expired", summary: "Give Rope to Nysa", characterName: "Nysa" }), "The offer lapsed unanswered: Give Rope to Nysa. Nothing changed.");
+  assert.ok(OFFER_NOTE_PREFIX.startsWith("["));
+});
+
+check("the game state's offers block: what waits, what was settled and how; nothing when there is nothing", () => {
+  assert.equal(renderOffersBlock([]), "");
+  const block = renderOffersBlock([
+    { summary: "Give Rope to Nysa", characterName: "Nysa", status: "pending", outcome: "", minutesAgo: null },
+    { summary: "Give Coin purse to Nysa", characterName: "Nysa", status: "approved", outcome: "Nysa now carries Coin purse.", minutesAgo: 2 },
+    { summary: "Take Dart x10 from Nysa", characterName: "Nysa", status: "declined", outcome: "", minutesAgo: 0 },
+    { summary: "Take Dart from Nysa", characterName: "Nysa", status: offerLineStatus("declined", 'failed: Nysa does not carry "Dart".'), outcome: 'failed: Nysa does not carry "Dart".', minutesAgo: 5 },
+    { summary: "Give Lantern to Nysa", characterName: "Nysa", status: "cancelled", outcome: "", minutesAgo: 9 },
+  ]);
+  assert.match(block, /^Offers to players/);
+  assert.match(block, /WAITING on Nysa's player: Give Rope to Nysa\. Do not offer it again/);
+  assert.match(block, /ACCEPTED 2 min ago and applied: Give Coin purse to Nysa\. Nysa now carries Coin purse\. Already settled/);
+  assert.match(block, /DECLINED just now: Take Dart x10 from Nysa\. Nothing changed/);
+  assert.match(block, /COULD NOT BE APPLIED 5 min ago: Take Dart from Nysa \(Nysa does not carry "Dart"\)/);
+  assert.match(block, /WITHDRAWN by the lead 9 min ago: Give Lantern to Nysa/);
+  assert.equal(offerLineStatus("declined", ""), "declined");
+  assert.equal(offerLineStatus("approved", "Nysa now carries Rope."), "approved");
+});
+
+console.log(`test-item-proposals (settling): ${settled} tests passed`);

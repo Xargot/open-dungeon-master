@@ -61,7 +61,8 @@ const roster = [kara, brom, sage, mage, rhea, pip];
 // The GAME STATE line the model reads first; the refusal is the backstop.
 const WAITING = (name) =>
   `Waiting on ${name}'s player: they have not declared an action this turn. Set the scene and ask what ${name} does; the server refuses any action or end_turn for ${name} until they do.`;
-const systemPrompt = (request) => request.messages.find((message) => message.role === "system").content;
+// Everything the model was given: a chat model reads GAME STATE's turn-to-turn part after the history.
+const promptText = (request) => request.messages.map((message) => message.content ?? "").join("\n\n");
 
 const REFUSAL = (name) =>
   `${name} has not acted: their player hasn't declared an action this turn, and nothing was spent. Don't narrate an attempt; wait for them to say what ${name} does, or narrate the moment and stop.`;
@@ -236,7 +237,7 @@ await test("Kara presses End Turn and the DM turn that opens Brom's turn attacks
   world.dice(15, 4, 15, 4);
   await startDmTurn(world.campaignId);
   world.clearDice();
-  assert.ok(systemPrompt(model.requests[0]).includes(WAITING("Brom")), "GAME STATE did not say the turn waits on Brom's player");
+  assert.ok(promptText(model.requests[0]).includes(WAITING("Brom")), "GAME STATE did not say the turn waits on Brom's player");
   const answered = model.results(model.requests[1]).find((entry) => entry.id === swing.id);
   assert.equal(answered.result.error, REFUSAL("Brom"));
   assert.equal(spendable().replace(/"rolls":\d+/, ""), before.replace(/"rolls":\d+/, ""));
@@ -270,7 +271,7 @@ await test("A line through the actions route (the chat box, or an agent piloting
   assert.equal(posted.status, 202, JSON.stringify(posted.json));
   await globalThis.__odmDmQueues.get(world.campaignId);
   world.clearDice();
-  assert.ok(!systemPrompt(model.requests[0]).includes("Waiting on Brom's player"), "GAME STATE still waits on a player who spoke");
+  assert.ok(!promptText(model.requests[0]).includes("Waiting on Brom's player"), "GAME STATE still waits on a player who spoke");
   const answered = model.results(model.requests[1]).find((entry) => entry.id === swing.id);
   assert.equal(answered.result.ok, true, answered.result.error);
   await stage(brom);

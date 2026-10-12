@@ -225,6 +225,12 @@ export function contentSlug(name: string): string {
 const flagged = (value: unknown) =>
   value === true || value === 1 || (typeof value === "string" && /^(yes|true)$/i.test(value.trim()));
 
+// Whether a spell's row says it takes concentration (a pack's "yes", a
+// homebrew row's true): the spell tiles mark it (issue 252).
+export function spellRowConcentrates(data: Record<string, unknown> | undefined): boolean {
+  return Boolean(data && flagged(data.concentration));
+}
+
 // The one-line summary shown under a spell's name in a picker: level, school
 // and the flags that change how it is cast.
 export function spellSummary(data: Record<string, unknown> | undefined): string {

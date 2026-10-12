@@ -59,7 +59,7 @@ export const checkTools: ToolDef[] = [
     function: {
       name: "group_check",
       description:
-        "Resolve one skill (or raw ability) check attempted by several characters at once: the party sneaking past a sentry together, everyone fording a river, the whole group searching a room. The server rolls each named character from their real sheet and applies the 5e rule that the GROUP succeeds only if at least half of them succeed, then reports who passed. Call this instead of a string of separate request_roll calls, BEFORE narrating the outcome, and narrate exactly what it reports.",
+        "Resolve one skill (or raw ability) check attempted by several characters at once. The server rolls each named character from their real sheet and reports who passed. Call it BEFORE narrating the outcome; narrate exactly what it reports.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -78,14 +78,14 @@ export const checkTools: ToolDef[] = [
             type: "array",
             items: { type: "string" },
             description:
-              "Exact characterIds taking part. Omit to include the whole party.",
+              "Exact characterIds from GAME STATE taking part. Omit to include the whole party.",
           },
           difficulty: {
             type: "string",
             enum: [...DIFFICULTY_ENUM],
             description: "How hard the shared task is; the server sets the DC. Prefer this over dc.",
           },
-          dc: { type: "integer", description: "An exact DC, only when a specific number is needed." },
+          dc: { type: "integer", description: "An exact DC, only when a specific number is called for." },
           reason: { type: "string", description: "Short note on what the group is attempting." },
         },
         required: [],
@@ -97,7 +97,7 @@ export const checkTools: ToolDef[] = [
     function: {
       name: "check_notice",
       description:
-        "Decide who PASSIVELY notices a hidden thing the party is not actively searching for: a trap, a concealed door, an ambusher lying in wait, a lie in an NPC's words. No dice are rolled; the server compares every character's passive score (Perception, Insight, or Investigation) against how hard the thing is to spot and reports who catches it; the unconscious notice nothing, and the pace and the light count for Perception. Call this BEFORE you reveal or withhold the hidden thing, and narrate only what the noticing characters could know. Never just declare that the party does or does not spot something hidden.",
+        "Decide who PASSIVELY notices a hidden thing the party is not actively searching for. The unconscious notice nothing, and the pace and the light count for Perception.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -106,13 +106,13 @@ export const checkTools: ToolDef[] = [
             type: "string",
             enum: ["perception", "insight", "investigation"],
             description:
-              "Which passive score decides it: perception (traps, ambushers, sounds), insight (a lie, a hidden motive), investigation (a concealed mechanism or clue). Default perception.",
+              "Which passive score decides it: perception (traps, ambushers, sounds), insight (a lie, a hidden motive), investigation (a concealed mechanism or clue). Default 'perception'.",
           },
           by: {
             type: "string",
             enum: ["sight", "hearing"],
             description:
-              "Perception only: whether the thing is seen (the default) or heard. Off the battle map the server applies the light of the place (dim light -5, and in darkness a character with no darkvision and no lit torch or lantern sees nothing) and a fast travel pace -5; a sound ignores the light.",
+              "Perception only: whether the thing is seen or heard. Default 'sight'. Off the battle map the server applies the light of the place (dim light -5, and in darkness a character with no darkvision and no lit torch or lantern sees nothing) and a fast travel pace -5; a sound ignores the light.",
           },
           light: {
             type: "string",
@@ -123,7 +123,7 @@ export const checkTools: ToolDef[] = [
           againstEnemyId: {
             type: "string",
             description:
-              "A creature hiding (or lying, for insight) that the server rolls for: its own Stealth (or Deception) check from its stat block becomes the DC. An enemy of the running fight; out of a fight use againstMonster.",
+              "A creature of the running fight hiding (or lying, for insight), exact enemyId from GAME STATE: the server rolls its own Stealth (or Deception) check from its stat block as the DC. Out of a fight, use againstMonster.",
           },
           againstMonster: {
             type: "string",
@@ -134,11 +134,11 @@ export const checkTools: ToolDef[] = [
             enum: [...DIFFICULTY_ENUM],
             description: "How hard the thing is to spot; the server sets the DC. Prefer this over dc.",
           },
-          dc: { type: "integer", description: "An exact spot DC, only when a specific number is needed." },
+          dc: { type: "integer", description: "An exact spot DC, only when a specific number is called for." },
           characterIds: {
             type: "array",
             items: { type: "string" },
-            description: "Exact characterIds who could notice. Omit to test the whole party.",
+            description: "Exact characterIds from GAME STATE who could notice. Omit to test the whole party.",
           },
           reason: { type: "string", description: "Short note on the hidden thing." },
         },

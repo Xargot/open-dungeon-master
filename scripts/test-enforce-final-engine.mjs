@@ -569,7 +569,7 @@ await test("The prompt and the tool schemas name the final round's subclass hook
   const reaction = offered("use_reaction");
   assert.ok(reaction.parameters.properties.x && reaction.parameters.properties.y, "use_reaction takes no square");
   for (const name of ["Tipsy Sway", "Skirmisher", "Relentless Avenger"]) {
-    assert.ok(reaction.description.includes(name), `use_reaction never names ${name}`);
+    assert.ok(JSON.stringify(reaction).includes(name), `use_reaction never names ${name}`);
   }
   const resource = JSON.stringify(offered("use_resource"));
   for (const name of ["Summon Wildfire Spirit", "Gathered Swarm", "Arcane Jolt"]) {

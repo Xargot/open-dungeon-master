@@ -11,6 +11,7 @@ import {
   characterPlaceholder,
   monsterPlaceholder,
   type CharacterLook,
+  type MonsterLook,
 } from "@/lib/placeholders";
 
 // The arcane-night visual vocabulary, shared by every surface: gold-foil
@@ -89,14 +90,15 @@ export function PixelTile({
   );
 }
 
-// A monster's picture when nobody has painted one: the placeholder plate for
-// its SRD creature type (scripts/placeholder-set.mjs renders one per type),
-// or the genre's boss plate when its challenge rating says it is the
-// centrepiece of a fight. Anything unrecognised draws the monstrosity plate,
+// A monster's picture when nobody has painted one: its creature family's
+// plate when there is one (a lich, an owlbear), else the genre's boss plate
+// when its challenge rating says it is the centrepiece of a fight, else the
+// placeholder plate for its SRD creature type (scripts/placeholder-set.mjs
+// renders one per type). Anything unrecognised draws the monstrosity plate,
 // which promises least. The rules live in src/lib/placeholders.ts.
 export function monsterThumbnail(
   type: string | null | undefined,
-  options: { cr?: number | null; genre?: string | null; seed?: string | null } = {},
+  options: MonsterLook = {},
 ): string {
   return monsterPlaceholder(type, options);
 }
@@ -105,11 +107,15 @@ export function monsterThumbnail(
 // the creature type off the stat block or the bestiary entry; `cr` and
 // `genre` only matter for the boss and genre plates, and `seed` (a slug or
 // a name) keeps a monster on the same plate where a genre offers two.
+// `slug` (the SRD slug it fights as) and `name` (what the table calls it)
+// pick a creature-family plate where one is painted.
 export function MonsterTile({
   type,
   cr,
   genre,
   seed,
+  slug,
+  name,
   art,
   size = "size-9",
   className,
@@ -118,6 +124,8 @@ export function MonsterTile({
   cr?: number | null;
   genre?: string | null;
   seed?: string | null;
+  slug?: string | null;
+  name?: string | null;
   // A picture of this monster in particular (a world pack's own art, from
   // BestiaryEntry.art), which beats any plate.
   art?: string | null;
@@ -126,7 +134,7 @@ export function MonsterTile({
 }) {
   return (
     <PixelTile
-      src={art || monsterThumbnail(type, { cr, genre, seed })}
+      src={art || monsterThumbnail(type, { cr, genre, seed, slug, name })}
       size={size}
       className={className}
     />

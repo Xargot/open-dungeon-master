@@ -1,5 +1,6 @@
 "use client";
 
+import { extraTurnTag } from "@/lib/battlemap/initiative-rows";
 import { Keyboard, LocateFixed, Lock, Maximize2, Unlock, Users, ZoomIn, ZoomOut } from "lucide-react";
 import { useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
@@ -225,7 +226,7 @@ export function BoardOrderDialog({
                 enemy={entry.kind === "enemy"}
                 className="size-7 rounded-full border border-stone-700"
               />
-              <span className="min-w-0 flex-1 truncate">{entry.name}{entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300" title="Thief's Reflexes: a second turn this round">2nd</sup> : null}</span>
+              <span className="min-w-0 flex-1 truncate">{entry.name}{entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300" title={extraTurnTag(entry)?.title}>{extraTurnTag(entry)?.short}</sup> : null}</span>
               {index === encounter.turnIndex ? (
                 <span className="text-[10px] uppercase tracking-wide text-amber-300">up now</span>
               ) : null}
@@ -310,7 +311,7 @@ export function BoardOrderStrip({ encounter, faceOf }: { encounter: PublicEncoun
           />
           {entry.name}
           {entry.hidden ? " (hidden)" : ""}
-          {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300" title="Thief's Reflexes: a second turn this round">2nd</sup> : null}
+          {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300" title={extraTurnTag(entry)?.title}>{extraTurnTag(entry)?.short}</sup> : null}
         </li>
       ))}
     </ol>

@@ -119,7 +119,7 @@ export function VoicePanel({
   if (!voice.available) {
     return (
       <div className="panel flex items-start gap-3 rounded-xl px-4 py-3">
-        <GameIcon icon={{ kind: "glyph", key: "cue-turn" }} size="size-9" className="opacity-60 grayscale" />
+        <GameIcon icon={{ kind: "glyph", key: "ui-voice" }} size="size-9" className="opacity-60 grayscale" />
         <div className="min-w-0">
           <p className="font-display text-sm tracking-wide text-stone-300">Voice chat is off</p>
           <p className="mt-0.5 text-xs text-stone-500">
@@ -154,7 +154,7 @@ export function VoicePanel({
     <div className={cn("panel rounded-xl", compact ? "p-3" : "p-4")}>
       <SectionHead
         title="Voice"
-        glyph="cue-turn"
+        glyph="ui-voice"
         level="h3"
         className="mb-2"
         aside={

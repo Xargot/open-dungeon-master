@@ -1,4 +1,5 @@
 import { getDatabase, nowIso, parseJson } from "@/lib/db/core";
+import { publishPersisted } from "@/lib/events";
 
 // Story chapters: closed spans of the campaign transcript, each with an AI
 // title, summary, and highlights. Exactly one chapter per campaign is open
@@ -132,7 +133,12 @@ export function ensureOpenChapter(campaignId: string): Chapter {
       VALUES (?, ?, ?, ?, 'open', ?, ?)
     `,
   ).run(id, campaignId, (last?.chapter_index ?? 0) + 1, (last?.seq_end ?? -1) + 1, now, now);
-  return getChapter(id)!;
+  const chapter = getChapter(id)!;
+  // A table whose snapshot was taken before this chapter existed (a campaign
+  // just started, where the setup jobs run first) learns of it the way it
+  // learns of every other chapter change, instead of at its next reload.
+  publishPersisted(campaignId, "chapter_updated", { chapter });
+  return chapter;
 }
 
 // Closes the open chapter with its generated title/summary/highlights and

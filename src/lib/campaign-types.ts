@@ -1,4 +1,5 @@
 import type { CampaignKind } from "@/lib/workshop/kind";
+import { OFFER_NOTE_PREFIX } from "@/lib/dm/proposal-logic";
 
 export type SessionUser = {
   id: string;
@@ -130,6 +131,18 @@ export const DM_HALTED_PREFIX = "The DM ran into a problem: ";
 // message lands after it (the DM had its "next natural moment").
 export const JOIN_NOTE_PREFIX = "[New adventurer] ";
 
+// A system line as a reader shows it: the markers the DM reads (a joiner,
+// a settled offer) come off; the lead's direction keeps its prefix because
+// the transcript draws that one as a card of its own.
+export function systemNoteWords(content: string): string {
+  for (const prefix of [JOIN_NOTE_PREFIX, OFFER_NOTE_PREFIX]) {
+    if (content.startsWith(prefix)) {
+      return content.slice(prefix.length);
+    }
+  }
+  return content;
+}
+
 // The latest join announcement the DM has not yet narrated past, if any.
 // Pure so tests can drive it; seq comparison decides "answered".
 export function latestUnintroducedJoin<
@@ -163,5 +176,8 @@ export type CampaignMember = {
   muted: boolean;
   // With several characters per player, the one they are running.
   activeCharacterId: string;
+  // This member's own order for the Party panel's cards, sheet ids first
+  // card first; empty is the campaign's order (src/lib/party-order.ts).
+  partyOrder: string[];
   joinedAt: string;
 };

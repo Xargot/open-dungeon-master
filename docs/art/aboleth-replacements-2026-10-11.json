@@ -1,0 +1,36 @@
+{
+  "editedOn": "2026-10-11",
+  "reason": "Replace beholders in the two Codex-selected images with original aboleth interpretations.",
+  "tool": "Built-in image_gen",
+  "licenseReference": "https://media.dndbeyond.com/compendium-images/srd/5.1/SRD_CC_v5.1.pdf",
+  "originalSelectionRecord": "majority-vote-2026-10-11.json",
+  "note": "Original voting record remains historical. These two entries supersede its installed asset hashes.",
+  "prompts": {
+    "bestiary": "Replace only the central beholder with an original elongated aquatic aboleth with three vertically aligned amber eyes and four eyeless tentacles; preserve dragon, mimic, ruined hall, treasure, painterly realism, lighting and wide composition. No beholder anatomy, text or watermark.",
+    "aberration": "Replace the beholder and all eyestalks with an original aquatic aboleth with an elongated eel-like body, armored head, three vertically aligned amber eyes and four eyeless tentacles. Preserve ruined arch framing, green backlight, painterly realism and square composition; add dark water. No beholder anatomy, text or watermark."
+  },
+  "entries": [
+    {
+      "key": "workshop/bestiary",
+      "path": "public/assets/placeholders/workshop/bestiary.webp",
+      "width": 1000,
+      "height": 428,
+      "bytes": 179976,
+      "sha256": "27379db273cbfe8964379f663ffb719c0209c0424256a5a76623c1edf0566f8b",
+      "supersedesSha256": "266079b29a822a470d4e669fc41b4ce23493860c4dd4b8d79cb5dc8e904a6e84",
+      "source": "Codex built-in image generation; aboleth replacement requested by user after original vote",
+      "reviewStatus": "Original 3-0 vote applies only to superseded image; replacement visually checked by agent and user requested its submission in a PR"
+    },
+    {
+      "key": "monster/aberration",
+      "path": "public/assets/placeholders/monster/aberration.webp",
+      "width": 512,
+      "height": 512,
+      "bytes": 110368,
+      "sha256": "d608a678a9b5c1f89c28caedd742be19754a9dee5bf86a3093de169f102431de",
+      "supersedesSha256": "b7a32083146030fcc31f3e2bc4d959cbae02bab4332ad83172be1a4c21293f62",
+      "source": "Codex built-in image generation; aboleth replacement requested by user after original vote",
+      "reviewStatus": "Original 3-0 vote applies only to superseded image; replacement visually checked by agent and user requested its submission in a PR"
+    }
+  ]
+}

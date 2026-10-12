@@ -395,6 +395,47 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
     subclass: "Artillerist",
     effects: [{ kind: "spell_rider", dice: "1d8", classes: ["artificer"], item: "\\b(wand|staff|rod)\\b" }],
   },
+  // Eldritch Cannon (TCoE): "As an action, you can magically create a Small
+  // or Tiny eldritch cannon" (once a long rest, or for a spell slot), and
+  // "As a bonus action, you can activate it" (issue 233): Flamethrower,
+  // Force Ballista (pc_attack weapon "Force Ballista", which is the bonus
+  // action), or Protector.
+  "artificer::Eldritch Cannon": {
+    subclass: "Artillerist",
+    counter: "sub_eldritch_cannon",
+    spends: [
+      {
+        name: "Eldritch Cannon",
+        aliases: ["Create Eldritch Cannon", "Create Cannon"],
+        pool: { id: "sub_eldritch_cannon" },
+        action: "action",
+        does: { kind: "buff", condition: "eldritch cannon", rounds: 600 },
+      },
+      {
+        name: "Activate Cannon",
+        aliases: ["Flamethrower", "Protector", "Activate Eldritch Cannon"],
+        action: "bonus",
+        gate: { condition: "eldritch cannon" },
+        does: {
+          kind: "variants",
+          options: {
+            flamethrower: {
+              action: "bonus",
+              does: { kind: "aoe_report", dice: [[1, "2d8"], [9, "3d8"]], save: "dex", dcAbility: "spell", type: "fire", area: "a 15-foot cone from the cannon" },
+            },
+            protector: {
+              action: "bonus",
+              does: { kind: "temp_hp", formula: "1d8+int", allies: { rangeFt: 10, count: "12" } },
+            },
+            ballista: {
+              action: "none",
+              does: { kind: "note", text: "Force Ballista is its own bonus-action attack: pc_attack with weapon \"Force Ballista\" at a creature within 120 feet of the cannon (2d8 force, pushed 5 feet on a hit)." },
+            },
+          },
+        },
+      },
+    ],
+  },
   "artificer::Explosive Cannon": {
     subclass: "Artillerist",
     spends: [
@@ -428,5 +469,19 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
   "artificer::Improved Defender": {
     subclass: "Battle Smith",
     effects: [{ kind: "defender_upgrade", ac: 2 }],
+  },
+  // Spirit Totem (XGtE): "As a bonus action, you can move the spirit up to 60
+  // feet to a point you can see" (issue 233).
+  "druid::Spirit Totem": {
+    subclass: "Circle of the Shepherd",
+    spends: [
+      {
+        name: "Move Spirit Totem",
+        aliases: ["Move the Spirit", "Move Spirit"],
+        action: "bonus",
+        gate: { condition: "spirit totem" },
+        does: { kind: "note", text: "The spirit moves up to 60 feet to a point the druid can see, and its 30-foot aura moves with it." },
+      },
+    ],
   },
 };

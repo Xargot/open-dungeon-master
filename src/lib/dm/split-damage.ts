@@ -48,7 +48,7 @@ export const splitDamageTool = {
   function: {
     name: "split_damage",
     description:
-      "Apply ONE damage total to several creatures at once, each at their own share of it: full, half, double, or none. Use it when the same blow lands differently on different targets for a reason no saving throw covers (cover, a revealed immunity, someone diving clear). The server halves and doubles, then applies each share through the ordinary damage rules, so resistances, temporary hit points and death saves all still resolve themselves. For an area effect with a save, use aoe_damage instead.",
+      "Apply ONE damage total to several creatures at once, each at their own share of it: full, half, double, or none. Use it when the same blow lands differently on different targets for a reason no saving throw covers (cover, a revealed immunity, someone diving clear). The server halves and doubles, then applies each share through the ordinary damage rules, so resistances, temporary hit points and death saves all still resolve themselves. For an area effect with a save, use aoe_damage.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -59,8 +59,8 @@ export const splitDamageTool = {
           maximum: 500,
           description: "The damage the server rolled this turn, before any share is taken of it.",
         },
-        dice: { type: "string", description: "Dice the server rolls for the total, e.g. \"8d6\". Instead of amount." },
-        type: { type: "string", description: "Damage type, e.g. fire, bludgeoning." },
+        dice: { type: "string", description: "Dice the server rolls for the total ('8d6'). Instead of amount." },
+        type: { type: "string", description: "Damage type (slashing, fire)." },
         targets: {
           type: "array",
           minItems: 1,

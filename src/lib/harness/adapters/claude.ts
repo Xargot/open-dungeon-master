@@ -8,7 +8,10 @@
 // on every run, and a run that reports any other tool is killed.
 
 import { writeFileSync } from "node:fs";
+import { claudeFastModel } from "@/lib/speed-tier";
+import { noteSpeed } from "@/lib/speed-status";
 import path from "node:path";
+import { THIS_TURN_HEADING } from "../../prompt-boundary.ts";
 import { parseJsonLine, runProgram, spawnProgram } from "../process.ts";
 import type { HarnessAdapter, HarnessModel, HarnessStartOptions } from "../types.ts";
 
@@ -16,10 +19,10 @@ export const CLAUDE_MCP_PREFIX = "mcp__odm__";
 
 export const CLAUDE_MODELS: HarnessModel[] = [
   { id: "sonnet", label: "Sonnet (latest)", contextTokens: 1_000_000 },
-  { id: "opus", label: "Opus (latest)", contextTokens: 1_000_000 },
+  { id: "opus", label: "Opus (latest)", contextTokens: 1_000_000, fast: true },
   { id: "haiku", label: "Haiku (latest)", contextTokens: 200_000, cheap: true },
   { id: "claude-sonnet-5", label: "Claude Sonnet 5", contextTokens: 1_000_000 },
-  { id: "claude-opus-5", label: "Claude Opus 5", contextTokens: 1_000_000 },
+  { id: "claude-opus-5", label: "Claude Opus 5", contextTokens: 1_000_000, fast: true },
   { id: "claude-fable-5-1", label: "Claude Fable 5.1", contextTokens: 1_000_000 },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", contextTokens: 200_000, cheap: true },
 ];
@@ -30,6 +33,9 @@ export function claudeArgs(options: {
   model: string;
   effort: string;
   mcpConfigPath: string | null;
+  // Fast mode for this session only (issue 255): Claude Code's own setting,
+  // given in --settings so the user's saved default is never touched.
+  fast?: boolean;
 }): string[] {
   const args = [
     "-p",
@@ -47,7 +53,7 @@ export function claudeArgs(options: {
     "--setting-sources",
     "",
     "--settings",
-    JSON.stringify({ disableAllHooks: true }),
+    JSON.stringify({ disableAllHooks: true, ...(options.fast ? { fastMode: true } : {}) }),
     "--permission-mode",
     "dontAsk",
     "--no-session-persistence",
@@ -70,11 +76,30 @@ export const CLAUDE_ENV = {
   ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
   DISABLE_AUTOUPDATER: "1",
+  // The advisor is a server tool (a second model that reads the whole
+  // conversation), so it never shows in the init event's tool list that the
+  // lockdown checks; Claude Code attaches it unasked.
+  CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+  // A program reading the table's story sends nothing beyond its model
+  // requests: no telemetry, error reports or feature-flag fetches.
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   // Long engine calls (a parked roll, a slow handler) must not time out
   // inside the program before ODM answers them.
   MCP_TOOL_TIMEOUT: "600000",
   MCP_TIMEOUT: "30000",
 };
+
+// Claude Code (2.1.275+) caches the system prompt file in two blocks, split
+// at a line holding only this marker, which it then removes: the part above
+// it, the campaign's static rules, is read from the cache on later turns
+// instead of written again. Only the first occurrence is swapped: the DM
+// rules come before anything a player writes, so a player who types the
+// heading cannot move the split. Through Bedrock, Vertex or a gateway
+// Claude Code sends one block, as without the marker.
+// https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts
+export function withCacheBoundary(system: string): string {
+  return system.replace(THIS_TURN_HEADING, "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__");
+}
 
 function textOf(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -105,12 +130,14 @@ async function start(options: HarnessStartOptions) {
   // characters (Linux caps one argument at 128 K), so on argv the program
   // could not start at all.
   const systemPromptPath = path.join(options.cwd, "odm-system-prompt.md");
-  writeFileSync(systemPromptPath, options.system, { mode: 0o600 });
+  writeFileSync(systemPromptPath, withCacheBoundary(options.system), { mode: 0o600 });
+  const fast = Boolean(options.speed) && claudeFastModel(options.model);
   const args = claudeArgs({
     systemPromptPath,
     model: options.model,
     effort: options.effort,
     mcpConfigPath,
+    fast,
   });
   let turnText = "";
   let closed = false;
@@ -176,7 +203,15 @@ async function start(options: HarnessStartOptions) {
         return;
       }
       if (event.type === "result") {
-        const usage = event.usage as { input_tokens?: unknown; output_tokens?: unknown } | undefined;
+        const usage = event.usage as { input_tokens?: unknown; output_tokens?: unknown; speed?: unknown } | undefined;
+        // What the session ran at, where Claude Code passes the API's word
+        // for it on (usage.speed: "fast" or "standard").
+        if (fast && options.speed) {
+          noteSpeed(options.speed.role === "utility" ? "agent-utility" : "agent-story", {
+            model: options.model,
+            reported: typeof usage?.speed === "string" ? usage.speed : null,
+          });
+        }
         const text = turnText.trim() || textOf(event.result).trim();
         turnText = "";
         if (event.is_error === true || (event.subtype !== "success" && event.subtype !== undefined)) {
@@ -239,6 +274,10 @@ export const claudeAdapter: HarnessAdapter = {
   signInHint: "claude auth login",
   lockdown: "removed",
   paints: false,
+  // The system prompt is a file (start below), split at the cache boundary
+  // into two cached blocks: the older transcript in the second block is
+  // written again only when a chunk of it closes.
+  settledTranscript: true,
   async probe(binary, env) {
     const version = await runProgram(binary, ["--version"], env, 15_000);
     const installed = version.code === 0;

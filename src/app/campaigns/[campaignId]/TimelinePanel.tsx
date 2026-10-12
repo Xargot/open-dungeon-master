@@ -113,7 +113,18 @@ export function TimelinePanel({ campaignId, refreshKey }: { campaignId: string; 
         </div>
       ) : null}
       {shown.length <= 1 ? (
-        (loadError ? <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} /> : loaded ? <EmptyState size="sm" art="scrolls" title="Nothing has happened yet. The first closed chapter starts the line." /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={() => setReloads((current) => current + 1)}
+          />
+        ) : loaded ? (
+          <EmptyState
+            size="sm"
+            art="scrolls"
+            title="Nothing has happened yet. The first closed chapter starts the line."
+          />
+        ) : null)
       ) : null}
       <ol className="stagger relative space-y-2 lg:before:absolute lg:before:bottom-0 lg:before:left-1/2 lg:before:top-0 lg:before:w-px lg:before:bg-gradient-to-b lg:before:from-amber-700/0 lg:before:via-amber-600/70 lg:before:to-amber-700/0">
         {shown.map((row, index) => {

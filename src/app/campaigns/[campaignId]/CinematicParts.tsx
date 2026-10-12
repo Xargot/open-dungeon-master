@@ -1,5 +1,6 @@
 "use client";
 
+import { extraTurnTag } from "@/lib/battlemap/initiative-rows";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { EyeOff } from "lucide-react";
 import { GameIcon } from "@/components/ui/GameIcon";
@@ -99,7 +100,7 @@ export function facesFor(
     return [npcPlaceholder(null, entry.name)];
   }
   const enemy = enemies?.find((candidate) => candidate.id === entry.id);
-  return [enemy ? monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name }) : null];
+  return [enemy ? monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name, slug: enemy.slug, name: enemy.name }) : null];
 }
 
 // ---- the initiative ribbon along the top ----
@@ -379,7 +380,7 @@ export function TabletopOrder({
             <span className="cine-order-name">
               {entry.name}
               {entry.hidden ? " (hidden)" : ""}
-              {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300" title="Thief's Reflexes: a second turn this round">2nd</sup> : null}
+              {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300" title={extraTurnTag(entry)?.title}>{extraTurnTag(entry)?.short}</sup> : null}
             </span>
             {typeof entry.initiative === "number" ? <span className="cine-order-init">{entry.initiative}</span> : null}
           </li>

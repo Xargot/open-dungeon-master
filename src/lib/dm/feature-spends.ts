@@ -29,7 +29,9 @@ import { rollFeatureSave } from "@/lib/dm/contest-roll";
 import { healDeathHook } from "@/lib/dm/death";
 import { applyEnemyDamage, publishEncounter } from "@/lib/dm/enemy-damage";
 import { rollEnemySave } from "@/lib/dm/forced-save";
-import { prepareResourceCharge } from "@/lib/dm/resource-turn";
+import { prepareResourceCharge, type ResourceCharge } from "@/lib/dm/resource-turn";
+import { commandersStrike, commandersStrikeCharge, knowsManeuver, rally } from "@/lib/dm/maneuver-uses";
+import type { ResourceAction } from "@/lib/srd/class-resources";
 import { fieldedSheets } from "@/lib/dm/roster";
 import { chooseFiendishResilience, stillnessOfMind } from "@/lib/dm/feature-hooks";
 
@@ -140,6 +142,19 @@ export function featureVariantSpend(
     }
     return null;
   }
+  // Rally and Commander's Strike (src/lib/dm/maneuver-uses.ts), known only.
+  const maneuver = def?.id === "sub_superiority_dice" ? (/\brally\b/.test(wanted) ? "rally" : /commander'?s strike/.test(wanted.replace(/[’`]/g, "'")) ? "commander's strike" : null) : null;
+  if (maneuver && !knowsManeuver(sheet, maneuver)) {
+    return { error: `${sheet.name} does not know the ${maneuver === "rally" ? "Rally" : "Commander's Strike"} maneuver. Nothing was spent.` };
+  }
+  if (def?.id === "sub_superiority_dice" && /\brally\b/.test(wanted)) {
+    return spend(campaign, turnId, sheet, def.id, "bonus", reason, () => rally(campaign, turnId, sheet, targetId));
+  }
+  if (def?.id === "sub_superiority_dice" && /commander'?s strike/.test(wanted.replace(/[’`]/g, "'"))) {
+    return spend(campaign, turnId, sheet, def.id, (fresh) => commandersStrikeCharge(campaign, fresh, targetId), reason, () =>
+      commandersStrike(campaign, sheet, targetId),
+    );
+  }
   if (def?.id === "eldritch_master") {
     return spend(campaign, turnId, sheet, def.id, "none", reason, () => eldritchMaster(sheet));
   }
@@ -174,7 +189,9 @@ function spend(
   turnId: string,
   stale: CharacterSheet,
   resourceId: string,
-  cost: "action" | "none",
+  // What the use costs of the turn, or a charge of its own (Commander's
+  // Strike forgoes an attack as well as the bonus action).
+  cost: ResourceAction | ((sheet: CharacterSheet) => ResourceCharge),
   reason: string,
   resolve: () => Resolution,
   amount = 1,
@@ -193,12 +210,13 @@ function spend(
   if (sheet.deathSaves?.dead || sheet.currentHp <= 0) {
     return { error: `${sheet.name} is down and cannot use ${def.displayName}.` };
   }
-  // An action needs someone able to take one; a reroll (Indomitable) does not.
-  const stoppedBy = cost === "action" ? incapacitatedBy(sheet.conditions) : null;
+  // An action or a bonus action needs someone able to take one; a reroll
+  // (Indomitable) does not.
+  const stoppedBy = cost !== "none" && cost !== "reaction" ? incapacitatedBy(sheet.conditions) : null;
   if (stoppedBy) {
     return { error: `${sheet.name} is ${stoppedBy} and cannot use ${def.displayName} until the condition ends.` };
   }
-  const charge = prepareResourceCharge(campaign, sheet, resourceId, cost);
+  const charge = typeof cost === "function" ? cost(sheet) : prepareResourceCharge(campaign, sheet, resourceId, cost);
   if ("error" in charge) {
     return charge;
   }

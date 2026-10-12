@@ -310,10 +310,22 @@ function resolve(ctx: Ctx, found: Found): Record<string, unknown> | { error: str
         return { error: noHit(ally.name, reaction.name, `an attack that hit ${ally.name}`) };
       }
       const raw = record.swings.filter((swing) => swing.hit).reduce((sum, swing) => sum + swing.raw, 0);
-      const settled = settle(ctx, record, record.swings.map((swing) => ({ ...swing, hit: false, raw: 0 })), label);
+      // "split": the ally keeps half the blow; "halved": the holder takes
+      // half and the ally none; otherwise the holder takes it all.
+      const kept = does.share === "split" ? Math.ceil(raw / 2) : 0;
+      const corrected = does.share === "split"
+        ? record.swings.map((swing) => (swing.hit ? { ...swing, raw: Math.ceil(swing.raw / 2) } : swing))
+        : record.swings.map((swing) => ({ ...swing, hit: false, raw: 0 }));
+      const settled = settle(ctx, record, corrected, label);
+      const share = does.share ? Math.floor(raw / 2) : raw;
       // The damage lands on the paladin as it was dealt: nothing reduces it.
-      const taken = applyPcDamage(ctx.campaign, ctx.turn.id, getSheetById(ctx.sheet.id) ?? ctx.sheet, { amount: raw, reason: `${reaction.name} for ${ally.name}` });
-      return { applied: `${ctx.sheet.name} takes the ${raw} damage meant for ${ally.name}, whose ${settled.given} hit points come back.`, taken };
+      const taken = applyPcDamage(ctx.campaign, ctx.turn.id, getSheetById(ctx.sheet.id) ?? ctx.sheet, { amount: share, reason: `${reaction.name} for ${ally.name}` });
+      return {
+        applied: does.share === "split"
+          ? `${ctx.sheet.name} takes ${share} of the ${raw} damage and ${ally.name} keeps ${kept}: ${settled.given} hit points come back to ${ally.name}.`
+          : `${ctx.sheet.name} takes ${share === raw ? `the ${raw} damage` : `half of the ${raw} damage (${share})`} meant for ${ally.name}, whose ${settled.given} hit points come back.`,
+        taken,
+      };
     }
     case "strike_back": {
       const record = freshLastHit(ctx.campaign.id, ctx.sheet.id);

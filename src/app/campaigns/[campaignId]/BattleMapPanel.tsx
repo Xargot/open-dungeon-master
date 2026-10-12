@@ -189,7 +189,7 @@ export function BattleMapPanel({
       byRef.set(sheet.id, characterPlaceholder({ race: sheet.race, class: sheet.class, gender: sheet.gender }));
     }
     for (const enemy of encounter?.enemies ?? []) {
-      byRef.set(enemy.id, monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name }));
+      byRef.set(enemy.id, monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name, slug: enemy.slug, name: enemy.name }));
     }
     // Somebody the DM put down by hand has no sheet and no stat block: they
     // draw one of the neutral faces by their name, and keep it.

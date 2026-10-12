@@ -18,7 +18,7 @@ export const searchLoreTool = {
   function: {
     name: "search_lore",
     description:
-      "Search the campaign's established canon: world lore, tracked facts, party notes, and past chapters. Use before inventing details about places, factions, history, or NPCs that may already be established.",
+      "Search the campaign's established canon: world lore, tracked facts, party notes, and past chapters. Call it before inventing details about places, factions, history, or NPCs that may already be established.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -41,7 +41,7 @@ export const searchLoreTool = {
             "promise",
             "any",
           ],
-          description: "Optional filter; 'any' searches everything.",
+          description: "A filter; 'any' searches everything.",
         },
       },
       required: ["query"],

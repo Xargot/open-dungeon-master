@@ -97,12 +97,12 @@ export function relationshipTools(campaign: Campaign): ToolDef[] {
       function: {
         name: "relationship_beat",
         description:
-          "Record one moment that changed how a tracked NPC or AI companion feels about a character, moving the server's approval meter for that pair. Call it whenever a player's declared words or actions would land with someone watching: keeping a promise, showing mercy or cruelty, defending them, being generous, lying, leaving them to face something alone. The meter runs from hostile through neutral to devoted and persists across sessions. The SAME deed lands differently on different people: the server weighs it against that person's own nature, so mercy wins over a kind healer and irritates a hard-bitten mercenary, and it tells you which happened. Charming overtures (gift, flirt, compliment, grand_gesture) roll that character's real Persuasion or Performance; deeds simply count. Repeating one move is worth steadily less. The subject must already exist: set_npc or npc_reaction for an NPC, add_companion for a companion. Call this BEFORE narrating their reaction, and narrate exactly what it reports.",
+          "Record one moment that changed how a tracked NPC or AI companion feels about a character, moving the server's approval meter for that pair, when the relationship rules call for it. Charming overtures roll that character's real Persuasion or Performance; deeds simply count. The subject must already exist: set_npc or npc_reaction for an NPC, add_companion for a companion. Call it BEFORE narrating their reaction; narrate exactly what it reports.",
         parameters: {
           type: "object",
           additionalProperties: false,
           properties: {
-            characterId: { type: "string", description: "The character whose conduct this is." },
+            characterId: { type: "string", description: "The character whose conduct this is: exact characterId from GAME STATE." },
             subject: {
               type: "string",
               description: "Exact name of the tracked NPC or AI companion who witnessed it.",
@@ -111,7 +111,7 @@ export function relationshipTools(campaign: Campaign): ToolDef[] {
               type: "string",
               enum: [...beats],
               description:
-                "What happened. Earns regard: helped, kept_word, generosity, mercy, courage, honesty, defended, shared_peril, confided, gift. Costs it: broke_word, cruelty, greed, deceit, cowardice, endangered, ignored, insult, betrayal." +
+                "What happened (which beats earn regard and which cost it: the relationship rules)." +
                 (romance
                   ? " Romantic: flirt (how a courtship opens), compliment, grand_gesture, intimacy (partners only; always narrate as a fade to black)."
                   : ""),
@@ -130,12 +130,12 @@ export function relationshipTools(campaign: Campaign): ToolDef[] {
       function: {
         name: "relationship_end",
         description:
-          "Record a relationship changing for good: 'falling_out' when a friendship breaks, 'parting' when they stay close but go separate ways (the ally who stays behind while the party travels on), 'breakup' or 'betrayal' when a romance ends badly, 'death' when they die. A parting keeps the whole history and the server brings them back into play later; the others close the book. Call this BEFORE narrating the goodbye.",
+          "Record a relationship changing for good, for a reason the relationship rules give ('parting' is also the ally who stays behind while the party travels on), or 'breakup' or 'betrayal' when a romance ends badly. Every reason but 'parting' closes the book. Call it BEFORE narrating the goodbye.",
         parameters: {
           type: "object",
           additionalProperties: false,
           properties: {
-            characterId: { type: "string", description: "The character on this side of it." },
+            characterId: { type: "string", description: "The character on this side of it: exact characterId from GAME STATE." },
             subject: { type: "string", description: "Exact name of the NPC or companion." },
             reason: { type: "string", enum: [...END_REASONS], description: "How it ends." },
             note: { type: "string", description: "One short line for the record." },
@@ -151,12 +151,12 @@ export function relationshipTools(campaign: Campaign): ToolDef[] {
       function: {
         name: "romance_advance",
         description:
-          "Take a romance one step further: interested (a quiet, unspoken pull), courting (declared out loud), together (partners), betrothed (a proposal), married (wed). Call this ONLY when the player has declared the step their character is taking, and BEFORE narrating how it goes. The server checks that the person actually LIKES them first (nobody is courted into liking someone), then whether the feeling is deep enough for this step, then decides whether they accept, rolling when it is genuinely uncertain. A refusal is a real outcome you must narrate as written; never talk someone into a step the tool declined. One step per exchange.",
+          "Take a romance one step further: interested (a quiet, unspoken pull), courting (declared out loud), together (partners), betrothed (a proposal), married (wed). Call it BEFORE narrating how it goes. After the checks the romance rules describe, the server decides whether they accept, rolling when it is genuinely uncertain. One step per exchange.",
         parameters: {
           type: "object",
           additionalProperties: false,
           properties: {
-            characterId: { type: "string", description: "The character taking the step." },
+            characterId: { type: "string", description: "The character taking the step: exact characterId from GAME STATE." },
             subject: { type: "string", description: "Exact name of the NPC or companion." },
             to: {
               type: "string",
@@ -166,7 +166,7 @@ export function relationshipTools(campaign: Campaign): ToolDef[] {
             note: {
               type: "string",
               description:
-                "One short line describing the moment, kept in the relationship's memory (e.g. 'proposed on the bridge at Highmoor').",
+                "One short line describing the moment, kept in the relationship's memory ('proposed on the bridge at Highmoor').",
             },
           },
           required: ["characterId", "subject", "to"],

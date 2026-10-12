@@ -21,7 +21,7 @@ import { resolveEnemyRef } from "@/lib/dm/enemy-damage";
 import { liveTypedRiders, strikesAsMagic } from "@/lib/dm/pc-attack-damage";
 import type { AttackPlan } from "@/lib/dm/pc-attack-plan";
 import type { Strike } from "@/lib/dm/pc-attack-resolve";
-import { clearHitSpent, spendOnHit, stunningStrikeSave, type ParkedAttack } from "@/lib/dm/pc-attack-riders";
+import { clearHitSpent, gainTempHp, spendOnHit, stunningStrikeSave, type ParkedAttack } from "@/lib/dm/pc-attack-riders";
 import { authoredOnHit } from "@/lib/dm/authored-hooks";
 import { applySpellHitCondition, spellAttackRider } from "@/lib/dm/spell-attack-riders";
 import { gearCritRiders } from "@/lib/dm/gear-attack";
@@ -45,6 +45,7 @@ function parkedExtras(plan: AttackPlan): Pick<ParkedAttack, "extras"> | null {
     ...(extras.openHand ? { openHand: extras.openHand } : {}),
     ...(extras.hurl ? { hurl: true } : {}),
     ...(extras.poison ? { poison: true } : {}),
+    ...(extras.tempHp ? { tempHp: extras.tempHp } : {}),
   };
   return Object.keys(kept).length ? { extras: kept } : null;
 }
@@ -236,6 +237,9 @@ export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): 
   // What the hit carries past its damage (src/lib/dm/attack-onhit.ts).
   if (extras?.poison && sheet) {
     spentNotes.push(poisonOnHit(campaign, sheet.id, enemy.id) ?? "");
+  }
+  if (extras?.tempHp && sheet) {
+    spentNotes.push(gainTempHp(campaign, sheet.id, extras.tempHp.amount, extras.tempHp.feature));
   }
   if (extras?.openHand && sheet) {
     spentNotes.push(openHandOnHit(campaign, sheet.id, enemy.id, extras.openHand.choice, extras.openHand.dc));

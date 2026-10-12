@@ -1,5 +1,8 @@
 "use client";
 
+import { TravelFormation } from "@/app/campaigns/[campaignId]/TravelFormation";
+import type { PartyState } from "@/lib/dm/party-logic";
+import { fieldedOf } from "@/lib/player-characters";
 import { Bot, Check, Crown, Heart, ImagePlus, PawPrint, Save, Sparkles, UserPlus } from "lucide-react";
 import { describeExhaustion } from "@/lib/dm/condition-logic";
 import { namesLookup } from "@/lib/battlemap/condition-notes";
@@ -9,6 +12,7 @@ import type { PublicEncounter } from "@/lib/db/encounter-view";
 import { GameIcon } from "@/components/ui/GameIcon";
 import { SectionHead } from "@/components/ui/SectionHead";
 import { KitButton, SettingToggle } from "./PanelKit";
+import { PartyOrderBar, PartyOrderHandle, usePartyOrder } from "./PartyOrder";
 import { useEffect, useId, useState, Suspense, lazy } from "react";
 import { cn } from "@/lib/cn";
 import { CountPop } from "@/components/ui/Reveal";
@@ -307,9 +311,15 @@ export function PartyPanel({
   multiCharacter = "off",
   levelUpLevel = null,
   onLevelUp,
+  party,
+  arrangesFormation = false,
 }: {
   sheets: CharacterSheet[];
   meUserId: string;
+  // The party record, for the travel formation, and whether this seat
+  // arranges it (the party lead, or the DM seat where a person runs it).
+  party?: PartyState;
+  arrangesFormation?: boolean;
   // A level-up the experience has earned and nobody has taken yet: the
   // owner's card offers it.
   levelUpLevel?: number | null;
@@ -373,6 +383,10 @@ export function PartyPanel({
   const tradingWith = sheets.find((sheet) => sheet.id === tradingWithId);
   const myOwn = sheets.filter((sheet) => sheet.userId === meUserId && !sheet.isCompanion);
   const mySheet = myOwn.find((sheet) => sheet.id === activeSheetId) ?? myOwn[0];
+  const myMember = members.find((member) => member.userId === meUserId);
+  // Each viewer's own order for the cards (issue 240): display only, kept
+  // on their membership so it follows their account.
+  const order = usePartyOrder({ campaignId, member: myMember, cards: sheets });
 
   async function playAs(sheetId: string) {
     setSwitching(sheetId);
@@ -393,7 +407,6 @@ export function PartyPanel({
   const viewingSheet = sheets.find((sheet) => sheet.id === viewingSheetId);
   const croppingSheet = sheets.find((sheet) => sheet.id === croppingSheetId);
   const notesSheet = sheets.find((sheet) => sheet.id === notesSheetId);
-  const myMember = members.find((member) => member.userId === meUserId);
   // Who a condition's metadata may name: the party, and the fight's order as
   // this viewer sees it.
   const conditionNames = [
@@ -440,7 +453,15 @@ export function PartyPanel({
         <SectionHead title="Party" glyph="tab-party" level="h2" aside={sheets.length} />
       )}
       {switchError ? <p role="alert" className="text-sm text-red-300">{switchError}</p> : null}
-      {sheets.map((sheet) => {
+      <PartyOrderBar
+        count={campaignId && myMember ? sheets.length : 0}
+        arranging={order.arranging}
+        custom={order.custom}
+        error={order.error}
+        onToggle={() => order.setArranging(!order.arranging)}
+        onReset={order.reset}
+      />
+      {order.ordered.map((sheet, cardIndex) => {
         const derived = computeSheetDerived(sheet);
         const mine = sheet.userId === meUserId;
         // Companions belong to nobody at the table, so their portrait is
@@ -465,14 +486,30 @@ export function PartyPanel({
         return (
           <div
             key={sheet.id}
+            data-party-card={sheet.id}
+            data-dragging={order.drag?.id === sheet.id ? "" : undefined}
+            data-drop={order.drag?.over?.id === sheet.id ? order.drag.over.side : undefined}
+            data-moved={order.moved === sheet.id ? "" : undefined}
             className={cn(
-              "panel rounded-xl p-3 transition-shadow duration-200",
+              "party-card panel rounded-xl p-3 transition-shadow duration-200",
               mine && "ornate border-amber-600/40",
               spotlightUserIds.includes(sheet.userId) &&
                 "border-amber-500/70 ring-1 ring-amber-500/60 shadow-glow-gold-strong",
             )}
           >
             <div className="flex items-start gap-1">
+              {order.arranging ? (
+                <PartyOrderHandle
+                  id={sheet.id}
+                  name={sheet.name}
+                  index={cardIndex}
+                  count={order.ordered.length}
+                  drag={order.drag}
+                  onMove={order.move}
+                  onPlace={order.place}
+                  onDrag={order.setDrag}
+                />
+              ) : null}
               <button
                 type="button"
                 onClick={() => setViewingSheetId(sheet.id)}
@@ -851,6 +888,17 @@ export function PartyPanel({
             </KitButton>
           ) : null}
         </div>
+      ) : null}
+
+      {/* Who walks first (issue 230): every seat sees it; the lead arranges. */}
+      {campaignId ? (
+        <TravelFormation
+          campaignId={campaignId}
+          sheets={fieldedOf(sheets, multiCharacter, (userId) => members.find((member) => member.userId === userId)?.activeCharacterId)}
+          party={party}
+          meUserId={meUserId}
+          arranges={arrangesFormation}
+        />
       ) : null}
 
       {buildingCompanion && campaignId ? (

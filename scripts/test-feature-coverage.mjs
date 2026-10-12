@@ -24,6 +24,8 @@ const { matchResource, populateResources, RESOURCE_DEFS } = await import(
   "../src/lib/srd/class-resources.ts"
 );
 const AUTHORED_ROWS = (await import("../src/lib/srd/authored-effects.ts")).authoredRows();
+const { COUNTER_REACTION_IDS } = await import("../src/lib/dm/reaction-kinds.ts");
+const { BONUS_ATTACK_COUNTERS } = await import("../src/lib/dm/feature-bonus-attacks.ts");
 
 let passed = 0;
 function test(name, fn) {
@@ -427,10 +429,9 @@ test("a counter with mechanical wording carries a typed effect or is deliberatel
     "steampunk_full_throttle", "steampunk_galvanic_discharge", "steampunk_gear_swarm",
     "steampunk_overcharge", "steampunk_tempest_shell", "steampunk_the_great_work_walks",
     "steampunk_vitriol_ampoule",
-    "sub_warding_maneuver", "sub_call_the_hunt", "sub_searing_vengeance",
+    "sub_call_the_hunt", "sub_searing_vengeance",
     "sub_accursed_specter", "sub_genies_vessel", "sub_favored_by_the_gods",
     "sub_violent_attraction", "sub_magic_users_nemesis",
-    "race_stones_endurance",
     // 10d10 psychic after a hit: damage_enemy carries it (no save to roll).
     "hurl_through_hell",
     // Its 2d12 per spell level is rolled by the cast itself, not by a
@@ -451,7 +452,11 @@ test("a counter with mechanical wording carries a typed effect or is deliberatel
       def.effect.kind === "narrative" &&
       mechanical.test(def.guidance) &&
       !NARRATIVE_WITH_DICE.has(def.id) &&
-      !spentByAuthored.has(def.id),
+      !spentByAuthored.has(def.id) &&
+      // Rolled and applied by src/lib/dm/reaction-counters.ts, or spent by
+      // the bonus attack they buy (feature-bonus-attacks.ts) (issue 233).
+      !COUNTER_REACTION_IDS.includes(def.id) &&
+      !BONUS_ATTACK_COUNTERS.includes(def.id),
   ).map((def) => def.id);
   assert.deepEqual(
     offenders,

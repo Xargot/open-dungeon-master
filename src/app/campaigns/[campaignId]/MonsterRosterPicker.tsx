@@ -126,6 +126,8 @@ export function MonsterRosterPicker({
                 cr={entry.cr}
                 genre={genre}
                 seed={entry.slug}
+                slug={entry.slug}
+                name={entry.name}
                 art={entry.art}
                 size="size-5"
                 className="mr-1 inline-flex align-middle"

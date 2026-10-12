@@ -21,6 +21,7 @@ import {
   type ContentRow,
 } from "@/lib/characters/options";
 import { openAbilityPool, openWealthRoll } from "@/lib/db/creation-rolls";
+import { subclassExtrasFor } from "@/lib/db/subclass-extras";
 import { tableAuthors } from "@/lib/db/homebrew";
 import { defaultRng } from "@/lib/dice";
 import type { GameSettings } from "@/lib/schemas/game-settings";
@@ -298,6 +299,7 @@ export function legalityContextFor(input: ContextInput): LegalityContext {
     spellOf: (name) => spellFactsFor(name, owner),
     featOf: (name) => featFactsFor(name, owner),
     subclassOffered: (classId, name) => subclassIsOffered(classId, name, owner),
+    subclassExtras: subclassExtrasFor(owner),
     rollDie: defaultRng,
   };
 }

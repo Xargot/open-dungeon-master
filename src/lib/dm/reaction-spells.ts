@@ -31,23 +31,10 @@ import { allyOf, noHit, settle, softenFall, spendReaction, type Ctx } from "@/li
 
 // ---- reaction spells ----
 
+// Shield is cast as the hit lands: the cast guard asks the reaction gate with
+// the spell's timing (src/lib/dm/reaction-kinds.ts), which judges a caster
+// that hit dropped as they stood before it, whatever tool casts the spell.
 function castReactionSpell(ctx: Ctx, spell: string): Record<string, unknown> | { error: string } {
-  // Shield is cast as the hit lands. When that hit dropped the caster, the
-  // guard is asked of them as they stood before it, and the sheet is put
-  // back exactly as it was for the refund to work from.
-  const record = freshLastHit(ctx.campaign.id, ctx.sheet.id);
-  const now = getSheetById(ctx.sheet.id);
-  const dropped = record && now && record.before.currentHp > 0 && now.currentHp <= 0 ? record.before : null;
-  if (!dropped || !now) {
-    return castThrough(ctx, spell);
-  }
-  patchSheet(now.id, { currentHp: dropped.currentHp, conditions: dropped.conditions, conditionMeta: dropped.conditionMeta, deathSaves: dropped.deathSaves });
-  const cast = castThrough(ctx, spell);
-  patchSheet(now.id, { currentHp: now.currentHp, conditions: now.conditions, conditionMeta: now.conditionMeta, deathSaves: now.deathSaves ?? null });
-  return cast;
-}
-
-function castThrough(ctx: Ctx, spell: string): Record<string, unknown> | { error: string } {
   return applyDmMutation(
     ctx.campaign,
     ctx.turn.id,

@@ -42,9 +42,9 @@ export const SUBTAB_GLYPHS: Record<string, string> = {
 };
 
 export const MODE_GLYPHS: Record<InputKind, string> = {
-  do: "rest-initiative",
-  say: "cue-turn",
-  ooc: "skill-persuasion",
+  do: "ui-act",
+  say: "tab-chat",
+  ooc: "ui-ooc",
   lead: "tab-lead",
   narrate: "tab-dm",
 };

@@ -109,9 +109,9 @@ export type AuthoredEffect = Base &
     // have advantage (Totem Spirit: Wolf).
     | { kind: "pack_adv"; rangeFt: number }
     // An action taken as a bonus action.
-    | { kind: "bonus_route"; action: "dash" | "disengage" | "hide" | "dodge" | "help" | "search" }
+    | { kind: "bonus_route"; action: "dash" | "disengage" | "hide" | "dodge" | "help" | "search" | "grapple" }
     // A bonus-action weapon attack after something this turn.
-    | { kind: "bonus_attack"; after: "spell" | "cantrip" | "attack" | "telekinesis" }
+    | { kind: "bonus_attack"; after: "spell" | "cantrip" | "attack" | "telekinesis" | "missed_arrow" }
     // Enemies save at disadvantage: when the holder casting is hidden from
     // them, when they carry the holder's mark, or when they stand within
     // range of the holder (a spell's save, any caster when `anyCaster`).
@@ -243,6 +243,9 @@ export type SpendDoes =
       // A mark laid on the named creature beside the holder's own condition
       // (Slayer's Prey: the prey Supernatural Defense reads).
       mark?: string;
+      // The holder's condition is a mark on the named creature (its meta's
+      // quarry, src/lib/dm/attack-marks.ts): Target Lock, Quarry.
+      quarry?: boolean;
       // The spend's own burst (Arms of the Astral Self, Avenging Angel).
       burst?: { save: Ability; dcAbility: Ability | "spell"; rangeFt: number; dice?: Formula; type?: string; condition?: string; rounds?: number };
     }
@@ -291,7 +294,10 @@ export type SpendDoes =
   | { kind: "swarm_push"; feet: number }
   // A creature the feature makes, as an ally with its stat block (the steel
   // defender, src/lib/dm/summon-defender.ts).
-  | { kind: "summon"; form: string };
+  | { kind: "summon"; form: string }
+  // Nothing the engine moves: the spend pays its cost and the text says
+  // what happens (Spirit Totem's move, the cannon's ballista option).
+  | { kind: "note"; text: string };
 
 export type SpendAction = "action" | "bonus" | "reaction" | "none";
 
@@ -329,7 +335,9 @@ export type ReactionDoes =
   // Resistance to the last hit's damage when it is one of these types.
   | { kind: "resist_instance"; types: string[]; who: "either"; rangeFt: number }
   // The holder takes the hit an ally in range took.
-  | { kind: "take_for_ally"; rangeFt: number | Array<[number, number]> }
+  // `share`: "halved", the holder takes half of it and the ally none
+  // (Penance Shared); "split", each takes half (Blood Bond).
+  | { kind: "take_for_ally"; rangeFt: number | Array<[number, number]>; share?: "halved" | "split" }
   // Damage back at a creature: the attacker, or the named enemy.
   | {
       kind: "strike_back";

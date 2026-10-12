@@ -26,6 +26,7 @@ import type {
   MediaStatus,
 } from "@/app/campaigns/[campaignId]/useCampaignStream";
 import type { CampaignMember } from "@/lib/campaign-types";
+import type { PartyState } from "@/lib/dm/party-logic";
 import { allDelegations, type DmCover } from "@/lib/dm/delegation";
 import type { Floor } from "@/lib/db/campaigns";
 import type { Chapter } from "@/lib/db/chapters";
@@ -84,6 +85,8 @@ export type SidePanelRouterProps = {
   beats: DmBeat[];
   // The stream's director flag, for the armed banner on the lead's desk.
   directorArm?: Parameters<typeof LeadPanelComponent>[0]["directorArm"];
+  // The party is coordinating a plan (issue 254).
+  coordinating?: boolean;
   leadUserId: string;
   canTransferLead: boolean;
   spotlightUserIds: string[];
@@ -117,6 +120,8 @@ export type SidePanelRouterProps = {
   campaign?: Parameters<typeof SessionSettingsComponent>[0]["campaign"] & {
     dmUserId?: string | null;
     assistantDmUserId?: string | null;
+    // The party record, for the travel formation (issue 230).
+    party?: PartyState;
   };
   // Assisted mode: the stretch of answers the DM handed to the AI. Separate
   // from `campaign` because that shape carries only what the settings panel edits.
@@ -237,6 +242,7 @@ export function SidePanelRouter({
   floor,
   beats,
   directorArm,
+  coordinating = false,
 }: SidePanelRouterProps) {
   // Which section of Party and Story is showing. Local state: nothing outside
   // this panel reads or sets them.
@@ -335,6 +341,7 @@ export function SidePanelRouter({
         isLead={isLead}
         encounter={encounter}
         directorArm={directorArm}
+        coordinating={coordinating}
       />
 </Suspense>
     );
@@ -387,6 +394,8 @@ export function SidePanelRouter({
               <PartyPanel
                 sheets={sheets}
                 meUserId={meUserId}
+                party={campaign?.party}
+                arrangesFormation={isLead || adjudicates}
                 spotlightUserIds={spotlightUserIds}
                 onlineUserIds={onlineUserIds}
                 steersStory={steersStory}

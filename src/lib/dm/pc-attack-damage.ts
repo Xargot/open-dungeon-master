@@ -307,7 +307,7 @@ export function strikeDamage(plan: AttackPlan) {
     characterId: sheet.id,
     ...(plan.smite ? { smite: plan.smite } : {}),
     ...(plan.maneuver && !plan.maneuver.precision
-      ? { maneuver: { name: plan.maneuver.name, die: plan.maneuver.die } }
+      ? { maneuver: { name: plan.maneuver.name, die: plan.maneuver.die, use: plan.maneuver.use, targetId: plan.enemy.id } }
       : {}),
     ...(plan.options.stunningStrike ? { stun: plan.options.stunningStrike } : {}),
     baseDamage: profile.damageExpression,

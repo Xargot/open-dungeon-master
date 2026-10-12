@@ -2,9 +2,11 @@
 
 import { initiativeCharacter, selectedCharacter } from "@/lib/player-characters";
 import { LevelUpMoment, LootMoment, MomentVeil, RestMoment, TravelBanner } from "@/app/campaigns/[campaignId]/Moments";
+import { CoordinationPanel } from "@/app/campaigns/[campaignId]/CoordinationPanel";
 import { haptic, useEffectsRoot, useTurnChime } from "@/lib/effects-mode";
 import { levelForXp } from "@/lib/srd";
 import { SceneTitle } from "@/components/SceneTitle";
+import { askConcentrationSwap, isConcentrationQuestion } from "@/components/concentration-prompt";
 import { HandoutStage } from "@/components/HandoutStage";
 import { SafetyPause } from "@/app/campaigns/[campaignId]/SafetyPause";
 import type { Speaker } from "@/lib/dm/speech";
@@ -550,15 +552,32 @@ export function SessionView({
                 ? ["director", { oneShot: null, absoluteCommand: content }]
                 : ["lead-note", { content }]
               : ["actions", { content, kind, characterId: (kind === "ooc" ? mySheet : actingSheet)?.id }];
-        const response = await fetch(`/api/campaigns/${campaignId}/${route}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        const send = (extra: Record<string, unknown> = {}) =>
+          fetch(`/api/campaigns/${campaignId}/${route}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...body, ...extra }),
+          });
+        let response = await send();
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
-          setError(data.error || "Could not send your action.");
-          return;
+          // A typed cast that ends the spell held now is asked about first
+          // (issue 252); a no keeps the draft and spends nothing.
+          if (route === "actions" && isConcentrationQuestion(response.status, data)) {
+            const concentrationAck = await askConcentrationSwap(data);
+            if (!concentrationAck) {
+              return;
+            }
+            response = await send({ concentrationAck });
+            if (!response.ok) {
+              const again = await response.json().catch(() => ({}));
+              setError(again.error || "Could not send your action.");
+              return;
+            }
+          } else {
+            setError(data.error || "Could not send your action.");
+            return;
+          }
         }
         setInput("");
       } catch {
@@ -878,6 +897,12 @@ export function SessionView({
               <CharacterGate campaignId={campaign.id} />
             </Suspense>
           ) : (
+            <>
+            {/* The plan the party is coordinating (issue 254), above the
+                box its players would otherwise type their moves into. */}
+            {state.coordination ? (
+              <CoordinationPanel campaignId={campaign.id} phase={state.coordination} meUserId={me.id} steersStory={steersStory} />
+            ) : null}
             <Composer
               campaignId={campaign.id}
               trackAmmo={campaign.gameSettings?.variantRules?.ammunition ?? false}
@@ -919,6 +944,7 @@ export function SessionView({
               onSnoozeStory={snoozeStory}
               onSubmit={submit}
             />
+            </>
           )}
         </SessionChatColumn>
 
@@ -937,6 +963,7 @@ export function SessionView({
           dmIntents={state.dmIntents}
           floor={floor}
           directorArm={state.directorArm}
+          coordinating={Boolean(state.coordination)}
           isLead={isLead}
           leadUserId={campaign.leadUserId}
           canTransferLead={isLead || campaign.ownerUserId === me.id}

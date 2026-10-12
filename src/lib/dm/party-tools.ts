@@ -40,7 +40,7 @@ export const partyTools: ToolDef[] = [
     function: {
       name: "party_stash",
       description:
-        "Move an item or money between one character and the party's shared pack and common purse. stow/take move an item (name, qty); deposit/withdraw move money (coins like '3 gp 4 sp', or amount in whole gold). The party's pack and purse are shared property: use them for the rope nobody wants to carry and the coin the party banked together, not for a character's own kit.",
+        "Move an item or money between one character and the party's shared pack and common purse. The party's pack and purse are shared property: use them for the rope nobody wants to carry and the coin the party banked together, not for a character's own kit.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -48,12 +48,12 @@ export const partyTools: ToolDef[] = [
           do: {
             type: "string",
             enum: ["stow", "take", "deposit", "withdraw"],
-            description: "stow/take an item, deposit/withdraw money.",
+            description: "stow/take an item (name, qty); deposit/withdraw money (coins, or amount in whole gold).",
           },
-          characterId: { type: "string", description: "Whose hands it comes from or goes to." },
+          characterId: { type: "string", description: "Whose hands it comes from or goes to: exact characterId from GAME STATE." },
           name: { type: "string", description: "Item name, for stow and take." },
           qty: { type: "integer", minimum: 1, maximum: 999 },
-          coins: { type: "string", description: "Money in denominations, e.g. '3 gp 4 sp'." },
+          coins: { type: "string", description: "Money in denominations ('3 gp 4 sp')." },
           amount: { type: "integer", minimum: 0, description: "Money in whole gold, if coins is not used." },
           reason: { type: "string", description: "Short in-fiction cause." },
         },

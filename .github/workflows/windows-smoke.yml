@@ -13,7 +13,11 @@ on:
 jobs:
   windows-smoke:
     runs-on: windows-2025-vs2026
-    timeout-minutes: 20
+    # The same ceiling as the Linux smoke. The suite alone takes 15 to 16
+    # minutes on this runner and the build another 1.5, so 20 left no room:
+    # main already ran at 18.5 of them, and the next suites tipped a run
+    # into a cancelled build with every check passed.
+    timeout-minutes: 30
     permissions:
       contents: read
 

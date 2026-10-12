@@ -1,5 +1,6 @@
 import { admitSheet } from "@/lib/characters/admit";
 import { tableAuthors } from "@/lib/db/homebrew";
+import { subclassExtrasFor } from "@/lib/db/subclass-extras";
 import {
   classGrantsFor,
   featFactsFor,
@@ -163,6 +164,8 @@ function contextFor(campaign: Campaign, sheet: CharacterSheet): LevelUpContext {
     featOf: (name) => featFactsFor(name, owner),
     subclassOffered: (classId, name) => subclassIsOffered(classId, name, owner),
     rollDie: defaultRng,
+    subclassExtras: subclassExtrasFor(owner),
+    autoPicks: true,
   };
 }
 

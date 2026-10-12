@@ -17,8 +17,10 @@
 //     acted before them does not get theirs back.
 //   - An edit around the one acting keeps their turn and what it spent.
 //   - The enemies a pass outside the model's own end_turn walks past are
-//     due, at every table: the floor waits for them, End Turn included; the
-//     next DM turn may play them, and its end plays the ones it leaves.
+//     due, at every table: the floor waits for them, End Turn included, and
+//     the pass's note names them; the next DM turn reads them in GAME STATE
+//     too, in place of waiting on the player up next, may play them, and
+//     its end plays the ones it leaves.
 //   - A turn is named by whose it is, so an entry spliced in above the one
 //     acting does not re-arm what happens once a turn.
 //   - The model's own pass is said once, after its narration, and every
@@ -34,6 +36,7 @@ import path from "node:path";
 import { openWorld } from "./lib/enforce-world.mjs";
 import { suite } from "./lib/enforce-harness.mjs";
 import { combatKit, DUMMY } from "./lib/enforce-combat.mjs";
+import { call, fakeModel, reply } from "./lib/enforce-narrator.mjs";
 
 const { getDatabase } = await import("../src/lib/db/core.ts");
 const { allocateSeq, getFloor, setFloor, setDmMode } = await import("../src/lib/db/campaigns.ts");
@@ -47,7 +50,7 @@ const { listRecentRolls } = await import("../src/lib/db/rolls.ts");
 const tools = await import("../src/lib/dm/encounter-tools.ts");
 const { actingCombatantId } = await import("../src/lib/dm/can-act.ts");
 const { freshBudget } = await import("../src/lib/dm/action-budget.ts");
-const { editInitiative, newNpcEntryId } = await import("../src/lib/dm/initiative.ts");
+const { editInitiative, newNpcEntryId, resetInitiative } = await import("../src/lib/dm/initiative.ts");
 const { enemyTurnRefusal } = await import("../src/lib/dm/enemy-turn-order.ts");
 const { handOnFromBanner, invokeEngine } = await import("../src/lib/dm/invoke.ts");
 const { spawnSummons, endSpellSummons } = await import("../src/lib/dm/summon-store.ts");
@@ -58,6 +61,11 @@ const { buildPlayerMapView } = await import("../src/lib/battlemap/view.ts");
 const { findSummonForm } = await import("../src/lib/srd/summon-forms.ts");
 const { summonSchema } = await import("../src/lib/schemas/summon.ts");
 const { composerGate } = await import("../src/app/campaigns/[campaignId]/composerGate.ts");
+const { ENEMY_TURNS_CUE } = await import("../src/lib/dm/enemies-due.ts");
+const { handleDismissCompanion } = await import("../src/lib/dm/companion-tools.ts");
+const { startDmTurn } = await import("../src/lib/dm/turn.ts");
+// Loaded before the waker below, which takes its place in the registry.
+const { requestDmTurn } = await import("../src/lib/dm/loop.ts");
 
 const { test, finish } = suite("test-enforce-turn-advance");
 
@@ -795,6 +803,8 @@ await test("The model's end_turn waits for the enemies due before it; played, th
   world.say("player", "That's my turn.", world.sheet(kara.id));
   const ended = await aiEndTurn(world, kara.id, turn);
   assert.equal(ended.ok, true, ended.error);
+  assert.deepEqual(ended.result.enemiesToAct.map((enemy) => enemy.enemyId), goblins.map((goblin) => goblin.id));
+  assert.equal(ended.result.note, `Kara's turn is over. Goblin 1 and Goblin 2 act before Kara. ${ENEMY_TURNS_CUE} It is now Kara's turn (round 3).`);
   assert.equal(handoff(world).turnId, turn.id, "the model's own pass is handed to it, not held");
   world.dice(1, 1);
   dmTurnEnds(world, getDmTurn(turn.id));
@@ -1186,5 +1196,157 @@ await test("A new database gets no column for the enemies a DM turn acted, and o
   saveDmTurn(turn);
   assert.equal(getDmTurn(turn.id).status, "done");
 });
+
+// ---- the DM turn a pass wakes is told which enemies are due ----
+
+const model = await fakeModel();
+// Everything the model was given: a chat model reads GAME STATE's turn-to-turn
+// part (the fight, and so the enemies due) after the history, as its own user
+// message (src/lib/dm/prompt.ts momentAfterHistory).
+const gameState = (request) => request.messages.map((message) => message.content ?? "").join("\n\n");
+const WAITING = (name) =>
+  `Waiting on ${name}'s player: they have not declared an action this turn. Set the scene and ask what ${name} does; the server refuses any action or end_turn for ${name} until they do.`;
+const DUE = (enemies, name, round) => {
+  const one = enemies.length === 1;
+  return `${enemies.map((enemy) => `${enemy.displayName} [enemyId=${enemy.id}]`).join(" and ")} ${one ? "acts" : "act"} before ${name}; the turn passed ${one ? "it" : "them"} outside your turn. ${ENEMY_TURNS_CUE} ${name}'s turn comes after ${one ? "its" : "theirs"}: a new turn in round ${round}, its action, bonus action and movement unspent.`;
+};
+const lastTurnNote = (world) => listRecentMessages(world.campaignId, 200).filter((message) => message.glyph === "cue-battle").at(-1)?.content;
+const backstopNotes = (world) => listRecentMessages(world.campaignId, 200).filter((message) => message.content.startsWith("Skipped enemy turns"));
+
+// One whole DM turn, as the server's wake runs it on what was posted since
+// the last narration; returns the GAME STATE the model was given.
+async function wokenTurn(world, replies = []) {
+  model.script(replies);
+  await startDmTurn(world.campaignId);
+  assert.ok(model.requests.length, "the DM turn ran");
+  return gameState(model.requests[0]);
+}
+
+// Something posted since the narration that is no word from a player, so the
+// turn that answers it still waits on theirs.
+const tableNote = (world, content) => world.say("system", content);
+
+async function soloWrap() {
+  const staged = await table(["Kara"], { goblins: 2, world: { campaign: { maxPlayers: 8, difficulty: "deadly" } } });
+  const { world, kit, heroes: [kara] } = staged;
+  model.pointAt(world);
+  world.patch(kara.id, { maxHp: 200, currentHp: 200 });
+  kit.place(kara.id, 5, 5);
+  world.enemies().forEach((goblin, index) => kit.place(goblin.id, 4 + index * 2, 6));
+  assert.equal(kit.endTurn(userOf(world, kara.id)), true);
+  assert.equal(world.encounter().round, 2, "End Turn wrapped the round");
+  assert.deepEqual(due(world), world.enemies().map((goblin) => goblin.id));
+  return staged;
+}
+
+await test("End Turn wrapping past two goblins: its note and the DM turn it wakes say they act before Kara, in a new turn of hers, and not to wait on her player", async () => {
+  const { world } = await soloWrap();
+  const goblins = world.enemies();
+  assert.equal(lastTurnNote(world), "Kara ends their turn. It is now Kara's turn. Goblin 1 and Goblin 2 act before Kara.", "the note says what the banner says");
+  const state = await wokenTurn(world);
+  assert.ok(state.includes(DUE(goblins, "Kara", 2)), "GAME STATE names the goblins due");
+  assert.ok(!state.includes("Waiting on Kara's player"), "and does not ask what Kara does");
+  // The scripted turn played nobody: the backstop did, as before.
+  assert.deepEqual(due(world), []);
+  assert.equal(backstopNotes(world).length, 1);
+  tableNote(world, "The torches gutter.");
+  const after = await wokenTurn(world);
+  assert.ok(after.includes(WAITING("Kara")), "once they have gone, the turn waits on Kara's player again");
+  assert.ok(!after.includes("before Kara;"));
+});
+
+await test("The goblins the model plays in that turn are played once: no backstop, and the next turn waits on Kara's player", async () => {
+  const { world, heroes: [kara] } = await soloWrap();
+  const goblins = world.enemies();
+  const swings = goblins.map((goblin) => call("enemy_attack", { enemyId: goblin.id, targetCharacterId: kara.id }));
+  world.dice(1, 1);
+  await wokenTurn(world, [reply({ calls: swings }), reply({ text: "Both goblins lunge and miss." })]);
+  world.clearDice();
+  for (const goblin of goblins) {
+    assert.equal(enemyRollsOf(world, goblin.id).length, 1, `${goblin.displayName} swung once`);
+  }
+  assert.equal(backstopNotes(world).length, 0, "the backstop played nobody");
+  assert.deepEqual(due(world), []);
+  tableNote(world, "The torches gutter.");
+  const after = await wokenTurn(world);
+  assert.ok(after.includes(WAITING("Kara")));
+});
+
+await test("The lead's skip, a companion leaving on its own turn and a mid-round End Turn name the goblin due the same way, in the note and in GAME STATE", async () => {
+  {
+    const { world } = await table(["Kara"]);
+    model.pointAt(world);
+    assert.equal(tools.skipCurrentTurn(world.campaignId), true);
+    assert.equal(lastTurnNote(world), "The party lead skipped Kara's turn. It is now Kara's turn. Goblin acts before Kara.");
+    const state = await wokenTurn(world);
+    assert.ok(state.includes(DUE(world.enemies(), "Kara", 2)), "the lead's skip");
+    assert.ok(!state.includes("Waiting on Kara's player"));
+  }
+  {
+    const { world, kit, heroes: [kara] } = await table(["Kara", "Brom"], { goblinFace: 12 });
+    model.pointAt(world);
+    const pip = companion(world, "Pip", 18, kara);
+    assert.equal(kit.endTurn(userOf(world, kara.id)), true);
+    assert.equal(currentName(world), "Pip");
+    // The party lead sends Pip away from the companions route, outside any DM turn.
+    const holder = tools.turnHolder(world.campaignId);
+    const dismissed = handleDismissCompanion(world.campaign(), JSON.stringify({ characterId: pip.id, reason: "sent home" }), world.sheets());
+    assert.equal(dismissed.ok, true, dismissed.error);
+    tools.settleTurn(world.campaign(), holder);
+    assert.equal(currentName(world), "Brom");
+    assert.equal(lastTurnNote(world), "It is now Brom's turn (round 1). Goblin acts before Brom.");
+    const state = await wokenTurn(world);
+    assert.ok(state.includes(DUE(world.enemies(), "Brom", 1)), "a companion leaving");
+    assert.ok(!state.includes("Waiting on Brom's player"));
+  }
+  {
+    const { world, kit, heroes: [kara] } = await table(["Kara", "Brom"], { goblinFace: 12 });
+    model.pointAt(world);
+    assert.equal(kit.endTurn(userOf(world, kara.id)), true);
+    assert.equal(lastTurnNote(world), "Kara ends their turn. It is now Brom's turn. Goblin acts before Brom.");
+    const state = await wokenTurn(world);
+    assert.ok(state.includes(DUE(world.enemies(), "Brom", 1)), "a mid-round End Turn");
+  }
+});
+
+await test("End Turn handing straight to the next hero says nothing of enemies due, and waits on his player as before", async () => {
+  const { world, kit, heroes: [kara] } = await table(["Kara", "Brom"]);
+  model.pointAt(world);
+  assert.equal(kit.endTurn(userOf(world, kara.id)), true);
+  assert.equal(currentName(world), "Brom");
+  assert.deepEqual(due(world), []);
+  assert.equal(lastTurnNote(world), "Kara ends their turn. It is now Brom's turn.", "the note as it always was");
+  const state = await wokenTurn(world);
+  assert.ok(state.includes(WAITING("Brom")));
+  assert.ok(!state.includes(ENEMY_TURNS_CUE));
+  assert.ok(!/ acts? before Brom/.test(state));
+});
+
+await test("At a person's table End Turn past the goblins posts the same note and wakes no AI turn: the console's cue is theirs", async () => {
+  const { world, kit, heroes: [kara] } = await table(["Kara"], { goblins: 2, world: { campaign: { maxPlayers: 8, difficulty: "deadly" } } });
+  assert.ok(setDmMode(world.campaignId, "human", world.owner.id)?.dmUserId, "a person takes the DM seat");
+  assert.equal(kit.endTurn(userOf(world, kara.id)), true);
+  assert.equal(due(world).length, 2);
+  assert.equal(lastTurnNote(world), "Kara ends their turn. It is now Kara's turn. Goblin 1 and Goblin 2 act before Kara.", "the same note as the person's banner");
+  assert.equal(requestDmTurn(world.campaignId), false);
+});
+
+await test("A DM's initiative reset takes the enemies due with the old order: the turn after it builds, and the new order owes them nothing", async () => {
+  const { world, heroes: [kara] } = await soloWrap();
+  assert.equal(resetInitiative(world.campaign()).ok, true);
+  assert.deepEqual(due(world), [], "the reset clears them with the hold");
+  // A DM turn on the reset fight builds; it rolls whoever has not, and the
+  // order locks with Kara first.
+  world.dice(20);
+  const state = await wokenTurn(world);
+  world.clearDice();
+  assert.ok(!state.includes(ENEMY_TURNS_CUE));
+  assert.equal(world.encounter().orderReady, true);
+  assert.equal(currentName(world), "Kara");
+  assert.deepEqual(due(world), [], "the goblins after Kara are not owed a turn before hers");
+  assert.doesNotMatch(tools.endTurnRefusal(world.campaignId, userOf(world, kara.id)), /act first/);
+});
+
+model.close();
 
 finish();

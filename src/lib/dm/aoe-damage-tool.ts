@@ -13,7 +13,7 @@ export const aoeDamageTool: ToolDef = {
   function: {
     name: "aoe_damage",
     description:
-      "Resolve a multi-target save-or-damage effect (breath weapon, fireball, collapsing ceiling, Entangle, Hypnotic Pattern, Slow, Sleep) in ONE call. The server rolls the damage once, rolls every target's saving throw from their real stats, and applies full or half damage and the spell's conditions to each. A player's spell needs casterId: the server spends the slot once for everyone caught, derives the real dice, save, DC and conditions, refuses creatures out of the spell's reach, and on a concentration spell's later turns (Call Lightning's next bolt, Moonbeam) spends no slot. A spell named with no casterId or casterEnemyId is refused. The server also applies the spell's own riders: a push (Thunderwave, Gust of Wind), a lost action (Stinking Cloud), a concentration save for those caught (Sleet Storm, Earthquake), Divine Word's tiers and its return of celestials, elementals, fey and fiends to their planes, Chain Lightning's four targets, Prismatic Spray's ray for each creature, and the two damage types of Meteor Swarm, Flame Strike and Ice Storm rolled and resisted apart. A creature Blink, Etherealness or Maze took away is left out of the area. A spell that stays on the ground (Web, Entangle, Grease, Moonbeam, Sleet Storm, Stinking Cloud, Cloudkill, Insect Plague, Black Tentacles, Wall of Fire, Blade Barrier) is laid on the battle map where it was cast (atX/atY, else around the creatures caught) and the server applies it from then on: its difficult ground, obscurement, and the saves and damage for creatures entering it or starting or ending a turn in it, until the concentration or the duration ends. An enemy's spell that only lays an area (Darkness, Fog Cloud, a Web with nobody in it yet) is casterEnemyId, spell and atX/atY with no targets (saveAbility and dc as its block gives them; nobody rolls): its action and slot are spent and the area laid. Never chain per-target request_roll or apply_damage calls for an area effect.",
+      "Resolve a multi-target save-or-damage effect (breath weapon, fireball, collapsing ceiling, Entangle, Hypnotic Pattern, Slow, Sleep) in ONE call. The server rolls the damage once, rolls every target's saving throw from their real stats, and applies full or half damage and the spell's conditions to each. A player's spell needs casterId: the server spends the slot once for everyone caught and derives the real dice, save, DC and conditions. Besides the riders the spell rules list, it applies Earthquake's concentration save and Chain Lightning's four targets. A creature Blink, Etherealness or Maze took away is left out of the area. A spell that stays on the ground (Web, Entangle, Grease, Moonbeam, Sleet Storm, Stinking Cloud, Cloudkill, Insect Plague, Black Tentacles, Wall of Fire, Blade Barrier) is laid on the battle map where it was cast (atX) and the server applies it from then on: its difficult ground, obscurement, and the saves and damage for creatures entering it or starting or ending a turn in it, until the concentration or the duration ends. An enemy's spell that only lays an area (Darkness, Fog Cloud, a Web with nobody in it yet) is casterEnemyId, spell and atX/atY with no targets (saveAbility and dc as its block gives them; nobody rolls): its action and slot are spent and the area laid. Never chain per-target request_roll or apply_damage calls for an area effect.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -21,9 +21,9 @@ export const aoeDamageTool: ToolDef = {
         damage: {
           type: "string",
           description:
-            "Damage dice expression (e.g. 8d6) or a flat integer. Omit for a player's spell that deals none (Entangle); a known spell rolls its own dice.",
+            "Damage dice expression (8d6) or a flat integer. Omit for a player's spell that deals none (Entangle).",
         },
-        type: { type: "string", description: "Damage type, e.g. fire." },
+        type: { type: "string", description: "Damage type (slashing, fire)." },
         saveAbility: {
           type: "string",
           enum: ["str", "dex", "con", "int", "wis", "cha"],
@@ -37,7 +37,7 @@ export const aoeDamageTool: ToolDef = {
         },
         halfOnSave: {
           type: "boolean",
-          description: "True (default) = half damage on a successful save; false = no damage.",
+          description: "True for half damage on a successful save, false for none. Default true.",
         },
         enemyIds: {
           type: "array",
@@ -56,21 +56,21 @@ export const aoeDamageTool: ToolDef = {
         casterId: {
           type: "string",
           description:
-            "If a player character cast this effect on their combat turn, their exact characterId; marks their turn as taken.",
+            "The caster, if a player character cast this on their combat turn: exact characterId from GAME STATE. Marks their turn as taken.",
         },
         casterEnemyId: {
           type: "string",
           description:
-            "If a specific ENEMY did this: its enemyId from GAME STATE, with ability (a breath weapon or other action from its block) or spell (one on its list). It is the enemy's action for the round (refused if it already acted, cannot act, or is charmed by a target); the save, DC, dice and condition come from the block or the spell whatever you send, a Recharge ability must have recharged, and a spell spends the enemy's slot. A concentration spell is tracked and ends when the enemy's concentration breaks or it dies.",
+            "The enemy doing it, if a specific ENEMY did this: exact enemyId from GAME STATE, with ability (a breath weapon or other action from its block) or spell (one on its list). It is the enemy's action for the round (refused if it already acted, cannot act, or is charmed by a target); the save, DC, dice and condition come from the block or the spell whatever you send, a Recharge ability must have recharged, and a spell spends the enemy's slot. A concentration spell is tracked and ends when the enemy's concentration breaks or it dies.",
         },
         ability: {
           type: "string",
-          description: "With casterEnemyId: the ability's name as its block lists it, e.g. 'Fire Breath' or 'Wing Attack'.",
+          description: "With casterEnemyId: the ability's name as its block lists it ('Fire Breath', 'Wing Attack').",
         },
         spell: {
           type: "string",
           description:
-            "The spell being cast (e.g. Fireball). A player's spell needs casterId and the server spends the slot and derives the real dice, save, DC and conditions, overriding the numbers above; an enemy's needs casterEnemyId.",
+            "The spell being cast (Fireball); its real dice, save, DC and conditions override the numbers above. An enemy's needs casterEnemyId.",
         },
         level: {
           type: "integer",
@@ -81,13 +81,13 @@ export const aoeDamageTool: ToolDef = {
         overchannel: {
           type: "boolean",
           description:
-            "A School of Evocation wizard's Overchannel: a 1st to 5th level wizard spell deals its maximum damage; after the first use each long rest the server rolls the necrotic damage it costs the wizard.",
+            "A School of Evocation wizard's Overchannel (14th level): a 1st to 5th level wizard spell deals its maximum damage. The first use each long rest is free; after that the server rolls the necrotic damage it costs the wizard.",
         },
         sculpt: {
           type: "array",
           items: { type: "string" },
           description:
-            "An evoker's Sculpt Spells: the characterIds caught in the evocation who succeed and take nothing (at most 1 + the spell's level). Omit to spare every character caught; send [] to spare nobody.",
+            "An evoker's Sculpt Spells only: the characters caught in the evocation who succeed and take nothing (at most 1 + the spell's level), exact characterIds from GAME STATE. Omit to spare every character caught; send [] to spare nobody.",
         },
         reason: { type: "string", description: "Short in-fiction cause." },
         ...ZONE_ARGS,

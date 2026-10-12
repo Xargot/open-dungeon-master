@@ -77,7 +77,7 @@ export function EncounterPanel({
       }
       const enemy = enemiesById.get(entry.id);
       if (enemy) {
-        return [monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name })];
+        return [monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name, slug: enemy.slug, name: enemy.name })];
       }
       return entry.kind === "npc" ? [npcPlaceholder(null, entry.name)] : [];
     };
@@ -195,6 +195,8 @@ export function EncounterPanel({
                     cr={group.members[0].cr}
                     genre={genre}
                     seed={group.members[0].name}
+                    slug={group.members[0].slug}
+                    name={group.members[0].name}
                     size="size-6"
                     className={cn("rounded-full", !standing.length && "grayscale")}
                   />
@@ -241,6 +243,8 @@ export function EncounterPanel({
                     cr={enemy.cr}
                     genre={genre}
                     seed={enemy.name}
+                    slug={enemy.slug}
+                    name={enemy.name}
                     size="size-8"
                     className={cn("rounded-full", out && "grayscale")}
                   />

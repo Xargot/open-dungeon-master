@@ -19,7 +19,7 @@ const SECTION_GLYPHS: Record<string, string> = {
   "The side panel": "tab-session",
   Dice: "die-d20",
   "Voice and narration": "tab-story",
-  "Live voice chat": "cue-horn",
+  "Live voice chat": "ui-voice",
   "Ambience and music": "tab-ambience",
   "Playing with a human DM": "tab-dm",
   "Party lead": "tab-lead",

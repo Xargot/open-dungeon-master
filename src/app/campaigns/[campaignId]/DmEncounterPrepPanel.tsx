@@ -352,8 +352,8 @@ export function DmEncounterPrepPanel({
                   disabled: busy,
                   onSelect: () => void deploy(template.id, !template.cued),
                 },
-                { id: "duplicate", label: `Duplicate ${template.name}`, glyph: "system-homebrew", disabled: busy, onSelect: () => void duplicate(template) },
-                { id: "delete", label: `Delete ${template.name}`, glyph: "quest-failed", tone: "danger", separated: true, onSelect: () => void remove(template) },
+                { id: "duplicate", label: `Duplicate ${template.name}`, glyph: "ui-duplicate", disabled: busy, onSelect: () => void duplicate(template) },
+                { id: "delete", label: `Delete ${template.name}`, glyph: "ui-delete", tone: "danger", separated: true, onSelect: () => void remove(template) },
               ];
               return (
                 <ContextMenu key={template.id} as="li" items={items} label={template.name} className={panelRow}>

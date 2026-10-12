@@ -66,7 +66,7 @@ export const socialTools: ToolDef[] = [
     function: {
       name: "set_npc",
       description:
-        "Register or update a named NPC the party is dealing with, so the server tracks who they are and how they feel about the party across the whole campaign. Call this the first time a NpC matters to a scene (a quest-giver, a guard, a merchant), and again when the story itself (not a check) changes how they feel. attitude is the 5e scale: hostile, indifferent, or friendly. Do NOT use this to record an attitude change won by a Charisma check; social_check does that.",
+        "Register or update a named NPC the party is dealing with, so the server tracks who they are and how they feel about the party across the whole campaign; call it again when the story itself (not a check) changes how they feel.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -76,7 +76,7 @@ export const socialTools: ToolDef[] = [
           attitude: {
             type: "string",
             enum: [...ATTITUDE_ENUM],
-            description: "How they currently feel about the party. Defaults to indifferent.",
+            description: "How they currently feel about the party. Default 'indifferent'.",
           },
           trait: {
             type: "string",
@@ -107,7 +107,7 @@ export const socialTools: ToolDef[] = [
     function: {
       name: "npc_reaction",
       description:
-        "Roll a first-meeting reaction for a new NPC when it is genuinely uncertain how they take the party. The server rolls 2d6 (plus any modifier for the party's approach or reputation) and turns it into a starting attitude (hostile, indifferent, or friendly), registering the NPC with it. Use this instead of simply deciding how a stranger feels. Skip it when the story already fixes the NPC's stance (a sworn enemy, a hired ally).",
+        "Roll a first-meeting reaction for a new NPC when it is genuinely uncertain how they take the party. The server rolls 2d6 (plus any modifier for the party's approach or reputation) and turns it into a starting attitude (hostile, indifferent, or friendly), registering the NPC with it. Call it instead of simply deciding how a stranger feels. Skip it when the story already fixes the NPC's stance (a sworn enemy, a hired ally).",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -119,8 +119,8 @@ export const socialTools: ToolDef[] = [
             description:
               "A small +/- for the situation (a good first impression, a fearsome reputation). Usually -2 to +2.",
           },
-          trait: { type: "string", description: "Optional short personality note." },
-          location: { type: "string", description: "Optional where they are found." },
+          trait: { type: "string", description: "Short personality note." },
+          location: { type: "string", description: "Where they are found." },
           gender: { type: "string", enum: [...TOLD_GENDERS], description: TOLD_GENDER_HELP },
         },
         required: ["name", "gender"],
@@ -132,13 +132,13 @@ export const socialTools: ToolDef[] = [
     function: {
       name: "social_check",
       description:
-        "Resolve one character trying to sway a tracked NPC with words. The server rolls that character's Persuasion, Deception, or Intimidation from their real sheet against a DC set by the NPC's current attitude (friendly is easy, hostile is hard), reports success or failure, and shifts the NPC one step friendlier or more hostile on a decisive result, at most once per exchange. Call this BEFORE narrating how the NPC responds, and narrate exactly what it reports. The NPC must already exist (set_npc or npc_reaction first).",
+        "Resolve one character trying to sway a tracked NPC with words: friendly is easy, hostile is hard, and the attitude shifts at most once per exchange. Call it BEFORE narrating how the NPC responds; narrate exactly what it reports. The NPC must already exist (set_npc or npc_reaction first).",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           ...waypointProperty,
-          characterId: { type: "string", description: "The character making the appeal." },
+          characterId: { type: "string", description: "The character making the appeal: exact characterId from GAME STATE." },
           npc: { type: "string", description: "The exact name of the tracked NPC." },
           approach: {
             type: "string",

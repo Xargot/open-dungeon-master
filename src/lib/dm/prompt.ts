@@ -26,10 +26,12 @@ import { genreClassIds } from "@/lib/classes";
 import { renderArcForPrompt } from "@/lib/dm/arc-logic";
 import { renderWorldArcsForPrompt } from "@/lib/dm/world-arc-logic";
 import { renderFactsForPrompt, type FactLike } from "@/lib/dm/fact-logic";
+import { MOMENT_INSTRUCTION, splitAtMoment, THIS_MOMENT_HEADING, THIS_TURN_HEADING } from "@/lib/prompt-boundary";
 import { companionMode } from "@/lib/dm/companion-tools";
 import { breakDown, describeInstant, isDark, normalizeClock } from "@/lib/dm/calendar";
 import { describeWeather } from "@/lib/srd/weather";
 import { describeParty, normalizeParty } from "@/lib/dm/party-logic";
+import { formationPartyIds } from "@/lib/dm/roster";
 import { getSceneTracker } from "@/lib/db/scene-tracker";
 import { trackerPromptBlock } from "@/lib/dm/scene-tracker-logic";
 import { getAmbience } from "@/lib/db/ambience";
@@ -48,6 +50,7 @@ import { renderChapterLod } from "@/lib/dm/chapter-lod";
 import { buildPinnedMemoriesBlock } from "@/lib/dm/pin-logic";
 import {
   computeBudgets,
+  cutCoveredHistory,
   estimateTokens,
   fitHistory,
   usableTokens,
@@ -63,12 +66,17 @@ import { rollerName } from "@/lib/roll-labels";
 import { tableHazards } from "@/lib/srd/table-hazards";
 import { waypointProperty } from "@/lib/dm/waypoint-logic";
 import { languageDirective } from "@/lib/dm/table-language-logic";
+import { OFFER_NOTE_PREFIX, renderOffersBlock, type OfferLine } from "@/lib/dm/proposal-logic";
+import { ENEMY_TURNS_CUE } from "@/lib/dm/enemies-due";
 
 export { DM_SYSTEM, dmSystemText, ENCOUNTER_RULES, encounterRulesText } from "@/lib/dm/prompt-rules";
 
 // Full system prompt for a campaign: base rules plus genre flavor plus any
-// custom world text.
-export function buildDmSystem(campaign: Campaign): string {
+// custom world text. settingsRules are the optional rules that change only
+// with the campaign's settings (real dice, companions, relationships): they
+// join the rules above the turn heading, which the Claude Code harness caches
+// (src/lib/prompt-boundary.ts).
+export function buildDmSystem(campaign: Campaign, settingsRules: readonly string[]): string {
   const preset = presetFor(campaign.gameSettings);
   // The engine-boundary contract leads: one labelled statement of which facts
   // the runtime owns, which the numbered rules below it then apply tool by
@@ -93,16 +101,20 @@ export function buildDmSystem(campaign: Campaign): string {
   if (campaign.gameSettings.genre === "custom" && campaign.gameSettings.customGenreText) {
     parts.push(`Tone and world, set by the table: ${campaign.gameSettings.customGenreText}`);
   }
+  const language = languageDirective(campaign.gameSettings.tableLanguage);
+  if (language) {
+    parts.push(language);
+  }
+  parts.push(...settingsRules);
+  // Closes what changes only with the campaign's settings; the cover block's
+  // countdown below changes every turn (src/lib/prompt-boundary.ts).
+  parts.push(THIS_TURN_HEADING);
   // Assisted mode, DM stepped away: the model is standing in for a person for
   // a counted stretch, and is told so plainly rather than being left to run
   // someone else's campaign as if it were its own.
   const cover = coverPromptBlock(campaign.dmCover);
   if (cover) {
     parts.push(cover);
-  }
-  const language = languageDirective(campaign.gameSettings.tableLanguage);
-  if (language) {
-    parts.push(language);
   }
   return parts.join("\n\n");
 }
@@ -123,6 +135,12 @@ export type DmEncounterState = {
   // The current combatant's name while their turn waits on their player
   // (src/lib/dm/player-word.ts characterAwaitingPlayer).
   awaitingPlayer: string | null;
+  // The enemies a pass made outside the model's turn left owed their turns
+  // before the current character's (src/lib/dm/enemies-due.ts); absent when
+  // none are. The pass's table note names them too
+  // (src/lib/dm/encounter-tools.ts advancePointer); this adds their ids and
+  // what to do.
+  enemiesDue?: { before: string; enemies: Array<{ enemyId: string; name: string }> };
   enemies: Array<{
     enemyId: string;
     name: string;
@@ -150,6 +168,15 @@ export type DmGameState = {
   enemySuggestions?: Array<{ slug: string; name: string; cr: number }>;
   recentRolls: StoredRoll[];
   storySummary: string;
+  // The newest message the chapter summaries or the rolling summary cover;
+  // the transcript leaves out what is older (cutCoveredHistory).
+  summaryCoveredSeq?: number | null;
+  // A chat model reads the game state's turn-to-turn part after the
+  // transcript, as one user message, so a server that caches the prompt's
+  // start (llama-server) reuses the history from one turn to the next. An
+  // agent program's rendering (src/lib/harness/render.ts) moves that part
+  // itself, so its prompt leaves it in the system message.
+  momentAfterHistory?: boolean;
   currentLocation?: {
     name: string;
     layoutDescription: string;
@@ -203,6 +230,11 @@ export type DmGameState = {
   recentWhispers?: Array<{ to: string; content: string }>;
   // Private messages players sent the DM that no turn has handled yet.
   pendingPlayerWhispers?: Array<{ from: string; content: string }>;
+  // A plan the party staged together, resolved into this turn (issue 254).
+  coordinationBlock?: string | null;
+    // Offers to players still waiting, and those settled recently and how
+  // (src/lib/dm/proposal-logic.ts, issue 239).
+  offers?: OfferLine[];
   // Prebuilt retrieval blocks (src/lib/dm/context-retrieval.ts): variant
   // rules, retrieved house-rule chunks, and retrieved world lore. Built
   // before the prompt so this module stays synchronous.
@@ -591,10 +623,16 @@ export function buildGameStateBlock(state: DmGameState): string {
     return `- ${who}: ${roll.kind.replaceAll("_", " ")}${roll.detail ? ` (${roll.detail.replaceAll("_", " ")})` : ""} rolled ${roll.total}${outcome}${roll.breakdown.crit === "nat20" ? " (natural 20)" : roll.breakdown.crit === "nat1" ? " (natural 1)" : ""}${secret}`;
   });
 
+  // Two parts, each section in exactly one: what a turn rarely changes stands
+  // first; what changes from one turn to the next (the fight, the dice, what
+  // retrieval and the newest lines brought up) follows THIS_MOMENT_HEADING
+  // (src/lib/prompt-boundary.ts). Sorted by how often each section changed
+  // between the turns of recorded sessions.
   const sections = [
     "=== GAME STATE (authoritative; never contradict) ===",
     `Campaign: ${campaign.title} | Difficulty: ${campaign.difficulty}${campaign.theme ? ` | Setting: ${campaign.theme}` : ""}`,
   ];
+  const moment: string[] = [];
   if (campaign.description) {
     sections.push(`Premise: ${campaign.description}`);
   }
@@ -635,10 +673,14 @@ export function buildGameStateBlock(state: DmGameState): string {
   // purse and the shared pack (src/lib/dm/party-logic.ts). Empty on a
   // campaign that has never used them, so an untouched table's prompt does
   // not carry a paragraph of zeroes.
+  // The travel formation is read against the party in play now (issue 230):
+  // from the campaign row on every turn, so a change made since the last one,
+  // or long ago and compacted out of the transcript, is the one the DM sees.
   const partyBlock = describeParty(
     normalizeParty(campaign.party),
     formatCopper,
     (characterId) => sheets.find((sheet) => sheet.id === characterId)?.name ?? "someone",
+    formationPartyIds(campaign, sheets),
   );
   if (partyBlock) {
     sections.push(partyBlock);
@@ -648,7 +690,7 @@ export function buildGameStateBlock(state: DmGameState): string {
   // there is no scene, so an ordinary turn's prompt is unchanged.
   const sceneBlock = trackerPromptBlock(getSceneTracker(campaign.id));
   if (sceneBlock) {
-    sections.push(sceneBlock);
+    moment.push(sceneBlock);
   }
   // What the table is hearing, so set_ambience is called when the sound
   // should CHANGE rather than every turn. Omitted entirely when the sound
@@ -672,7 +714,7 @@ export function buildGameStateBlock(state: DmGameState): string {
     return `- ${who}: ${describeEffect(effect)}`;
   });
   if (effectLines.length) {
-    sections.push(`Active effects (the server applies these to the rolls they name):\n${effectLines.join("\n")}`);
+    moment.push(`Active effects (the server applies these to the rolls they name):\n${effectLines.join("\n")}`);
   }
   const mounts = getMounts(campaign.id);
   const mountLines = Object.entries(mounts).map(([characterId, mount]) => {
@@ -683,7 +725,7 @@ export function buildGameStateBlock(state: DmGameState): string {
     sections.push(`Mounted:\n${mountLines.join("\n")}`);
   }
   if (state.directorNotes?.length) {
-    sections.push(
+    moment.push(
       `DIRECTOR NOTES (the world moved; weave each into this turn's scene naturally, without announcing it as an event):\n${state.directorNotes
         .map((note) => `- ${note}`)
         .join("\n")}`,
@@ -729,7 +771,16 @@ export function buildGameStateBlock(state: DmGameState): string {
       if (encounter.movementLeft) {
         lines.push(`Movement left this turn: ${encounter.movementLeft}, counted by the board.`);
       }
-      if (encounter.awaitingPlayer) {
+      // Their turns come first: asking the current character's player now
+      // would leave them to the backstop.
+      if (encounter.enemiesDue) {
+        const { before, enemies } = encounter.enemiesDue;
+        const due = enemies.map((enemy) => `${enemy.name} [enemyId=${enemy.enemyId}]`);
+        const one = due.length === 1;
+        lines.push(
+          `${due.join(" and ")} ${one ? "acts" : "act"} before ${before}; the turn passed ${one ? "it" : "them"} outside your turn. ${ENEMY_TURNS_CUE} ${before}'s turn comes after ${one ? "its" : "theirs"}: a new turn in round ${encounter.round}, its action, bonus action and movement unspent.`,
+        );
+      } else if (encounter.awaitingPlayer) {
         const name = encounter.awaitingPlayer;
         lines.push(
           `Waiting on ${name}'s player: they have not declared an action this turn. Set the scene and ask what ${name} does; the server refuses any action or end_turn for ${name} until they do.`,
@@ -777,7 +828,7 @@ export function buildGameStateBlock(state: DmGameState): string {
     if (encounter.map) {
       lines.push(encounter.map);
     }
-    sections.push(lines.join("\n"));
+    moment.push(lines.join("\n"));
   } else if (state.enemySuggestions?.length) {
     sections.push(
       `Enemy picks for this world (use these with start_encounter when violence breaks out; any 5e monster slug also works, and you may rename any monster to fit the setting):\n${state.enemySuggestions
@@ -806,10 +857,10 @@ export function buildGameStateBlock(state: DmGameState): string {
     sections.push(state.variantRulesBlock);
   }
   if (state.houseRulesBlock) {
-    sections.push(state.houseRulesBlock);
+    moment.push(state.houseRulesBlock);
   }
   if (state.loreBlock) {
-    sections.push(state.loreBlock);
+    moment.push(state.loreBlock);
   }
   if (state.publicNotes?.length) {
     sections.push(
@@ -854,7 +905,7 @@ export function buildGameStateBlock(state: DmGameState): string {
     );
   }
   if (state.shopsBlock) {
-    sections.push(state.shopsBlock);
+    moment.push(state.shopsBlock);
   }
   // The table's prepared fights, out of combat only (#154).
   if (state.preparedFightsBlock) {
@@ -864,7 +915,7 @@ export function buildGameStateBlock(state: DmGameState): string {
     sections.push(state.factionsBlock);
   }
   if (state.worldBlock) {
-    sections.push(state.worldBlock);
+    moment.push(state.worldBlock);
   }
   if (state.relationships?.length) {
     sections.push(
@@ -881,15 +932,26 @@ export function buildGameStateBlock(state: DmGameState): string {
     );
   }
   if (state.pendingPlayerWhispers?.length) {
-    sections.push(
+    moment.push(
       `Private messages from players, sent only to you; nobody else at the table saw them. Handle each one this turn per the private-message rules:\n${state.pendingPlayerWhispers
         .map((whisper) => `- [${whisper.from}, privately] ${whisper.content}`)
         .join("\n")}`,
     );
   }
+  if (state.coordinationBlock) {
+    moment.push(state.coordinationBlock);
+  }
+  // In the moment, not the cached prefix: offers come and go turn by turn,
+  // and a block that changes there would cost the whole prefix its cache.
+  const offersBlock = renderOffersBlock(state.offers ?? []);
+  if (offersBlock) {
+    moment.push(offersBlock);
+  }
   // Only when somebody at the table fields several characters: the usual
   // one-each table pays no window for it (issue 120). Each line names the
   // player, the characters they control and the one they have selected.
+  // The selection changes whenever its player switches, so the section goes
+  // in the turn-to-turn part.
   const severalOwned = members
     .map((member) => ({
       member,
@@ -897,7 +959,7 @@ export function buildGameStateBlock(state: DmGameState): string {
     }))
     .filter((entry) => entry.owned.length > 1);
   if (severalOwned.length) {
-    sections.push(
+    moment.push(
       `Players running several characters (player: the characters they control; the one they have selected). Every one of these is a player character and never an AI companion of yours, selected or not. The acting character is the one a player message names (its characterId), and in a fight the one whose turn it is; never speak or act for a player's other characters, and never turn one into a follower. A sheet's bound pet stays a pet.\n${severalOwned
         .map(({ member, owned }) => {
           const selected = owned.find((sheet) => sheet.id === member.activeCharacterId) ?? owned[0];
@@ -930,7 +992,7 @@ export function buildGameStateBlock(state: DmGameState): string {
       .join("\n")}`,
   );
   if (rollLines.length) {
-    sections.push(`Recent rolls:\n${rollLines.join("\n")}`);
+    moment.push(`Recent rolls:\n${rollLines.join("\n")}`);
   }
   if (state.pins?.length) {
     // Unconditional and unfiltered by design: the table asked for these to be
@@ -972,8 +1034,7 @@ export function buildGameStateBlock(state: DmGameState): string {
   if (hazards) {
     sections.push(hazards);
   }
-  sections.push("=== END GAME STATE ===");
-  return sections.join("\n\n");
+  return [...sections, THIS_MOMENT_HEADING, ...moment, "=== END GAME STATE ==="].join("\n\n");
 }
 
 function tableHazardLine(campaignId: string): string {
@@ -1003,14 +1064,14 @@ export const requestRollTool = {
   function: {
     name: "request_roll",
     description:
-      "Ask the server to roll dice for an uncertain outcome. The server resolves the character's modifier from their sheet, rolls, and returns the real result for you to narrate. Call it once per uncertain action.",
+      "Ask the server to roll dice for an uncertain outcome; it resolves the character's modifier from their sheet.",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
         characterId: {
           type: "string",
-          description: "The exact characterId from GAME STATE whose roll this is.",
+          description: "The character whose roll this is: exact characterId from GAME STATE.",
         },
         kind: {
           type: "string",
@@ -1027,12 +1088,12 @@ export const requestRollTool = {
         skill: {
           type: "string",
           enum: SRD_SKILLS.map((skill) => skill.id),
-          description: "For skill_check: which skill.",
+          description: "skill_check only: which skill.",
         },
         ability: {
           type: "string",
           enum: ["str", "dex", "con", "int", "wis", "cha"],
-          description: "For saving_throw or ability_check: which ability.",
+          description: "saving_throw and ability_check only: which ability.",
         },
         difficulty: {
           type: "string",
@@ -1043,17 +1104,17 @@ export const requestRollTool = {
         dc: {
           type: "integer",
           description:
-            "An exact difficulty class, only when a specific number is called for. Usually pass difficulty instead. Omit for damage or initiative.",
+            "An exact DC, only when a specific number is called for.",
         },
         expression: {
           type: "string",
           description:
-            "For damage or custom rolls only: the dice expression, e.g. 2d6+3. Never an enemy's attack or damage (enemy_attack rolls those) and never a party character's attack (pc_attack).",
+            "damage and custom only: the dice expression ('2d6+3'). Never an enemy's attack or damage (enemy_attack rolls those) and never a party character's attack (pc_attack).",
         },
         damageType: {
           type: "string",
           description:
-            "For kind=damage: the damage type (fire, slashing, poison...), so the target's resistances, immunities and vulnerabilities apply.",
+            "damage only: the damage type (fire, slashing, poison...), so the target's resistances, immunities and vulnerabilities apply.",
         },
         advantage: {
           type: "string",
@@ -1069,7 +1130,7 @@ export const requestRollTool = {
         targetEnemyId: {
           type: "string",
           description:
-            "For kind=damage during combat from someone with no sheet (an NPC ally who was never recruited): the exact enemyId from GAME STATE this damage strikes. The server applies the rolled total to that enemy automatically and reports its new state; never follow up with damage_enemy. A party character's damage goes through pc_attack or the spell tools, and the server refuses it here.",
+            "damage only, in combat, from someone with no sheet (an NPC ally who was never recruited): the enemy this damage strikes, exact enemyId from GAME STATE. The server applies the rolled total to that enemy automatically and reports its new state; never follow up with damage_enemy. A party character's damage goes through pc_attack or the spell tools, and the server refuses it here.",
         },
         reason: {
           type: "string",
@@ -1079,12 +1140,12 @@ export const requestRollTool = {
         against: {
           type: "string",
           description:
-            "For saving_throw: what the save resists: a condition (frightened, charmed, poisoned), a damage type, or 'spell' for a magical effect, with its caster's type when known ('spell cast by a fiend'). The server applies Brave, Fey Ancestry, Dwarven and Stout Resilience, Gnome Cunning, Countercharm and Holy Nimbus from it.",
+            "saving_throw only: what the save resists: a condition (frightened, charmed, poisoned), a damage type, or 'spell' for a magical effect, with its caster's type when known ('spell cast by a fiend'). The server applies Brave, Fey Ancestry, Dwarven and Stout Resilience, Gnome Cunning, Countercharm and Holy Nimbus from it.",
         },
         tool: {
           type: "string",
           description:
-            "For ability_check made with a tool: the tool's name as the sheet lists it (\"thieves' tools\" to pick a lock or disarm a trap, \"herbalism kit\"). A character proficient in it adds their proficiency bonus; the server does it, so never add it to an expression yourself.",
+            "ability_check with a tool only: the tool's name as the sheet lists it (\"thieves' tools\" to pick a lock or disarm a trap, \"herbalism kit\"). A character proficient in it adds their proficiency bonus; the server does it, so never add it to an expression yourself.",
         },
         useInspiration: {
           type: "boolean",
@@ -1124,7 +1185,7 @@ export const requestPlayerInputTool = {
   function: {
     name: "request_player_input",
     description:
-      "Give the floor to one or more specific characters and pause for their response. Call this whenever your reply ends with an NPC speaking to particular characters or a decision that belongs to particular players, not the whole party. Narrate first, then call this. Never answer for them instead.",
+      "Give the floor to one or more specific characters and pause for their response. Narrate first, then call it.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -1161,13 +1222,13 @@ export const movePartyTool = {
   function: {
     name: "move_party",
     description:
-      "Move the party to a location (creates it if new). Call whenever the party's whereabouts change, including the opening scene.",
+      "Move the party to a location (creates it if new). Call it whenever the party's whereabouts change, including the opening scene.",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
         ...waypointProperty,
-        name: { type: "string", description: "Short place name, e.g. The Rusted Flagon." },
+        name: { type: "string", description: "Short place name (The Rusted Flagon)." },
         layoutDescription: {
           type: "string",
           description:
@@ -1220,7 +1281,7 @@ export const completeBeatTool = {
   function: {
     name: "complete_beat",
     description:
-      "Report that the party just accomplished the [NOW] beat of the story arc, in the same reply that narrates it happening. Required whenever that beat is achieved; it is what ends a chapter. Not for working toward it: searching, shopping, travel, talk, and rest leave the beat open. A beat with open waypoints is refused until they are ticked (the server ticks them from your tools and from play). Once per reply.",
+      "Report that the party just accomplished the [NOW] beat of the story arc; resting leaves it open. A beat with open waypoints is refused until they are ticked (the server also ticks them from play). Once per reply.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -1243,7 +1304,7 @@ export const sendWhisperTool = {
   function: {
     name: "send_whisper",
     description:
-      "Send a private note that only the named characters' players can read. Use it whenever information belongs to some of the party but not all: a detail only one character notices, true orders for a mind-controlled ally, a private vision or temptation, a secret ally's signal. It is also how you answer a private message a player sent you (listed in GAME STATE when present). Anything a player types in the table chat is public. Never reveal or hint at private content in your shared narration.",
+      "Send a private note that only the named characters' players can read.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -1269,7 +1330,7 @@ export const recallStoryTool = {
   function: {
     name: "recall_story",
     description:
-      "Look up past chapters when players reference old events you no longer remember. Give a chapter number for that chapter's summary, or a query for the verbatim scenes that match it, nearest first, and the chapters they come from.",
+      "Look up past chapters: a chapter number returns that chapter's summary, a query the verbatim scenes that match it, nearest first, and the chapters they come from.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -1327,7 +1388,9 @@ export function buildDmMessages(
         : message.authorType === "system"
           ? message.content.startsWith(LEAD_NOTE_PREFIX)
             ? `[Authoritative direction from the party lead; weave it into the story now] ${message.content.slice(LEAD_NOTE_PREFIX.length)}`
-            : `[Table note] ${message.content}`
+            : message.content.startsWith(OFFER_NOTE_PREFIX)
+              ? `[An offer was settled by the player's own answer; authoritative, and never to be offered or asked again] ${message.content.slice(OFFER_NOTE_PREFIX.length)}`
+              : `[Table note] ${message.content}`
           : message.content.startsWith('"') || message.content.startsWith("(ooc)")
             ? `[${name}] ${message.content}`
             : `[${name} | attempt] ${message.content}`;
@@ -1338,26 +1401,28 @@ export function buildDmMessages(
       message.authorType === "player" && message.intent
         ? `\n${describeIntent(message.intent, message.characterId)}`
         : "";
-    return { message, id: message.id, text: `${content}${card}` };
+    return { message, id: message.id, seq: message.seq, text: `${content}${card}` };
   });
+  const uncovered = cutCoveredHistory(rendered, state.summaryCoveredSeq ?? null);
 
   const physicalDiceUsers = realDiceUserIds(state.campaign, state.members);
   const anyPhysicalDice = state.sheets.some((sheet) => physicalDiceUsers.has(sheet.userId));
-  const systemParts = [buildDmSystem(state.campaign)];
+  const settingsRules: string[] = [];
   if (anyPhysicalDice) {
-    systemParts.push(REAL_DICE_RULE);
-  }
-  if (state.encounter) {
-    systemParts.push(encounterRulesText(tracksAmmunition(state.campaign)));
+    settingsRules.push(REAL_DICE_RULE);
   }
   const mode = companionMode(state.campaign);
   if (mode !== "off") {
-    systemParts.push(companionRules(state.campaign, mode));
+    settingsRules.push(companionRules(state.campaign, mode));
   }
   if (state.campaign.gameSettings.relationships !== "off") {
-    systemParts.push(
+    settingsRules.push(
       relationshipRules(state.campaign.gameSettings.romance !== "off"),
     );
+  }
+  const systemParts = [buildDmSystem(state.campaign, settingsRules)];
+  if (state.encounter) {
+    systemParts.push(encounterRulesText(tracksAmmunition(state.campaign)));
   }
   if (state.pendingPlayerWhispers?.length) {
     systemParts.push(PLAYER_WHISPER_RULES);
@@ -1377,9 +1442,9 @@ export function buildDmMessages(
     0,
     Math.min(budgets.history, usableTokens(state.contextLimitTokens) - fixedTokens),
   );
-  const fitted = fitHistory(rendered, historyAllowance);
+  const fitted = fitHistory(uncovered.kept, historyAllowance);
   const keptIds = new Set(fitted.kept.map((entry) => entry.id));
-  const historyMessages: ChatMessage[] = rendered
+  const historyMessages: ChatMessage[] = uncovered.kept
     .filter((entry) => keptIds.has(entry.id))
     .map((entry) => ({
       role: entry.message.authorType === "dm" ? ("assistant" as const) : ("user" as const),
@@ -1449,9 +1514,14 @@ export function buildDmMessages(
         kind: "history" as BlockKind,
         tokens: fitted.tokens,
         included: true,
-        reason: fitted.dropped
-          ? `kept ${fitted.kept.length} of ${rendered.length} messages; ${fitted.dropped} older dropped over the history budget`
-          : `all ${fitted.kept.length} messages fit`,
+        reason:
+          uncovered.cut || fitted.dropped
+            ? [
+                `kept ${fitted.kept.length} of ${rendered.length} messages`,
+                ...(uncovered.cut ? [`${uncovered.cut} covered by the summaries left out`] : []),
+                ...(fitted.dropped ? [`${fitted.dropped} older dropped over the history budget`] : []),
+              ].join("; ")
+            : `all ${fitted.kept.length} messages fit`,
         position: systemParts.length + 1,
       },
       ...(state.directorBlock
@@ -1481,9 +1551,14 @@ export function buildDmMessages(
     ],
   };
 
+  const system = systemParts.join("\n\n");
+  const { standing, moment } = state.momentAfterHistory ? splitAtMoment(system) : { standing: system, moment: "" };
   return [
-    { role: "system", content: systemParts.join("\n\n") },
+    { role: "system", content: standing },
     ...historyMessages,
+    // The state, then the instruction to take the turn, so the newest player
+    // line is still what the model resolves (src/lib/prompt-boundary.ts).
+    ...(moment ? [{ role: "user" as const, content: `${moment}\n\n${MOMENT_INSTRUCTION}` }] : []),
     // Last, after the newest player line, so the model reads it closest to
     // the point of generation. Omitted entirely when nothing is armed.
     ...(state.directorBlock

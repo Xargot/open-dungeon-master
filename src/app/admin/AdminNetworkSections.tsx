@@ -30,7 +30,7 @@ export function AdminNetworkSections({
 }) {
   return (
     <>
-        <PageSection id="admin-voice" heading="Voice chat" glyph="cue-horn">
+        <PageSection id="admin-voice" heading="Voice chat" glyph="ui-voice">
           <p className="mb-3 text-xs text-stone-500">
             Lets a table talk over live audio. Needs two things beyond this switch:
             the app reached over <strong>https</strong> (browsers block microphone

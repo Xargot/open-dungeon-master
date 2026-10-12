@@ -141,8 +141,13 @@ export function judgeProficiencies(input: ProficiencyInput): ProficiencyVerdict 
       problems.push(owed);
     }
   }
+  // A tool an edited character already holds answers its open grant as a
+  // fresh pick does: a soldier's dice set is the "one gaming set", and the
+  // grant's words are not written back beside it (nor kept, where an earlier
+  // edit did write them).
+  const heldAnswers = (held?.tools ?? []).some((tool) => granted.choices.some((choice) => choice.from.includes(lower(tool))));
   // In the grants' own order; the named picks take the place of the words.
-  const answered = (tool: string) => !(chosenTools.length && toolChoiceOf(tool));
+  const answered = (tool: string) => !((chosenTools.length || heldAnswers) && toolChoiceOf(tool));
   const tools = uniqueNames([
     ...(primary?.tools ?? []).filter(answered),
     ...(background?.tools ?? []).filter(answered),
@@ -150,7 +155,7 @@ export function judgeProficiencies(input: ProficiencyInput): ProficiencyVerdict 
     racialTool,
     ...secondary.flatMap((grant) => grant.tools).filter(answered),
     ...chosenTools,
-    ...(held?.tools ?? []),
+    ...(held?.tools ?? []).filter(answered),
   ]);
   const saves = uniqueNames([...(primary?.saves ?? []), ...(held?.saves ?? [])]) as Ability[];
 

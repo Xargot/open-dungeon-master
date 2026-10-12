@@ -222,7 +222,8 @@ export type HandOptions = {
   trackAmmo?: boolean;
 };
 
-export const HAND_FAN_CAP = 9;
+// The fan's seats, End turn's included (src/lib/battlemap/hand-layout.ts).
+export { HAND_FAN_CAP } from "@/lib/battlemap/hand-layout";
 
 export function spellKey(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");

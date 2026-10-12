@@ -16,7 +16,9 @@ import { restoreOwnForm } from "@/lib/db/enemy-form";
 export type OrderEntry =
   // `reflex`: the second first-round turn of Thief's Reflexes (SRD 5.1),
   // gone when round 1 ends. Absent on every entry written before it.
-  | { kind: "pc"; characterId: string; userId: string; name: string; initiative: number; reflex?: boolean }
+  // `extra`: the feature an extra turn taken at once comes from (Strength
+  // before Death), on a reflex entry, so the board can name it.
+  | { kind: "pc"; characterId: string; userId: string; name: string; initiative: number; reflex?: boolean; extra?: string }
   | { kind: "enemy"; enemyId: string; name: string; initiative: number }
   // A slot a human DM added by hand: an allied captain, a neutral bystander,
   // a swarm counted as one thing. It has no stat block and no hit points

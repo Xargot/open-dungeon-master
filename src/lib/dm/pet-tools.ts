@@ -41,15 +41,15 @@ export const petTools: ToolDef[] = [
     function: {
       name: "summon_pet",
       description:
-        "A character summons or bonds the creature a feature grants them: Find Familiar (kind=familiar, form=owl/cat/raven/bat/rat/spider/weasel/hawk/frog/snake, or imp/quasit/pseudodragon/sprite with Pact of the Chain), a Beast Master ranger's companion (kind=beast_companion, any beast of CR 1/4 or lower), a Drakewarden's drake (kind=drake), or a story-granted pet (kind=other, with the stats). The server validates the feature, loads the stat block, and attaches the pet to their sheet. Call it BEFORE narrating the summon.",
+        "Summon or bond the creature a feature grants a character: Find Familiar (kind=familiar, form=owl/cat/raven/bat/rat/spider/weasel/hawk/frog/snake, or imp/quasit/pseudodragon/sprite with Pact of the Chain), a Beast Master ranger's companion (kind=beast_companion, any beast of CR 1/4 or lower), a Drakewarden's drake (kind=drake), or a story-granted pet (kind=other, with the stats). The server validates the feature, loads the stat block, and attaches the pet to their sheet. Call it BEFORE narrating the summon.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           characterId: { type: "string", description: "Exact characterId from GAME STATE." },
           kind: { type: "string", enum: ["familiar", "beast_companion", "drake", "other"] },
-          form: { type: "string", description: "The creature: 'owl', 'wolf', 'drake'..." },
-          name: { type: "string", description: "The pet's given name; defaults to the form." },
+          form: { type: "string", description: "The creature ('owl', 'wolf', 'drake')." },
+          name: { type: "string", description: "The pet's given name. Default: the form." },
           hp: { type: "integer", minimum: 1, maximum: 300, description: "kind=other only." },
           ac: { type: "integer", minimum: 1, maximum: 30, description: "kind=other only." },
           reason: { type: "string", description: "Short in-fiction cause." },
@@ -63,14 +63,14 @@ export const petTools: ToolDef[] = [
     function: {
       name: "pet_attack",
       description:
-        "A character's pet attacks an enemy: the server checks the pet may attack at all (plain familiars cannot; Pact of the Chain forms, companions and drakes can), rolls to-hit against the enemy's real AC and damage with the pet's real numbers, and applies the result. In a fight it happens on the owner's own turn, while the owner can act, and the server charges it: a Beast Master companion costs the ranger's action, a drake the bonus action, a Pact of the Chain familiar one of the warlock's attacks of the Attack action (once a turn), a story pet the owner's action. A refusal spends nothing.",
+        "Resolve a character's pet attacking an enemy: the server checks the pet may attack at all (plain familiars cannot; Pact of the Chain forms, companions and drakes can), rolls to-hit against the enemy's real AC and damage with the pet's real numbers, and applies the result. In a fight it happens on the owner's own turn, while the owner can act, and the server charges it: a Beast Master companion costs the ranger's action, a drake the bonus action, a Pact of the Chain familiar one of the warlock's attacks of the Attack action (once a turn), a story pet the owner's action. A refusal spends nothing.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          characterId: { type: "string", description: "The owner's characterId." },
+          characterId: { type: "string", description: "The owner: exact characterId from GAME STATE." },
           petName: { type: "string", description: "Which pet, when they have several." },
-          targetEnemyId: { type: "string", description: "The enemy being attacked." },
+          targetEnemyId: { type: "string", description: "The enemy being attacked: exact enemyId from GAME STATE." },
           attack: { type: "string", description: "Named attack when the pet has several." },
           reason: { type: "string" },
         },
@@ -83,12 +83,12 @@ export const petTools: ToolDef[] = [
     function: {
       name: "damage_pet",
       description:
-        "An enemy or hazard damages a character's pet: the damage lands on the pet's own hit points, never the owner's. A familiar dropping to 0 HP vanishes (it can be resummoned with 10 gp and an hour's ritual); other pets fall unconscious at 0.",
+        "Deal an enemy's or hazard's damage to a character's pet: the damage lands on the pet's own hit points, never the owner's. A familiar dropping to 0 HP vanishes (it can be resummoned with 10 gp and an hour's ritual); other pets fall unconscious at 0.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          characterId: { type: "string", description: "The owner's characterId." },
+          characterId: { type: "string", description: "The owner: exact characterId from GAME STATE." },
           petName: { type: "string", description: "Which pet, when they have several." },
           amount: { type: "integer", minimum: 0, maximum: 300 },
           reason: { type: "string" },
@@ -102,12 +102,12 @@ export const petTools: ToolDef[] = [
     function: {
       name: "dismiss_pet",
       description:
-        "A pet is dismissed, sent away, or dies in the fiction: the server removes it from the owner's sheet. Call it when the story ends the bond.",
+        "Remove a pet from its owner's sheet when it is dismissed, sent away, or dies in the fiction. Call it when the story ends the bond.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          characterId: { type: "string", description: "The owner's characterId." },
+          characterId: { type: "string", description: "The owner: exact characterId from GAME STATE." },
           petName: { type: "string", description: "Which pet, when they have several." },
           reason: { type: "string" },
         },

@@ -1,7 +1,7 @@
 // What the Chronicle beside the battle map shows, and when it moves
 // (issues 212 and 213). Pure: scripts/test-chronicle.mjs.
 import type { CampaignMessage } from "@/lib/db/messages";
-import { JOIN_NOTE_PREFIX, LEAD_NOTE_PREFIX } from "@/lib/campaign-types";
+import { LEAD_NOTE_PREFIX, systemNoteWords } from "@/lib/campaign-types";
 
 // The newest entries the scroll holds. It held 14 beside a short board; the
 // pane now runs the full height of the fight stage (issue 213), so it holds
@@ -50,8 +50,7 @@ export function chronicleSystemLine(content: string): string {
   if (content.startsWith(LEAD_NOTE_PREFIX)) {
     return `Party lead: ${content.slice(LEAD_NOTE_PREFIX.length)}`;
   }
-  if (content.startsWith(JOIN_NOTE_PREFIX)) {
-    return content.slice(JOIN_NOTE_PREFIX.length);
-  }
-  return content;
+  // A joiner's and a settled offer's markers come off (issue 239): the
+  // words say who answered and how; the marker is for the DM.
+  return systemNoteWords(content);
 }

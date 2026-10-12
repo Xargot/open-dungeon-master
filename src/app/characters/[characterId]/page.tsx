@@ -174,14 +174,17 @@ export default function CharacterDetailPage({
   }
 
   // A second copy under a numbered name, sheet and portrait verbatim. The
-  // roster is where copies live, so that is where this lands.
-  async function handleDuplicate() {
+  // roster is where copies live, so that is where this lands; "Duplicate
+  // and edit" opens the copy in the build editor instead (issue 229).
+  async function handleDuplicate(edit = false) {
     setCloning(true);
     try {
       const response = await fetch(`/api/characters/${characterId}/clone`, { method: "POST" });
-      if (response.ok) {
-        navigateTo("/characters");
+      if (!response.ok) {
+        return;
       }
+      const data = (await response.json().catch(() => ({}))) as { character?: { id: string } };
+      navigateTo(edit && data.character ? `/characters/${data.character.id}/edit?copyOf=${characterId}` : "/characters");
     } finally {
       setCloning(false);
     }
@@ -254,7 +257,7 @@ export default function CharacterDetailPage({
       id: "pdf",
       label: pdfBusy ? "Preparing..." : "Download PDF",
       hint: "Download this character sheet as a fillable PDF",
-      glyph: "tab-journal",
+      glyph: "ui-export",
       disabled: pdfBusy,
       onSelect: () => void handleDownloadPdf(),
     },
@@ -267,18 +270,33 @@ export default function CharacterDetailPage({
       onSelect: () => void handleExport(),
     },
     {
+      id: "edit",
+      label: "Edit build",
+      hint: "Change this character's build choices in the library",
+      glyph: "ui-edit",
+      onSelect: () => navigateTo(`/characters/${characterId}/edit`),
+    },
+    {
       id: "duplicate",
       label: cloning ? "Copying..." : "Duplicate",
       hint: "Save a second copy of this character to your library",
-      glyph: "tab-notes",
+      glyph: "ui-duplicate",
       disabled: cloning,
       onSelect: () => void handleDuplicate(),
+    },
+    {
+      id: "duplicate-edit",
+      label: "Duplicate and edit",
+      hint: "Save a second copy and open it in the build editor; this one stays as it is",
+      glyph: "ui-duplicate",
+      disabled: cloning,
+      onSelect: () => void handleDuplicate(true),
     },
     {
       id: "portrait",
       label: sheet.portrait ? "Replace portrait" : "Upload portrait",
       hint: sheet.portrait ? "Replace the portrait with a photo" : "Upload a portrait",
-      glyph: "tab-handout",
+      glyph: "ui-upload",
       separated: true,
       onSelect: () => setCropping(true),
     },
@@ -288,7 +306,7 @@ export default function CharacterDetailPage({
             id: "paint",
             label: portraitPending ? "Painting..." : "Paint one",
             hint: "Paint a new portrait on this server's image model",
-            glyph: "sense-truesight",
+            glyph: "ui-paint",
             disabled: painting || portraitPending,
             onSelect: () => void paintPortrait(),
           },
@@ -300,7 +318,7 @@ export default function CharacterDetailPage({
             id: "placeholder",
             label: "Use placeholder",
             hint: "Take the picture away and show the stand-in for this class or race",
-            glyph: "quest-hidden",
+            glyph: "ui-placeholder",
             onSelect: () => void clearToPlaceholder(),
           },
         ]
@@ -395,6 +413,9 @@ export default function CharacterDetailPage({
             <GameIcon icon={{ kind: "glyph", key: "tab-campaigns" }} size="size-6" />{" "}
             {character.role === "companion" ? "Bring to a campaign" : "Use in a campaign"}
           </button>
+          <Link href={`/characters/${characterId}/edit`} className={cn(ui.btnSecondary, "min-w-0 flex-1 sm:flex-none")}>
+            <GameIcon icon={{ kind: "glyph", key: "rest-level-up" }} size="size-6" /> Edit build
+          </Link>
           <KebabMenu
             items={actions}
             label={`More actions for ${character.name}`}

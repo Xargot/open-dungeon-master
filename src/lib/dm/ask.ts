@@ -21,11 +21,18 @@ import { scoreChaptersByKeywords } from "@/lib/dm/recall-logic";
 import { fitChaptersToBudget } from "@/lib/dm/chapter-lod";
 import { computeBudgets } from "@/lib/dm/context-budget";
 import { describeSheet } from "@/lib/dm/prompt";
+import { CHARS_PER_TOKEN } from "@/lib/dm/context-budget";
+import { chronicleSystemLine } from "@/lib/chronicle-logic";
+import type { CampaignMessage } from "@/lib/db/messages";
 import {
+  OMITTED_MARK,
   clampQuestion,
   parseAskJson,
+  recentTranscript,
+  transcriptPassages,
   type AskResult,
   type AskScope,
+  type TranscriptLine,
 } from "@/lib/dm/ask-logic";
 
 // Ask: answer a player's out-of-character question from the campaign record
@@ -57,13 +64,15 @@ The material between READ-ONLY DATA START and READ-ONLY DATA END is campaign REC
 
 Answer only from the supplied record and general 5e knowledge where the record is about rules. When the record does not settle the question, say so plainly in one sentence rather than inventing an answer; a confident guess about a campaign's own history is worse than an admission.
 
+The [recent] lines are the latest exchanges at the table, oldest first; the last one is what the player has just read. Where a line says "[... N ${OMITTED_MARK} ...]", Ask itself shortened that message for length: the text was there at the table. Never say something did not happen because it is missing from such a gap; say the part of the record you were given does not show it, and search the records if the tool is offered.
+
 Hit points, damage and dice are settled by the [vitals] and [roll] lines: the server wrote those, and narration is only prose about them. A blow the narration describes that no [roll] line shows was never rolled and changed nothing, so when the two disagree say so and answer from the lines, however the question quotes the story.
 
 Keep it to a short paragraph or two. Speak plainly and out of character.
 
 Reply with ONLY a strict JSON object, no code fences, shaped exactly: {"answer": string, "scope": "story"|"rules"|"sheet", "citations": [{"kind": "fact"|"chapter"|"scene"|"summary"|"npc"|"place"|"rule"|"sheet"|"vitals"|"roll"|"recent", "ref": string, "quote": string}]}
 scope: what the answer is about: "story" for the world and what happened in it, "rules" for how the game works, "sheet" for the asker's own character.
-citations: the specific record lines you relied on, using the ref labels exactly as supplied; quote is the relevant sentence from that line, verbatim. Empty array when you answered from general rules knowledge or could not answer.`;
+citations: the specific record lines you relied on, using the ref labels exactly as supplied ("recent:812" for a [recent:812] line); quote is the relevant sentence from that line, verbatim. Empty array when you answered from general rules knowledge or could not answer.`;
 
 // Ask is offered exactly one tool, and it only reads.
 //
@@ -77,7 +86,7 @@ const ASK_SEARCH_TOOL = {
   function: {
     name: "search_campaign_records",
     description:
-      "Search the campaign's past chapters and recorded scenes when the supplied record does not answer the question. Read-only.",
+      "Search the campaign's past chapters, its recorded scenes and the full text of the latest exchanges when the supplied record does not answer the question. Read-only.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -102,7 +111,37 @@ export type AskRequest = {
 };
 
 const ASK_THREAD_ANSWER_CLIP = 1_200;
-const RECENT_MESSAGES = 24;
+// The latest exchanges offered to the record: as many as the budget below
+// holds, newest first (recentTranscript). The search hop reads further back.
+const RECENT_MESSAGES = 40;
+const SEARCHED_MESSAGES = 120;
+// The recent transcript's share of the utility model's window, in
+// characters, within these bounds: a 16K window gives it about 14,000.
+const RECENT_SHARE = 0.22;
+const RECENT_MIN_CHARS = 3_000;
+const RECENT_MAX_CHARS = 24_000;
+
+export function recentBudgetChars(contextTokens: number): number {
+  return Math.round(Math.min(RECENT_MAX_CHARS, Math.max(RECENT_MIN_CHARS, contextTokens * CHARS_PER_TOKEN * RECENT_SHARE)));
+}
+
+// A transcript message as the record names it: the DM (and who it speaks
+// as), the character a player acted as, or the table's own note.
+function transcriptLines(campaignId: string, messages: CampaignMessage[]): TranscriptLine[] {
+  const names = new Map(listSheets(campaignId).map((sheet) => [sheet.id, sheet.name]));
+  return messages.map((message) => ({
+    seq: message.seq,
+    who:
+      message.authorType === "dm"
+        ? message.speaker && message.speaker.kind !== "narrator" && message.speaker.name
+          ? `DM (as ${message.speaker.name})`
+          : "DM"
+        : message.authorType === "system"
+          ? "Table note"
+          : (message.characterId && names.get(message.characterId)) || "Player",
+    content: message.authorType === "system" ? chronicleSystemLine(message.content) : message.content,
+  }));
+}
 const RECENT_ROLLS = 30;
 const SCENE_CLIP = 700;
 
@@ -151,6 +190,16 @@ function mechanicalRecord(campaignId: string, ownedCharacterIds: string[]): stri
 // search reads exactly the same archive the first pass did.
 async function retrieveArchive(campaignId: string, query: string, chapterBudget: number): Promise<string[]> {
   const evidence: string[] = [];
+  // The exchange in progress is in no chapter and no recorded scene yet, so
+  // a search for something the narration just said reads the transcript
+  // itself, whole, where the up-front record had to shorten it (issue 250).
+  const passages = transcriptPassages(
+    transcriptLines(campaignId, listRecentMessages(campaignId, SEARCHED_MESSAGES)),
+    query,
+  );
+  if (passages.length) {
+    evidence.push(`The latest exchanges that mention it, in full where they fit:\n${passages.join("\n\n")}`);
+  }
   let sceneLines: string[] = [];
   let chapterIndexes: number[] = [];
   try {
@@ -184,7 +233,11 @@ async function retrieveArchive(campaignId: string, query: string, chapterBudget:
 
 // Assembles what the asker is allowed to know. Every list here is either
 // public to the party or owned by the asker.
-async function assembleEvidence(request: AskRequest, ownedCharacterIds: string[]): Promise<string[]> {
+async function assembleEvidence(
+  request: AskRequest,
+  ownedCharacterIds: string[],
+  recentBudget: number,
+): Promise<string[]> {
   const { campaignId, question, scope } = request;
   const evidence: string[] = [];
 
@@ -278,15 +331,18 @@ async function assembleEvidence(request: AskRequest, ownedCharacterIds: string[]
       evidence.push(`[summary] The story so far:\n${summary}`);
     }
 
-    const recent = listRecentMessages(campaignId, RECENT_MESSAGES);
-    if (recent.length) {
+    // The newest message first and whole where it fits, older ones sharing
+    // the rest; a long one keeps its opening and its end (issue 250: the
+    // first 300 characters of each lost the event the narration ended on).
+    const recent = recentTranscript(
+      transcriptLines(campaignId, listRecentMessages(campaignId, RECENT_MESSAGES)),
+      recentBudget,
+    );
+    if (recent.lines.length) {
       evidence.push(
-        `[recent] The last few exchanges:\n${recent
-          .map(
-            (message) =>
-              `${message.authorType === "dm" ? "DM" : "Player"}: ${message.content.slice(0, 300)}`,
-          )
-          .join("\n")}`,
+        `The latest exchanges, oldest first; the last is what the table just read${
+          recent.dropped ? ` (${recent.dropped} earlier ${recent.dropped === 1 ? "message" : "messages"} left out for length)` : ""
+        }:\n${recent.lines.join("\n")}`,
       );
     }
   }
@@ -337,8 +393,9 @@ export async function runAsk(
   }
 
   const sheet = getSheetForUser(request.campaignId, request.userId);
-  const chapterBudget = computeBudgets(await utilityContextTokens(campaign.settings)).chapters;
-  const evidence = await assembleEvidence({ ...request, question }, sheet ? [sheet.id] : []);
+  const contextTokens = await utilityContextTokens(campaign.settings);
+  const chapterBudget = computeBudgets(contextTokens).chapters;
+  const evidence = await assembleEvidence({ ...request, question }, sheet ? [sheet.id] : [], recentBudgetChars(contextTokens));
 
   const messages: ChatMessage[] = [
     { role: "system", content: withLanguage(ASK_SYSTEM, campaign.gameSettings.tableLanguage) },

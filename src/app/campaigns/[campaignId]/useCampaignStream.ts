@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { CampaignMember, SessionUser } from "@/lib/campaign-types";
+import type { CoordinationPhase } from "@/lib/dm/coordination-logic";
 import { coalesceRefresh } from "@/app/campaigns/[campaignId]/coalesce";
 import { createStreamWatchdog } from "@/app/campaigns/[campaignId]/streamWatchdog";
 import {
@@ -110,6 +111,8 @@ export type ItemProposal = {
   reason: string;
   status: string;
   createdAt: string;
+  // How settling it went (issue 239): what applying it did, or why not.
+  outcome?: string;
   // A trade's other side and its offer (11.2).
   toCharacterId?: string;
   offer?: { toCharacterId: string; give: Array<{ name: string; qty: number }>; giveCp: number; want: Array<{ name: string; qty: number }>; wantCp: number } | null;
@@ -150,6 +153,11 @@ export type CampaignState = {
   // asked rather than leaving the player to guess which world replied.
   answeredBy: string;
   campaign: Campaign | null;
+  // The plan the party is coordinating, while it drafts (issue 254).
+  coordination: CoordinationPhase | null;
+    // The table holds a story arc AI Story Setup has not built on yet (the
+  // lobby's warning, issue 249); false for anyone who does not steer.
+  prepArc: boolean;
   // What this seat may see and do, decided by the server
   // (src/lib/dm/viewer.ts). The client never re-derives it from ids, so a
   // control the server would refuse is never rendered in the first place.
@@ -301,6 +309,8 @@ const initialState: CampaignState = {
   error: "",
   answeredBy: "",
   campaign: null,
+  prepArc: false,
+  coordination: null,
   // A plain player until the snapshot says otherwise: the safe default is
   // the one that shows the fewest controls and no secrets.
   caps: capsForRole("player", "ai"),
@@ -734,6 +744,7 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
             holdRolls: false,
             muted: false,
             activeCharacterId: "",
+            partyOrder: [],
             joinedAt: new Date().toISOString(),
           };
           next.members = upsertBy(state.members, member, (entry) => entry.userId);
@@ -821,6 +832,14 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
             ? { ...state.campaign, ...(payload as Partial<Campaign>) }
             : state.campaign;
           return next;
+        // The party record (purse, pack, travel formation): live for every
+        // seat, not only after a reload (issue 230).
+        case "party_updated":
+          next.campaign =
+            state.campaign && payload.party
+              ? { ...state.campaign, party: payload.party as Campaign["party"] }
+              : state.campaign;
+          return next;
         case "item_proposal_added": {
           const proposal = payload.proposal as ItemProposal | undefined;
           if (proposal) {
@@ -868,6 +887,9 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
               seq: Number(payload.seq ?? 0),
             },
           ];
+          return next;
+        case "coordination_updated":
+          next.coordination = (payload.phase as CoordinationPhase | null) ?? null;
           return next;
         case "floor_changed":
           next.campaign = state.campaign
@@ -958,6 +980,7 @@ function endsDmTurn(message: CampaignMessage): boolean {
 
 const PERSISTED_EVENTS = [
   "message_added",
+  "coordination_updated",
   "message_updated",
   "roll_result",
   "roll_pending",
@@ -1005,6 +1028,14 @@ const PERSISTED_EVENTS = [
   "handout_dismissed",
   "x_card",
   "safety_resumed",
+  // Each of these has a case above and was published for the table, but was
+  // never listened for, so it only showed after a reload: the party record
+  // (purse, pack, travel formation), a painted NPC portrait, the Director's
+  // arm (cleared when a turn spends the one-shot), and the DM's beat list.
+  "party_updated",
+  "npc_updated",
+  "director_armed",
+  "beat_recorded",
 ];
 const EPHEMERAL_EVENTS = [
   // A visual effect planned from a resolved outcome. Worthless after the
@@ -1051,6 +1082,9 @@ const EPHEMERAL_EVENTS = [
   "presence",
 ];
 const EPHEMERAL_EVENT_SET = new Set(EPHEMERAL_EVENTS);
+// Every type the stream listens for; an event outside it never reaches the
+// reducer, whatever case it has (scripts/test-campaign-reducer.mjs).
+export const STREAMED_EVENTS: readonly string[] = [...PERSISTED_EVENTS, ...EPHEMERAL_EVENTS];
 
 // The origin a reply really came from. Patched fetch inside the apps sends
 // root-relative calls to the host, so this is the world that answered, not
@@ -1151,6 +1185,8 @@ export function useCampaignStream(campaignId: string) {
         payload: {
           answeredBy,
           campaign: data.campaign,
+          prepArc: Boolean(data.prepArc),
+          coordination: (data.coordination as CoordinationPhase | null) ?? null,
           caps: data.caps ?? capsForRole("player", "ai"),
           me: data.me,
           members: data.members,

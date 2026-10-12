@@ -250,7 +250,18 @@ export function CalendarSection({ campaignId }: { campaignId: string }) {
             ))}
           </ul>
         ) : (
-          (loadError ? <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} /> : loaded ? <EmptyState size="sm" art="scrolls" title="Nothing on the calendar yet." /> : null)
+          (loadError ? (
+            <LoadFailed
+              error={loadError}
+              onRetry={() => setReloads((current) => current + 1)}
+            />
+          ) : loaded ? (
+            <EmptyState
+              size="sm"
+              art="scrolls"
+              title="Nothing on the calendar yet."
+            />
+          ) : null)
         )}
         <div className="flex flex-wrap items-center gap-1.5">
           <input value={eventDraft.title} placeholder="What happens" aria-label="What happens" onChange={(event) => setEventDraft({ ...eventDraft, title: event.target.value })} maxLength={120} className={cn(field, "min-w-[9rem] flex-1")} />

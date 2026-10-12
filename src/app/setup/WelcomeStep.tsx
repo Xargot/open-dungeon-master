@@ -8,8 +8,8 @@ import { Lamp, ScanMark, host, type ScanResult } from "@/app/setup/SetupParts";
 type Update = (change: (draft: Draft) => Draft) => void;
 
 const STOPS = [
-  { glyph: "system-lore", title: "The storyteller", line: "A model on this computer, an API key, an agent you already pay for, or a person." },
-  { glyph: "sense-truesight", title: "Pictures", line: "Portraits, scene art and battle maps. Optional." },
+  { glyph: "ui-ai", title: "The storyteller", line: "A model on this computer, an API key, an agent you already pay for, or a person." },
+  { glyph: "ui-paint", title: "Pictures", line: "Portraits, scene art and battle maps. Optional." },
   { glyph: "tab-ambience", title: "Voice", line: "Narration read aloud, and push-to-talk dictation. Optional." },
   { glyph: "tab-characters", title: "Players", line: "The address to share, and who may make an account." },
   { glyph: "system-share", title: "Your own agent", line: "Claude Code, Codex or opencode working here as you. Optional." },

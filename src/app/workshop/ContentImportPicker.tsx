@@ -4,7 +4,7 @@ import { AlertTriangle, Hammer, Info, Loader2 } from "lucide-react";
 import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
 import { FieldLabel } from "@/app/workshop/kit";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ui } from "@/lib/ui";
 import {
   IMPORT_KINDS,
@@ -53,6 +53,7 @@ export function ContentImportPicker({
   selection,
   onChange,
   onImported,
+  storyboardNote,
 }: {
   // Omitted at campaign creation, where the target does not exist yet.
   campaignId?: string;
@@ -60,6 +61,9 @@ export function ContentImportPicker({
   onChange: (selection: ImportSelection) => void;
   // Only meaningful with a campaignId: importing happens immediately.
   onImported?: (copied: number) => void;
+  // Drawn under the choices when the board being brought in will write the
+  // table's story arc (the AI Story Setup warning, issue 249).
+  storyboardNote?: (arcComing: boolean) => ReactNode;
 }) {
   const [sources, setSources] = useState<ImportSourceSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,6 +106,11 @@ export function ContentImportPicker({
   const available = chosen
     ? IMPORT_KINDS.filter((kind) => (chosen.contents?.[kind] ?? 0) > 0)
     : [];
+  // The board writes the table's arc: it compiles into one, it is ticked,
+  // and the table has none it would be left out of (the plan says so once a
+  // campaign exists to plan against).
+  const arcComing =
+    Boolean(chosen?.boardArc) && selection.select.includes("storyboard") && !plan?.board?.targetHasArc;
 
   // The state lands in a .then callback rather than after an await, so the
   // refetch reads as "subscribe to an external system" to React and to the
@@ -287,6 +296,8 @@ export function ContentImportPicker({
                 />
               </div>
             ) : null}
+
+            {storyboardNote?.(arcComing)}
 
             {plan?.kept || selection.again === "copy" ? (
               <div className="reveal block">

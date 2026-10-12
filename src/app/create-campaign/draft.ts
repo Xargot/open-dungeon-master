@@ -34,6 +34,9 @@ export type CampaignDraft = {
   themeTouched: boolean;
   descriptionTouched: boolean;
   aiStorySetup: boolean;
+  // The creator saw the warning that AI Story Setup meets an imported
+  // Storyboard and kept it on (issue 249). Never sent to the server.
+  storySetupKept: boolean;
   dicePolicy: DicePolicy;
   ttsEnabled: boolean;
   ttsVoice: string;
@@ -97,6 +100,7 @@ export const DEFAULT_DRAFT: CampaignDraft = {
   themeTouched: false,
   descriptionTouched: false,
   aiStorySetup: true,
+  storySetupKept: false,
   dicePolicy: "digital_only",
   ttsEnabled: true,
   ttsVoice: "af_heart",

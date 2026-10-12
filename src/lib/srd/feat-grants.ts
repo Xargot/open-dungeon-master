@@ -101,8 +101,9 @@ export function featOwed(feat: string, spec: FeatGrantSpec, picks: FeatPicks | u
 export type FeatGrantInput = {
   proficiencies: Proficiencies;
   // The feats on the sheet, each with its text (empty when the catalog has
-  // no row for it, which grants nothing).
-  feats: Array<{ name: string; desc: string }>;
+  // no row for it, which grants nothing). A grant read elsewhere (a
+  // subclass's training, src/lib/srd/subclass-training.ts) brings its spec.
+  feats: Array<{ name: string; desc: string; spec?: FeatGrantSpec }>;
   choices: FeatChoices;
   // Strict: every pick a feat leaves open must be made, be one the feat
   // offers, and be new to the character. Otherwise what fits is applied
@@ -128,13 +129,15 @@ export function applyFeatGrants(input: FeatGrantInput): FeatGrantVerdict {
   let armor = [...input.proficiencies.armor];
   const has = (list: string[], entry: string) => list.some((held) => lower(held) === lower(entry));
   for (const feat of input.feats) {
-    const spec = featGrantSpec(feat.desc);
+    const spec = feat.spec ?? featGrantSpec(feat.desc);
     if (!featGrantsAnything(spec) && !spec.damageTypes.length) {
       continue;
     }
     const picks = input.choices[lower(feat.name)] ?? input.choices[feat.name] ?? {};
     for (const piece of spec.armor) {
-      if (!has(armor, piece)) {
+      // A second class's grant reads "light armor" where a class's reads
+      // "light"; either means the training is held.
+      if (!has(armor, piece) && !has(armor, `${piece} armor`)) {
         armor.push(piece);
       }
     }
@@ -181,12 +184,18 @@ export function applyFeatGrants(input: FeatGrantInput): FeatGrantVerdict {
       }
       return list.slice(0, own + extra);
     };
-    // Skills: real ones, not already held.
+    // Skills: real ones, from the list the grant names, not already held.
     const pickedSkills = allowed("skills", named(picks.skills).map(lower));
     for (const skill of pickedSkills) {
       if (!ALL_SKILLS.includes(skill as (typeof ALL_SKILLS)[number])) {
         if (input.strict) {
           problems.push(`"${skill}" is not a skill; ${feat.name}'s skill is picked from the skill list.`);
+        }
+        continue;
+      }
+      if (spec.skillsFrom.length && !spec.skillsFrom.includes(skill)) {
+        if (input.strict) {
+          problems.push(`${skill.replace(/_/g, " ")} is not a skill ${feat.name} offers; pick from ${spec.skillsFrom.map((entry) => entry.replace(/_/g, " ")).join(", ")}.`);
         }
         continue;
       }
@@ -197,6 +206,16 @@ export function applyFeatGrants(input: FeatGrantInput): FeatGrantVerdict {
         continue;
       }
       skills.push(skill);
+      // Knowledge Domain's skills come doubled.
+      if (spec.pickedExpertise && !has(expertise, skill)) {
+        expertise.push(skill);
+      }
+    }
+    // Expertise the grant names outright, on skills it also names.
+    for (const skill of spec.fixedExpertise) {
+      if (has(skills, skill) && !has(expertise, skill)) {
+        expertise.push(skill);
+      }
     }
     // Languages: new ones, each once.
     const pickedLanguages = allowed("languages", named(picks.languages));

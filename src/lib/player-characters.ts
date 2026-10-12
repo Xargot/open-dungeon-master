@@ -35,3 +35,34 @@ export function resolveActionCharacter({ sheets, userId, selectedId, characterId
   }
   return { sheet };
 }
+
+// The characters in play, without the database: with one character active
+// per player, each player's selected one (else their first) and every
+// companion; otherwise all of them. The server's fieldedSheets
+// (src/lib/dm/roster.ts) reads the selections from the members table and
+// asks this; the Party panel asks it with the members it already holds.
+export function fieldedOf(
+  sheets: CharacterSheet[],
+  multiCharacter: "off" | "one_active" | "all_active" | undefined,
+  activeOf: (userId: string) => string | undefined,
+): CharacterSheet[] {
+  if (multiCharacter !== "one_active") {
+    return sheets;
+  }
+  const firstByUser = new Map<string, string>();
+  for (const sheet of sheets) {
+    if (!sheet.isCompanion && !firstByUser.has(sheet.userId)) {
+      firstByUser.set(sheet.userId, sheet.id);
+    }
+  }
+  return sheets.filter((sheet) => {
+    if (sheet.isCompanion) {
+      return true;
+    }
+    const selected = activeOf(sheet.userId);
+    const chosen = sheets.some((entry) => entry.userId === sheet.userId && !entry.isCompanion && entry.id === selected)
+      ? selected
+      : firstByUser.get(sheet.userId);
+    return !chosen || chosen === sheet.id;
+  });
+}

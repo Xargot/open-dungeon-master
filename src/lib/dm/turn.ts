@@ -1,5 +1,7 @@
 import { emptyTurnLine, type EmptyTurnPlayer } from "@/lib/dm/empty-turn";
 import { manualTraits } from "@/lib/dm/monster-traits";
+import { coordinationForPrompt } from "@/lib/dm/coordination";
+import { clipKeepingEnds } from "@/lib/dm/ask-logic";
 import { findSpellByName } from "@/lib/content";
 import { allSpellNames, spellLevelOf } from "@/lib/srd/spell-lists";
 import { notReadyReason } from "@/lib/srd/spell-prep";
@@ -24,7 +26,7 @@ import {
 import { DM_HALTED_PREFIX } from "@/lib/campaign-types";
 import { PC_ATTACK_PARKED } from "@/lib/dm/pc-attack";
 import { normalizeEventKind, strictBooleanArgs } from "@/lib/dm/arg-coerce";
-import { insertCampaignMessage, listRecentMessages } from "@/lib/db/messages";
+import { insertCampaignMessage, listMessagesPage, listRecentMessages } from "@/lib/db/messages";
 import { narrationShown, takeNarrationSeq } from "@/lib/dm/narration-slot";
 import { getRoll, listRecentRolls } from "@/lib/db/rolls";
 import { listSheets } from "@/lib/db/sheets";
@@ -40,6 +42,7 @@ import { imageProducerReady } from "@/lib/image-generate";
 import { enqueueNarrationAudio } from "@/lib/tts";
 import { requestDmMessage } from "@/lib/dm/model";
 import { releaseHarnessConversation } from "@/lib/harness/bridge";
+import { toMcpTools } from "@/lib/harness/render";
 import { setDmStatus } from "@/lib/dm/status";
 import {
   extractToolCalls,
@@ -63,7 +66,7 @@ import type { SpokenLine } from "@/lib/dm/speech";
 import { markToolError } from "@/lib/dm/tool-errors";
 import { dispatchAdjudication } from "@/lib/dm/invoke-dispatch";
 import { characterAwaitingPlayer } from "@/lib/dm/player-word";
-import { personRunsTable } from "@/lib/dm/enemies-due";
+import { enemiesOwedTurn, personRunsTable } from "@/lib/dm/enemies-due";
 import { intentAnswered, intentCorrection, intentNeedsTool, type MessageIntent } from "@/lib/dm/intent-logic";
 import { handleCompleteBeat } from "@/lib/dm/arc";
 import { tickWaypointsFromCalls } from "@/lib/dm/waypoint-tick";
@@ -107,7 +110,7 @@ import { handleSearchLore, searchLoreTool } from "@/lib/dm/lore-search";
 import { handleWriteCampaignNote, writeCampaignNoteTool } from "@/lib/dm/note-tools";
 import { buildTurnRetrieval } from "@/lib/dm/context-retrieval";
 import { estimateTokens, promptWindowTokens } from "@/lib/dm/context-budget";
-import { maybeProposeItemChange } from "@/lib/dm/proposal-intercept";
+import { maybeProposeItemChange, offerLinesForPrompt } from "@/lib/dm/proposal-intercept";
 import { maybeCloseChapter } from "@/lib/dm/chapter-close";
 import {
   hasRecentIdenticalEvent,
@@ -259,6 +262,7 @@ function buildEncounterState(campaignId: string, sheets: CharacterSheet[]) {
     return null;
   }
   const enemies = listEnemies(encounter.id);
+  const due = enemiesOwedTurn(encounter);
   const staged = new Set(
     encounter.order
       .filter((entry) => entry.kind === "pc")
@@ -279,6 +283,14 @@ function buildEncounterState(campaignId: string, sheets: CharacterSheet[]) {
     turnBudget: encounter.turnBudget ? describeBudget(encounter.turnBudget) : null,
     movementLeft: encounter.orderReady ? movementLeft(campaignId, encounter, sheets) : null,
     awaitingPlayer: characterAwaitingPlayer(campaignId)?.name ?? null,
+    ...(due.length
+      ? {
+          enemiesDue: {
+            before: encounter.order[encounter.turnIndex].name,
+            enemies: due.map((enemy) => ({ enemyId: enemy.id, name: enemy.displayName })),
+          },
+        }
+      : {}),
     enemies: enemies.map((enemy) => ({
       enemyId: enemy.id,
       name: enemy.displayName,
@@ -396,7 +408,7 @@ export async function startDmTurn(campaignId: string) {
   // Combat can never wedge on missing initiative: when nothing is pending,
   // stragglers are auto-rolled before the prompt is built.
   ensureInitiativeProgress(campaign);
-  const { summary } = getCampaignSummaryState(campaignId);
+  const { summary, coveredCount } = getCampaignSummaryState(campaignId);
   const currentLocation = getCurrentLocation(campaignId);
   // Variant rules always ride; house rules and world lore are retrieved
   // against the current moment (one local embed, keyword fallback).
@@ -433,7 +445,18 @@ export async function startDmTurn(campaignId: string) {
   // The table's WorldForge: what it says of who and what the newest messages
   // and the scene put in play, then hidden truths, ties and secrets.
   const world = worldForPrompt(campaignId, {
-    text: [campaign.scene, ...history.slice(-6).map((entry) => entry.content.slice(0, 600))].filter(Boolean).join("\n"),
+    // The newest message whole (to a bound) and the end of each older one:
+    // what a passage ends on is what is in play now, and the first 600
+    // characters of each left out a figure the narration introduced last
+    // (the same cut issue 250 found in Ask).
+    text: [
+      campaign.scene,
+      ...history.slice(-6).map((entry, index, recent) =>
+        clipKeepingEnds(entry.content, index === recent.length - 1 ? 2_400 : 600, 150, () => "..."),
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n"),
   });
   const promptState: DmGameState = {
       campaign,
@@ -460,6 +483,22 @@ export async function startDmTurn(campaignId: string) {
       ),
       recentRolls: listRecentRolls(campaignId, 5),
       storySummary: summary,
+      // The newest message the summaries cover, by the compaction watermark's
+      // own offset semantics. A watermark past the transcript (a hand-edited
+      // or imported database) covers everything there is, and a turn is
+      // never lost to it.
+      summaryCoveredSeq: coveredCount
+        ? (listMessagesPage(campaignId, coveredCount - 1, 1)[0]?.seq ?? history.at(-1)?.seq ?? null)
+        : null,
+      // Off unless asked: with the turn-to-turn state after the history, the
+      // default local model (Qwen3.6-35B, llama-server) skipped the roll on an
+      // explicit search in five of six scripted runs, narrating what was found
+      // with no dice; with the state in the system message it rolled in three
+      // of three, and on main in three of four. DM_MOMENT_AFTER_HISTORY=1
+      // sends it after the history, so a server that caches the prompt's
+      // start reuses the whole history from one turn to the next; an agent
+      // program moves it itself (src/lib/harness/render.ts).
+      momentAfterHistory: campaign.settings.textProvider !== "harness" && process.env.DM_MOMENT_AFTER_HISTORY === "1",
       currentLocation: currentLocation
         ? {
             name: currentLocation.name,
@@ -516,6 +555,10 @@ export async function startDmTurn(campaignId: string) {
         from: whisper.characterName,
         content: whisper.content,
       })),
+      // What waits on a player's answer and what was settled lately
+      // (issue 239), so an accepted offer is never asked about again.
+      offers: offerLinesForPrompt(campaignId, context.sheetsById),
+      coordinationBlock: coordinationForPrompt(campaignId),
   };
   const conversation = buildDmMessages(promptState, history);
 
@@ -632,7 +675,7 @@ async function advance(context: TurnContext, turn: DmTurn) {
 // the moment start_encounter succeeds mid-turn, the combat tools must appear
 // on the very next call. Encounter tools ignore DM_LEAN_TOOLS; they are the
 // point of combat. Rest tools only exist outside combat.
-function dmTurnTools(
+export function dmTurnTools(
   campaign: Campaign,
   inEncounter: boolean,
   imageEnabled: boolean,
@@ -697,9 +740,14 @@ function dmTurnTools(
 // token, so the proxy errs slightly high). A fight can start mid-turn and
 // swap the set offered, so the larger of the two sets is charged: the prompt
 // is packed once, before the first call, and has to leave room for either.
+// An agent program is handed the whole catalogue once, in and out of a fight
+// alike (dmTurnToolCatalogue), so that is what it is charged.
 export function dmTurnToolTokens(campaign: Campaign): number {
   const imageEnabled = campaign.settings.imageGenerationEnabled && campaign.settings.autoImages;
   const leanTools = process.env.DM_LEAN_TOOLS === "1";
+  if (campaign.settings.textProvider === "harness") {
+    return estimateTokens(JSON.stringify(toMcpTools(dmTurnToolCatalogue(campaign, imageEnabled, leanTools))));
+  }
   return Math.max(
     estimateTokens(JSON.stringify(dmTurnTools(campaign, false, imageEnabled, leanTools))),
     estimateTokens(JSON.stringify(dmTurnTools(campaign, true, imageEnabled, leanTools))),

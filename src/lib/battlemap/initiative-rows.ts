@@ -7,7 +7,7 @@
 // Pure: the public encounter's order in, indexes and labels out;
 // scripts/test-hand-engine.mjs drives it.
 
-export type OrderRow = { id: string; name: string; reflex?: boolean };
+export type OrderRow = { id: string; name: string; reflex?: boolean; extra?: string };
 
 // The React key of a row: its id and its place, so a combatant with two turns
 // keeps two rows.
@@ -31,3 +31,13 @@ export function currentOrderIndex(
 
 // The tag a reflex row carries.
 export const REFLEX_LABEL = "Thief's Reflexes";
+
+// What a second row for the same character says: Thief's Reflexes' second
+// turn in the first round, or an extra turn taken at once (Strength before
+// Death, issue 233), which names the feature it comes from.
+export function extraTurnTag(row: { reflex?: boolean; extra?: string }): { short: string; title: string } | null {
+  if (!row.reflex) return null;
+  return row.extra
+    ? { short: "extra", title: `${row.extra}: an extra turn, taken now` }
+    : { short: "2nd", title: `${REFLEX_LABEL}: a second turn this round` };
+}

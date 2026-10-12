@@ -505,6 +505,194 @@ const GENRE_MONSTERS = [
   { id: "horror-flesh-thing", subject: "a flesh horror, a lumpen mass of fused limbs reaching outward" },
 ];
 
+// One plate per creature family, keyed by the SRD 5.1 / Open5e monster slug
+// (src/lib/placeholders.ts MONSTER_FAMILIES maps slugs and aliases onto these
+// ids). The shipped WebPs are hand-picked painted art at 512 px, not renders
+// of these subjects: like the majority-selected plates they are curated, so
+// --force or --reencode would replace them with generator output. The
+// subjects are here so the jobs list (and so manifest.json) names every
+// plate that ships, and so a regeneration has a starting prompt.
+const MONSTER_FAMILY_PLATES = [
+  { id: "mimic", subject: "a mimic, a treasure chest with a fanged maw and a long tongue" },
+  { id: "kobold", subject: "a kobold, a small scaly dog-snouted reptilian with a spear" },
+  { id: "hobgoblin", subject: "a hobgoblin soldier in red lacquered armour with a longsword" },
+  { id: "gnoll", subject: "a gnoll, a hyena-headed raider with a flail" },
+  { id: "giant-rat", subject: "a giant rat, bristling and snarling" },
+  { id: "giant-spider", subject: "a giant spider with long jointed legs over a web" },
+  { id: "stirge", subject: "a stirge, a bat-winged bloodsucker with a long proboscis" },
+  { id: "zombie", subject: "a shambling zombie in grave rags" },
+  { id: "ghoul", subject: "a ghoul, a gaunt grey corpse-eater crouched on a tomb" },
+  { id: "mummy", subject: "a mummy in rotting linen wrappings with glowing eyes" },
+  { id: "werewolf", subject: "a werewolf howling under a full moon" },
+  { id: "green-hag", subject: "a green hag, a crone with lank hair over a bubbling cauldron" },
+  { id: "troll", subject: "a troll, a lanky green-skinned brute with long claws" },
+  { id: "owlbear", subject: "an owlbear, a feathered bear with an owl's head and beak" },
+  { id: "minotaur", subject: "a minotaur, a bull-headed giant with a great axe" },
+  { id: "gargoyle", subject: "a gargoyle, a horned stone fiend perched on a parapet" },
+  { id: "gelatinous-cube", subject: "a gelatinous cube, a translucent cube with bones and a sword suspended inside" },
+  { id: "animated-armor", subject: "an animated suit of empty plate armour striding forward" },
+  { id: "hell-hound", subject: "a hell hound, a black hound breathing fire" },
+  { id: "imp", subject: "an imp, a small red winged devil with a barbed tail" },
+  { id: "lich", subject: "a lich, a crowned skeletal sorcerer in dark robes casting a spell" },
+  { id: "earth-elemental", subject: "an earth elemental, a hulking figure of rock and rubble" },
+  { id: "rust-monster", subject: "a rust monster, an armoured insectile beast with feathery antennae" },
+  { id: "brown-bear", subject: "a brown bear rearing up and roaring" },
+  // Second batch: broader habitats, magic and dungeons.
+  { id: "basilisk", subject: "a basilisk, an eight-legged reptile with a petrifying gaze" },
+  { id: "harpy", subject: "a harpy, a winged crone with taloned feet" },
+  { id: "hydra", subject: "a hydra, a many-headed serpentine reptile" },
+  { id: "wyvern", subject: "a wyvern, a two-legged winged drake with a stinger tail" },
+  { id: "flesh-golem", subject: "a flesh golem, a stitched hulk of corpse parts" },
+  { id: "iron-golem", subject: "an iron golem, a towering armoured giant of black iron" },
+  { id: "air-elemental", subject: "an air elemental, a howling whirlwind with a face" },
+  { id: "water-elemental", subject: "a water elemental, a cresting wave in a rough body shape" },
+  { id: "ankheg", subject: "an ankheg, a burrowing insect with mandibles bursting from the earth" },
+  { id: "bulette", subject: "a bulette, an armoured land shark breaching the ground" },
+  { id: "roper", subject: "a roper, a stalagmite-like cave lurker with one eye and tendrils" },
+  { id: "otyugh", subject: "an otyugh, a three-legged refuse beast with tentacles and a toothed maw" },
+  { id: "chuul", subject: "a chuul, a lobster-like aberration with pincers and face tentacles" },
+  { id: "cloaker", subject: "a cloaker, a broad manta-like cloak of dark hide with a toothed underside" },
+  { id: "griffon", subject: "a griffon, an eagle-headed lion with great wings" },
+  { id: "giant-scorpion", subject: "a giant scorpion with raised claws and stinger" },
+  { id: "giant-poisonous-snake", subject: "a giant poisonous snake coiled to strike" },
+  { id: "crocodile", subject: "a crocodile lunging from murky water" },
+  { id: "giant-shark", subject: "a giant shark surging through the water" },
+  { id: "treant", subject: "a treant, an ancient tree with a bark face and branch arms" },
+  { id: "ghost", subject: "a ghost, a translucent drifting spirit" },
+  { id: "vampire-spawn", subject: "a vampire spawn, a feral pale predator with claws and fangs" },
+  { id: "will-o-wisp", subject: "a will-o'-wisp, a floating mote of ghostly light over a bog" },
+  { id: "swarm-of-rats", subject: "a swarm of rats, a tide of many small rats" },
+  // Third batch: the later family candidates, dragon colours by their young.
+  { id: "androsphinx", subject: "an androsphinx, a winged lion with a man's head" },
+  { id: "azer", subject: "an azer, a dwarf-like smith of bronze with a burning beard" },
+  { id: "barbed-devil", subject: "a barbed devil, a lean fiend covered in spines" },
+  { id: "bearded-devil", subject: "a bearded devil with a glaive and a beard of writhing tendrils" },
+  { id: "black-pudding", subject: "a black pudding, a dark corrosive ooze" },
+  { id: "boar", subject: "a boar, a tusked wild pig charging" },
+  { id: "centaur", subject: "a centaur, half rider and half horse, with a bow" },
+  { id: "chain-devil", subject: "a chain devil wrapped in barbed chains" },
+  { id: "chimera", subject: "a chimera, a winged beast with lion, goat and dragon heads" },
+  { id: "cloud-giant", subject: "a cloud giant in fine robes among the clouds" },
+  { id: "cockatrice", subject: "a cockatrice, a rooster-headed lizard-winged bird" },
+  { id: "darkmantle", subject: "a darkmantle, a tentacled cave creature dropping from the ceiling" },
+  { id: "death-dog", subject: "a death dog, a two-headed hound" },
+  { id: "dragon-turtle", subject: "a dragon turtle, a vast shelled dragon of the sea" },
+  { id: "drider", subject: "a drider, a dark elf torso on a giant spider body" },
+  { id: "dryad", subject: "a dryad, a woodland spirit grown from bark and leaves" },
+  { id: "duergar", subject: "a duergar, a grim grey deep dwarf with a war pick" },
+  { id: "dust-mephit", subject: "a dust mephit, a small winged imp of grit and dust" },
+  { id: "ettercap", subject: "an ettercap, a spider-like humanoid among webs" },
+  { id: "ettin", subject: "an ettin, a two-headed giant with two clubs" },
+  { id: "fire-giant", subject: "a fire giant in soot-black armour with a greatsword" },
+  { id: "flying-sword", subject: "a flying sword, an animated blade in the air" },
+  { id: "frost-giant", subject: "a frost giant in furs with a great axe" },
+  { id: "giant-bat", subject: "a giant bat with spread leathery wings" },
+  { id: "giant-eagle", subject: "a giant eagle with outstretched wings" },
+  { id: "giant-octopus", subject: "a giant octopus with curling tentacles" },
+  { id: "glabrezu", subject: "a glabrezu, a pincer-armed demon" },
+  { id: "grick", subject: "a grick, a worm-like beast with a beaked tentacle maw" },
+  { id: "guardian-naga", subject: "a guardian naga, a serpent with a noble human face" },
+  { id: "gynosphinx", subject: "a gynosphinx, a winged lion with a woman's head" },
+  { id: "hezrou", subject: "a hezrou, a toad-like hulking demon" },
+  { id: "hippogriff", subject: "a hippogriff, an eagle-headed horse with wings" },
+  { id: "homunculus", subject: "a homunculus, a tiny winged alchemical servant" },
+  { id: "horned-devil", subject: "a horned devil with bat wings and a fork" },
+  { id: "ice-devil", subject: "an ice devil, an insectile fiend of frost with a spear" },
+  { id: "kraken", subject: "a kraken, a colossal tentacled sea monster" },
+  { id: "lamia", subject: "a lamia, a woman's torso on a lion's body" },
+  { id: "marilith", subject: "a marilith, a six-armed serpent-bodied demon with blades" },
+  { id: "medusa", subject: "a medusa with a crown of snakes" },
+  { id: "merfolk", subject: "a merfolk warrior with a trident" },
+  { id: "merrow", subject: "a merrow, a monstrous sea ogre with a harpoon" },
+  { id: "nalfeshnee", subject: "a nalfeshnee, a boar-headed winged demon" },
+  { id: "night-hag", subject: "a night hag, a blue-skinned crone with a dark lantern" },
+  { id: "pegasus", subject: "a pegasus, a white winged horse" },
+  { id: "pit-fiend", subject: "a pit fiend, a towering winged arch-devil" },
+  { id: "pseudodragon", subject: "a pseudodragon, a tiny cat-sized dragon" },
+  { id: "purple-worm", subject: "a purple worm, an immense burrowing worm with a ringed maw" },
+  { id: "quasit", subject: "a quasit, a small horned demon with clawed hands" },
+  { id: "rakshasa", subject: "a rakshasa, a tiger-headed noble in rich robes" },
+  { id: "remorhaz", subject: "a remorhaz, a many-legged polar centipede glowing with heat" },
+  { id: "roc", subject: "a roc, an immense bird of prey" },
+  { id: "saber-toothed-tiger", subject: "a saber-toothed tiger with long fangs" },
+  { id: "sahuagin", subject: "a sahuagin, a shark-like sea devil with a trident" },
+  { id: "satyr", subject: "a satyr, a goat-legged fey with panpipes" },
+  { id: "sea-hag", subject: "a sea hag, a drowned-looking crone with seaweed hair" },
+  { id: "shrieker", subject: "a shrieker, a giant pale cave mushroom" },
+  { id: "spirit-naga", subject: "a spirit naga, a dark serpent with a sinister human face" },
+  { id: "stone-giant", subject: "a stone giant with grey stony skin hefting a boulder" },
+  { id: "storm-giant", subject: "a storm giant amid lightning and sea spray" },
+  { id: "swarm-of-bats", subject: "a swarm of bats, many small wings" },
+  { id: "swarm-of-insects", subject: "a swarm of insects, a buzzing cloud of many bodies" },
+  { id: "tyrannosaurus-rex", subject: "a tyrannosaurus rex roaring" },
+  { id: "unicorn", subject: "a unicorn, a white horse with a spiral horn" },
+  { id: "violet-fungus", subject: "a violet fungus, a purple mushroom with lashing tendrils" },
+  { id: "vrock", subject: "a vrock, a vulture-headed winged demon" },
+  { id: "warhorse", subject: "a barded warhorse rearing" },
+  { id: "xorn", subject: "a xorn, a three-armed stone creature with a crowning mouth" },
+  { id: "young-black-dragon", subject: "a young black dragon dripping acid in a swamp" },
+  { id: "young-blue-dragon", subject: "a young blue dragon crackling with lightning" },
+  { id: "young-gold-dragon", subject: "a young gold dragon with gleaming scales" },
+  { id: "young-silver-dragon", subject: "a young silver dragon breathing frost" },
+  { id: "young-white-dragon", subject: "a young white dragon among ice" },
+];
+
+// Enemy NPC roles: a humanoid foe drawn by what it does at the table (the
+// bandit, the cultist, the dark knight), keyed like a family and looked up
+// the same way, from the NPC stat block it fights with (bandit-captain,
+// cult-fanatic, knight, scout, thug, archmage...) or the name it goes by
+// (MONSTER_FAMILIES in src/lib/placeholders.ts). One face per role for now;
+// the race and presentation variants these need are a later batch.
+const ENEMY_ROLE_PLATES = [
+  { id: "bandit", subject: "a masked roadside bandit with a short sword" },
+  { id: "cultist", subject: "a hooded cultist holding a ritual dagger" },
+  { id: "assassin", subject: "a cloaked assassin with a hidden blade and a poison vial" },
+  { id: "necromancer", subject: "a necromancer with a bone staff and a funerary glow" },
+  { id: "dark-knight", subject: "an armoured dark knight in black plate with a faction insignia" },
+  { id: "archer", subject: "a lightly armoured archer drawing a bow" },
+  { id: "gladiator", subject: "an arena gladiator with a shield and trident" },
+  { id: "pirate", subject: "a fantasy pirate captain with a cutlass" },
+  { id: "battle-shaman", subject: "a battle shaman casting nature magic with a carved staff" },
+  { id: "alchemical-saboteur", subject: "an alchemical saboteur in goggles with a bomb satchel" },
+  { id: "executioner", subject: "a hooded executioner in an apron with a heavy axe" },
+  { id: "houndmaster", subject: "a houndmaster with a war hound on a chain" },
+  { id: "tyrant", subject: "a crowned tyrant sorcerer on a dark throne" },
+];
+
+// Enemies painted for one genre: drawn only in that genre (GENRE_ENEMY_TOKENS
+// in src/lib/placeholders.ts), by the genre bestiary's reskin names and the
+// stat blocks it plays as exactly this enemy. Hand-picked art at 512 px like
+// the family plates, so the same --force / --reencode caution applies.
+const GENRE_ENEMY_TOKEN_PLATES = [
+  { id: "cyberpunk-microdrone", subject: "a compact surveillance microdrone, close-up cyan camera lens and short rotor pods" },
+  { id: "cyberpunk-walking-turret", subject: "a walking gun turret, tight turret-head portrait with a red sensor and articulated support joints" },
+  { id: "steampunk-clockwork-spider", subject: "a brass clockwork spider, macro portrait of green glass optics and curved copper forelegs" },
+  { id: "steampunk-repair-swarm", subject: "three overlapping brass repair beetles with blue optics and tiny tool claws, macro close-up" },
+  { id: "steampunk-galvanic-corpse", subject: "a reanimated factory laborer, pale face close-up with brass temple electrodes and worn workshirt" },
+  { id: "cyberpunk-corp-squad", subject: "a corporate tactical squad trooper in a visored helmet and armour with a rifle" },
+  { id: "cyberpunk-gang", subject: "a street ganger with gang colours, chrome implants and a pistol" },
+  { id: "cyberpunk-synth", subject: "a synthetic infiltrator, a humanlike android with subtle artificial seams" },
+  { id: "steampunk-sky-pirate", subject: "a sky pirate boarding marine with a cutlass and aviator goggles" },
+  { id: "steampunk-surgeon", subject: "a rogue surgeon in a stained apron with galvanic instruments" },
+  { id: "steampunk-magnate", subject: "an industrial magnate in a top hat and frock coat, the mastermind behind the factories" },
+  { id: "post-apocalyptic-raider", subject: "a road raider in scrap armour with a spiked club" },
+  { id: "post-apocalyptic-hazmat", subject: "a hazmat trooper in a sealed protective suit and gas mask" },
+  { id: "post-apocalyptic-stalker", subject: "a contaminated stalker, an irradiated ghoulish scavenger" },
+  { id: "post-apocalyptic-burrower", subject: "a mutant burrower erupting from cracked asphalt" },
+  { id: "post-apocalyptic-ambush-plant", subject: "a mutant ambush plant with a toothed pod among ruins" },
+  { id: "post-apocalyptic-predator", subject: "a mutant four-legged wasteland predator" },
+  { id: "horror-possessed", subject: "a possessed villager with wrong eyes and a rigid stance" },
+  { id: "horror-doll", subject: "a sinister porcelain doll" },
+  { id: "horror-fungal-host", subject: "a fungal host, a body overgrown with mushrooms and spores" },
+  { id: "horror-parasite-swarm", subject: "a crawling swarm of parasites" },
+  { id: "mystery-hired-gun", subject: "a period hired gun in a flat cap with a revolver" },
+  { id: "mystery-burglar", subject: "a masked cat burglar in dark clothes" },
+  { id: "mystery-poisoner", subject: "a poisoner in period dress holding a small vial" },
+  { id: "mystery-occult-enforcer", subject: "an occult society enforcer in a robe and signet ring" },
+  { id: "dark-fantasy-plague-soldier", subject: "a plague soldier in a beaked mask and rusted mail" },
+  { id: "dark-fantasy-penitent", subject: "a penitent executioner, a hooded flagellant with a heavy blade" },
+];
+
 // Threat, which a creature type cannot express. Once the bestiary carries a
 // type, the fourteen plates above answer "what is it" for all 576 roster
 // entries; they still cannot say "this one is the centrepiece", so a CR 18
@@ -638,6 +826,18 @@ export function placeholderJobs() {
 
   for (const type of [...MONSTER_TYPES, ...GENRE_MONSTERS]) {
     portrait("monster", type.id, type.subject, "creature");
+  }
+
+  // A creature's own plate, which beats the type and the boss plate when the
+  // monster is one of these (or an alias of one).
+  for (const family of MONSTER_FAMILY_PLATES) {
+    portrait("monster", family.id, family.subject, "creature");
+  }
+  for (const role of ENEMY_ROLE_PLATES) {
+    portrait("monster", role.id, role.subject, "creature");
+  }
+  for (const token of GENRE_ENEMY_TOKEN_PLATES) {
+    portrait("monster", token.id, token.subject, "creature");
   }
 
   // Threat, not kind: id is <genre>-boss so paletteForId still picks up the

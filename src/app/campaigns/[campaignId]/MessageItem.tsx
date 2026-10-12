@@ -219,7 +219,7 @@ export const MessageItem = memo(function MessageItem({
         name: "Continue the scene",
         label: "Continue this scene",
         hint: "Continue: have the DM keep writing from where this stopped, without moving the story on",
-        glyph: "pace-fast",
+        glyph: "ui-skip",
         icon: <FastForward className="size-3.5" />,
         onSelect: () => onContinueScene(message),
       });
@@ -241,7 +241,7 @@ export const MessageItem = memo(function MessageItem({
         name: "Remember",
         label: "Pin this to the DM's memory",
         hint: "Remember: keep your selected text (or this whole message) in front of the DM every turn",
-        glyph: "tab-journal",
+        glyph: "ui-pin",
         icon: <Bookmark className="size-3.5" />,
         onSelect: () => onPinMemory(message),
       });

@@ -194,6 +194,14 @@ export function callingBlocker(
   if (pickLevel !== null && derived.effectiveLevel >= pickLevel && !state.subclass.trim()) {
     return block("subclass", `Pick a subclass: a ${klass.name.toLowerCase()} chooses one at level ${pickLevel}.`);
   }
+  // What the subclass's training leaves to the player: a Lore bard's three
+  // skills, a Knowledge cleric's languages and skills (issue 251).
+  for (const grant of derived.subclassTraining ?? []) {
+    const owed = featOwed(grant.name, grant.spec, state.featChoices?.[grant.name.trim().toLowerCase()]);
+    if (owed) {
+      return block("subclass", owed);
+    }
+  }
   const stylesLeft = derived.styleSlots - state.stylePicks.slice(0, derived.styleSlots).length;
   if (stylesLeft > 0) {
     return block("styles", `Pick ${stylesLeft === 1 ? "a fighting style" : `${stylesLeft} fighting styles`}.`);
@@ -525,7 +533,7 @@ export function buildBuilderResult(input: SubmitInput): BuilderResult {
       // The picks those feats leave open, for the feats on the sheet only
       // (src/lib/srd/feat-grants.ts); the server applies them.
       featChoices: Object.fromEntries(
-        [...new Set([...asiFeats, ...state.feats])]
+        [...new Set([...asiFeats, ...state.feats, ...(derived.subclassTraining ?? []).map((grant) => grant.name)])]
           .map((feat) => [feat.trim().toLowerCase(), (state.featChoices ?? {})[feat.trim().toLowerCase()]] as const)
           .filter((entry): entry is readonly [string, NonNullable<(typeof entry)[1]>] => Boolean(entry[1])),
       ),

@@ -46,7 +46,11 @@ import { srdFeatureSpend } from "@/lib/dm/srd-feature-spends";
 import { handleStabilize } from "@/lib/dm/stabilize";
 import { canonicalCondition, handleSetCondition } from "@/lib/dm/set-condition";
 import { exhaustionPatch, namesExhaustion, PRONE, SUFFOCATING } from "@/lib/dm/vitals-logic";
-import { prepareResourceCharge } from "@/lib/dm/resource-turn";
+import { castMarkCharge, prepareResourceCharge } from "@/lib/dm/resource-turn";
+import { planCounterReaction } from "@/lib/dm/reaction-counters";
+import { channelOptionsHeld, optionCost } from "@/lib/dm/option-costs";
+import { BONUS_ATTACK_COUNTERS } from "@/lib/dm/feature-bonus-attacks";
+import { matchResource } from "@/lib/srd/class-resources";
 import { prepareUseItem } from "@/lib/dm/object-actions";
 import { chargedItemUse } from "@/lib/dm/item-use";
 import { applyConsumable, consumableRefusal } from "@/lib/dm/consumables";
@@ -71,6 +75,7 @@ import {
   computePurchase,
   computeUseItem,
   computeUseResource,
+  parseFontOfMagic,
   rollHealing,
 } from "@/lib/dm/resource-tools";
 import { resourceTools } from "@/lib/dm/resource-tool-defs";
@@ -136,23 +141,22 @@ function tool(name: string, description: string, extra: Record<string, unknown>,
 }
 
 export const mutationTools: ToolDef[] = [
-  tool("apply_damage", "Deal damage to a character. Temp HP absorbs first; HP floors at 0. Send dice and the server rolls them; a bare amount must be a damage total the server rolled this turn (request_roll kind damage).", {
-    amount: { type: "integer", minimum: 1, maximum: 200 },
-    dice: { type: "string", description: "Dice the server rolls for the damage, e.g. \"2d6\". Instead of amount." },
-    type: { type: "string", description: "Damage type, e.g. slashing, fire." },
+  tool("apply_damage", "Deal damage to a character. Temp HP absorbs first; HP floors at 0.", {
+    amount: { type: "integer", minimum: 1, maximum: 200, description: "A damage total the server rolled this turn (request_roll kind=damage)." },
+    dice: { type: "string", description: "Dice the server rolls for the damage ('2d6'). Instead of amount." },
+    type: { type: "string", description: "Damage type (slashing, fire)." },
     magical: {
       type: "boolean",
       description:
         "True when the damage comes from a spell or a magic weapon, so resistance to nonmagical attacks does not apply.",
     },
   }, []),
-  tool("heal", "Restore a character's hit points, capped at their max. Healing a dying character any amount ends their death saves and wakes them. Pass temp:true to grant TEMPORARY hit points instead (they do not stack; the higher value wins). For a HEALING SPELL, pass spell, casterId and the slot level instead of amount: the server casts it (the caster must have the spell; the slot and the action are spent), rolls the spell's real dice, adds the caster's ability modifier, and shows the dice card. Do not call use_spell_slot for it as well.", {
+  tool("heal", "Restore a character's hit points, capped at their max. For a HEALING SPELL, pass spell, casterId and level instead of amount: the server casts it (the caster must have the spell; the slot and the action are spent), rolls the spell's real dice, adds the caster's ability modifier, and shows the dice card.", {
     amount: { type: "integer", minimum: 1, maximum: 200, description: "Hit points the server rolled this turn, for healing that is not a spell." },
-    dice: { type: "string", description: "Dice the server rolls for healing that is not a spell, e.g. \"2d4+2\". Instead of amount." },
+    dice: { type: "string", description: "Dice the server rolls for healing that is not a spell ('2d4+2'). Instead of amount." },
     spell: {
       type: "string",
-      description:
-        "Healing spell being cast (Cure Wounds, Healing Word, Prayer of Healing). The server rolls it.",
+      description: "Healing spell being cast (Cure Wounds, Healing Word, Prayer of Healing).",
     },
     level: {
       type: "integer",
@@ -162,22 +166,22 @@ export const mutationTools: ToolDef[] = [
     },
     casterId: {
       type: "string",
-      description: "Who cast it, when a spell heals someone else; their ability modifier is added.",
+      description: "The caster, when a spell heals someone else: exact characterId from GAME STATE.",
     },
     temp: {
       type: "boolean",
-      description: "True = temporary hit points instead of healing.",
+      description: "True for TEMPORARY hit points instead of healing (they do not stack; the higher value wins).",
     },
   }, []),
   tool(
     "stabilize",
-    "Stabilize a DYING character at 0 HP without healing. Name the character tending to them as healerId: it takes that character's action and the server rolls their DC 10 Wisdom (Medicine) check. Pass method 'kit' to spend one of the ten uses of the healer's kit they carry, or 'spell' for Spare the Dying, and no check is needed. On a battle map the healer must be within 5 feet. A stable character stops making death saves, stays unconscious at 0 HP, and regains 1 hit point after 1d4 hours.",
+    "Stabilize a DYING character at 0 HP without healing. It takes the healer's action: with method 'check' the server rolls their DC 10 Wisdom (Medicine) check; 'kit' (one of the ten uses of the healer's kit they carry) and 'spell' (Spare the Dying) need no check. On a battle map the healer must be within 5 feet. A stable character stops making death saves, stays unconscious at 0 HP, and regains 1 hit point after 1d4 hours.",
     {
-      healerId: { type: "string", description: "The characterId of whoever is tending to them." },
+      healerId: { type: "string", description: "Whoever tends them: exact characterId from GAME STATE." },
       method: {
         type: "string",
         enum: ["check", "kit", "spell"],
-        description: "check = Medicine DC 10 (default), kit = a healer's kit use, spell = Spare the Dying.",
+        description: "Default 'check'.",
       },
     },
     ["healerId"],
@@ -204,7 +208,7 @@ export const mutationTools: ToolDef[] = [
     function: {
       name: "party_award",
       description:
-        "Hand the whole party the spoils of one moment in a single call: XP each, a purse split evenly between them, and optionally one item to the character who found it. Use this instead of a run of award_xp and modify_gold calls after a fight or a hoard; the server does the arithmetic and the split.",
+        "Hand the whole party the spoils of one moment in a single call (XP each, a purse, one item), instead of a run of award_xp and modify_gold calls after a fight or a hoard; the server does the arithmetic and the split.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -217,7 +221,7 @@ export const mutationTools: ToolDef[] = [
             maximum: 100000,
             description: "Total gold, split evenly; the remainder goes to the first share.",
           },
-          name: { type: "string", description: "One item, to the first character listed." },
+          name: { type: "string", description: "One item, to the first character listed (the one who found it)." },
           qty: { type: "integer", minimum: 1, maximum: 99 },
           reason: { type: "string" },
         },
@@ -225,26 +229,28 @@ export const mutationTools: ToolDef[] = [
       },
     },
   },
-  tool("modify_gold", "Add or remove money (negative delta = spend/lose). Floors at 0. For anything under a gold piece, or a price quoted in another coin, send `coins` like \"340 silver\" or \"2 pp 5 sp\" and set delta to -1 to spend it or 1 to gain it.", {
+  tool("modify_gold", "Add or remove money (negative delta = spend/lose). Floors at 0.", {
     delta: { type: "integer", minimum: -100000, maximum: 100000 },
-    coins: { type: "string", description: "Amount in denominations, e.g. '340 silver'. Overrides delta's size; delta's sign still says gain or spend." },
+    coins: { type: "string", description: "For anything under a gold piece, or a price quoted in another coin: the amount in denominations ('340 silver', '2 pp 5 sp'). Overrides delta's size; delta's sign still says gain or spend (-1 to spend it, 1 to gain it)." },
+    additional: { type: "boolean", description: "Only when a player just accepted this same amount and this is truly another, separate sum from a different source." },
   }, ["delta"]),
-  tool("grant_item", "Give a character an item (loot, purchase, gift). Only for items the fiction actually put in their hands. Set unidentified when the party cannot tell what it is yet: then `name` is the description they would use ('an ornate silver ring'), never the true name, and reveal_item names it later.", {
+  tool("grant_item", "Give a character an item (loot, purchase, gift), only one the fiction actually put in their hands.", {
     ...waypointProperty,
-    unidentified: { type: "boolean", description: "True when the party does not yet know what this is." },
+    unidentified: { type: "boolean", description: "True when the party cannot tell what it is yet: then name is the description they would use ('an ornate silver ring'), never the true name, and reveal_item names it later." },
+    name: { type: "string" },
+    qty: { type: "integer", minimum: 1, maximum: 99 },
+    additional: { type: "boolean", description: "Only when a player just accepted this same item and this is truly another one from a different source." },
+  }, ["name"]),
+  tool("remove_item", "Take an item from a character (lost, stolen, destroyed). For consumables being USED, use use_item; for sales, use purchase.", {
     name: { type: "string" },
     qty: { type: "integer", minimum: 1, maximum: 99 },
   }, ["name"]),
-  tool("remove_item", "Take an item from a character (lost, stolen, destroyed). For consumables being USED, call use_item instead; for sales, call purchase.", {
-    name: { type: "string" },
-    qty: { type: "integer", minimum: 1, maximum: 99 },
-  }, ["name"]),
-  tool("reveal_item", "Name an item the party has been carrying without knowing what it is. Give the description they have been calling it by as `name`, and what it actually is as `revealedName`. Only for items granted unidentified; an ordinary item needs no revealing.", {
-    name: { type: "string", description: "The description on the sheet now, e.g. 'an ornate silver ring'." },
-    revealedName: { type: "string", description: "What it truly is, e.g. 'Ring of Protection'." },
+  tool("reveal_item", "Name an item the party has been carrying without knowing what it is. Only for items granted unidentified; an ordinary item needs no revealing.", {
+    name: { type: "string", description: "The description they have been calling it by, as on the sheet now ('an ornate silver ring')." },
+    revealedName: { type: "string", description: "What it truly is ('Ring of Protection')." },
   }, ["name"]),
   ...resourceTools,
-  tool("set_condition", "Apply a condition. Use the exact 5e name when one fits: blinded, charmed, deafened, frightened, grappled, incapacitated, invisible, paralyzed, petrified, poisoned, prone, restrained, stunned, unconscious, exhaustion. Custom names are allowed for story effects. Always give a duration when the fiction has one, because only timed conditions ever expire on their own: pass rounds for combat-scale effects, minutes or hours for longer ones (a poison, a curse, a potion), or saveAbility + saveDc for save-ends effects the server re-rolls. In combat the countdown runs by round; outside it the in-world clock runs it down as the party travels, rests, or passes time.", {
+  tool("set_condition", "Apply a condition. Use the exact 5e name when one fits: blinded, charmed, deafened, frightened, grappled, incapacitated, invisible, paralyzed, petrified, poisoned, prone, restrained, stunned, unconscious, exhaustion. Custom names are allowed for story effects. Always give a duration when the fiction has one, because only timed conditions ever expire on their own: rounds for combat-scale effects, minutes, hours or days for longer ones (a poison, a curse, a potion), or saveAbility + saveDc for save-ends effects the server re-rolls. In combat the countdown runs by round; outside it the in-world clock runs it down as the party travels, rests, or passes time.", {
     condition: { type: "string" },
     rounds: {
       type: "integer",
@@ -279,17 +285,17 @@ export const mutationTools: ToolDef[] = [
     sourceEnemyId: {
       type: "string",
       description:
-        "The enemy that caused it, when the condition is tied to one: the charmer, the grappler, the source of the fear.",
+        "The enemy that caused it, when the condition is tied to one (the charmer, the grappler, the source of the fear): exact enemyId from GAME STATE.",
     },
     sourceCharacterId: {
       type: "string",
-      description: "The character that caused it, when it was one of the party.",
+      description: "The character that caused it, when it was one of the party: exact characterId from GAME STATE.",
     },
   }, ["condition"]),
   tool("clear_condition", "Remove a condition from a character the moment the fiction ends it (cured, dispelled, rested, shaken off). Use the condition name shown in GAME STATE.", {
     condition: { type: "string" },
   }, ["condition"]),
-  tool("use_spell_slot", "Cast a spell that no other tool resolves (a utility spell, a summoning, a ritual): the server checks the caster holds the spell and can cast it now, spends the slot of the spell's level (or the higher one named), its casting time from the turn and any costly material, and tracks concentration: a new concentration spell ends the previous one and its effects. cast_at_enemy, cast_buff, aoe_damage, pc_attack, heal and use_reaction spend their own slot; do not call this before them. A spell that leaves an area on the battle map with nobody caught in it yet (Fog Cloud, Darkness, Silence, Spike Growth, Web, Moonbeam, Daylight, a Wall of Stone, Force, Ice, Fire or Thorns, Guardian of Faith) is laid there: send atX/atY, and towardX/towardY for a wall; the server applies the area from then on (movement, sight, Silence, the saves and damage of creatures entering it or starting or ending a turn in it) and removes it when the concentration or the duration ends.", {
+  tool("use_spell_slot", "Cast a spell that no other tool resolves (a utility spell, a summoning, a ritual): the server checks the caster holds the spell and can cast it now, spends the slot of the spell's level (or the higher one named), its casting time from the turn and any costly material, and tracks concentration: a new concentration spell ends the previous one and its effects. A spell that leaves an area on the battle map with nobody caught in it yet (Fog Cloud, Darkness, Silence, Spike Growth, Web, Moonbeam, Daylight, a Wall of Stone, Force, Ice, Fire or Thorns, Guardian of Faith) is laid there (atX); the server applies the area from then on (movement, sight, Silence, the saves and damage of creatures entering it or starting or ending a turn in it) and removes it when the concentration or the duration ends.", {
     level: { type: "integer", minimum: 1, maximum: 9 },
     spell: { type: "string", description: "Exact name of the spell being cast, from the character's spell list." },
     ritual: {
@@ -319,7 +325,7 @@ export const mutationTools: ToolDef[] = [
   ),
   tool(
     "update_sheet",
-    "Set who a character is in the story: a rename, a race after a transformation, a background, an alignment, a speed a curse changed, an ability score a tome or a curse changed, a feat or a lasting ability the story grants. Never a level, hit points, XP, AC, gold or conditions: the level-up is the player's, and heal, apply_damage, award_xp, modify_gold, set_condition and set_effect move the rest (the server refuses them here). Include ONLY the fields that change.",
+    "Set who a character is in the story, including a feat or an ability score a curse changed; never a level, hit points, XP, AC, gold or conditions (heal, apply_damage, award_xp, modify_gold, set_condition and set_effect move those). Include ONLY the fields that change.",
     {
       name: { type: "string" },
       race: { type: "string" },
@@ -1147,9 +1153,55 @@ export function applyDmMutation(
       if (featureSpend) {
         return { result: featureSpend };
       }
+      // A reaction counter that acts on the hit that triggered it, or on
+      // dropping to 0 (src/lib/dm/reaction-counters.ts): its trigger is
+      // checked before anything is spent, its effect applied after.
+      const counter = matchResource(resourceName);
+      const reacting = counter
+        ? planCounterReaction({ campaign, turnId, sheet: getSheetById(sheet.id) ?? sheet, defId: counter.id, targetCharacterId: args.targetCharacterId, sheets, sheetsById })
+        : null;
+      if (reacting && "error" in reacting) {
+        return { result: reacting };
+      }
+      // An option of a pool whose options cost different things (Channel
+      // Divinity's, Psionic Energy's, a maneuver's) costs its own part of
+      // the turn (src/lib/dm/option-costs.ts); a Font of Magic conversion is
+      // a bonus action. A Channel Divinity in a fight names its option.
+      const fighting = (() => {
+        const live = getActiveEncounter(campaign.id);
+        return Boolean(live && (live.kind ?? "fight") === "fight");
+      })();
+      // War Priest, Unwavering Mark and Hungry Jaws are spent by the attack
+      // they buy (src/lib/dm/feature-bonus-attacks.ts).
+      if (counter && BONUS_ATTACK_COUNTERS.includes(counter.id)) {
+        return {
+          result: {
+            error: `${counter.displayName} is spent by its bonus-action attack: pc_attack with bonusAttack "feature"${counter.id === "race_hungry_jaws" ? ' and weapon "bite"' : ""}. Nothing was spent.`,
+          },
+        };
+      }
+      const option = optionCost(counter?.id, `${args.variant ?? ""} ${resourceName}`, fighting);
+      if (option && "refused" in option) {
+        return { result: { error: option.refused } };
+      }
+      if (!option && counter?.id === "channel_divinity" && fighting) {
+        const held = channelOptionsHeld(sheet);
+        return {
+          result: {
+            error: `Channel Divinity in a fight is one of its options, each with its own cost: name it in variant${held.length ? ` (${sheet.name} has ${held.join(", ")})` : ""}. Nothing was spent.`,
+          },
+        };
+      }
+      const optionCharge = option?.cost ?? (counter?.id === "sorcery_points" && parseFontOfMagic(args.variant) ? "bonus" : undefined);
+      // Embodiment of the Law and the genre surges move the next spell to
+      // the bonus action (src/lib/dm/resource-turn.ts castMarkCharge).
+      const castMark = castMarkCharge(campaign, sheet, counter?.id);
+      if (castMark && "error" in castMark) {
+        return { result: castMark };
+      }
       // What the feature costs of the turn is checked before anything is
       // spent or rolled, and charged once the spend has gone through.
-      const charge = prepareResourceCharge(campaign, sheet, resourceName);
+      const charge = prepareResourceCharge(campaign, sheet, resourceName, optionCharge);
       if ("error" in charge) {
         return { result: charge };
       }
@@ -1168,12 +1220,19 @@ export function applyDmMutation(
           swims: args.formSwims,
         },
         args.variant,
+        { beforeDrop: charge.beforeDrop },
       );
       if ("error" in outcome) {
         return { result: outcome };
       }
       patchSheet(sheet.id, outcome.patch);
       Object.assign(outcome.result, charge.commit());
+      if (castMark) {
+        Object.assign(outcome.result, castMark.apply());
+      }
+      if (reacting) {
+        Object.assign(outcome.result, reacting.apply());
+      }
       if (outcome.shapeHours) {
         recordShapeEnd(campaign.id, sheet.id, outcome.shapeHours);
       }

@@ -29,6 +29,8 @@ import type {
 import { ABILITIES } from "@/lib/schemas/sheet";
 import { XP_THRESHOLDS, findSkill, levelForXp } from "@/lib/srd";
 import { ABILITY_SCORE_CAP, applyAsiChoices, earnedAsiCountFor } from "@/lib/srd/asi";
+import { applySubclassTraining, autoSubclassPicks, subclassGrants } from "@/lib/srd/subclass-training";
+import type { SubclassExtras } from "@/lib/srd/subclass-tables";
 import { asiTaken, withAsiLedger } from "@/lib/srd/asi-ledger";
 import { applyFeatIncrease, featSaveProficiency } from "@/lib/srd/feat-effects";
 import { applyFeatGrants, featGrantSpec } from "@/lib/srd/feat-grants";
@@ -80,6 +82,11 @@ export type LevelUpContext = {
   featOf: (name: string) => FeatFacts | null;
   subclassOffered: (classId: string, name: string) => boolean;
   rollDie: (sides: number) => number;
+  // The subclasses the bundled tables do not carry, for their training.
+  subclassExtras?: SubclassExtras;
+  // A companion levels with no player to choose for it: a subclass's picks
+  // (a Lore bard's three skills) are taken on its behalf.
+  autoPicks?: boolean;
 };
 
 // The choices, beside the fields of the player's patch that carry them.
@@ -407,6 +414,32 @@ export function buildLevelUp(
       return refuse(granted.problems[0]);
     }
     proficiencies = granted.proficiencies;
+  }
+  // What a subclass trains its character in, arriving with this level: the
+  // subclass chosen now (a Life Domain's heavy armor, a Lore bard's three
+  // skills) or a feature at the class's new level (a Gloom Stalker's Iron
+  // Mind at 7). Picks are named in the request as a feat's are, keyed by the
+  // feature's name (issue 251).
+  const trainedBefore = new Set(
+    subclassGrants(before, context.subclassExtras).map((grant) => `${grant.classId}|${lower(grant.name)}`),
+  );
+  const freshTraining = subclassGrants(classes, context.subclassExtras).filter(
+    (grant) => !trainedBefore.has(`${grant.classId}|${lower(grant.name)}`),
+  );
+  if (freshTraining.length) {
+    const trained = applySubclassTraining({
+      proficiencies,
+      grants: freshTraining,
+      choices: context.autoPicks
+        ? autoSubclassPicks(freshTraining, proficiencies, request.featChoices)
+        : (request.featChoices ?? {}),
+      strict: true,
+      abilities,
+    });
+    if (trained.problems.length) {
+      return refuse(trained.problems[0]);
+    }
+    proficiencies = trained.proficiencies;
   }
   // And the spells they teach (src/lib/srd/feat-spells.ts): every pick
   // named in the request, held to the feat's list, school and level.

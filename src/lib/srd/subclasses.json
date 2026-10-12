@@ -170,13 +170,13 @@
           "10": [
             {
               "n": "Infectious Fury",
-              "d": "Twice per long rest, a natural-weapon hit forces a Wisdom save: the target either attacks a creature of your choice or takes 2d12 psychic damage."
+              "d": "A proficiency-bonus number of times per long rest, a natural-weapon hit forces a Wisdom save: the target either attacks a creature of your choice or takes 2d12 psychic damage."
             }
           ],
           "14": [
             {
               "n": "Call the Hunt",
-              "d": "A number of times per long rest equal to your Constitution modifier, grant up to five allies an extra weapon damage die on one hit per turn while you gain temporary hit points."
+              "d": "A proficiency-bonus number of times per long rest, when you enter your rage, grant up to five allies an extra d6 of damage on one hit per turn, and gain 5 temporary hit points for each ally who accepts."
             }
           ]
         }
@@ -505,7 +505,7 @@
           "1": [
             {
               "n": "Blessings of Knowledge",
-              "d": "Two extra languages and proficiency plus expertise in two knowledge skills."
+              "d": "Two extra languages, and proficiency plus expertise in two of Arcana, History, Nature and Religion."
             }
           ],
           "2": [
@@ -633,7 +633,7 @@
           "1": [
             {
               "n": "Acolyte of Nature",
-              "d": "One druid cantrip and proficiency in one nature-facing skill."
+              "d": "One druid cantrip and proficiency in Animal Handling, Nature or Survival."
             },
             {
               "n": "Bonus Proficiency (heavy armor)",
@@ -1736,7 +1736,7 @@
           "3": [
             {
               "n": "Bonus Proficiency (Cavalier)",
-              "d": "One skill from a knightly list or proficiency with land vehicles."
+              "d": "Proficiency in Animal Handling, History, Insight, Performance or Persuasion, or one language of your choice."
             },
             {
               "n": "Born to the Saddle",
@@ -1750,7 +1750,7 @@
           "7": [
             {
               "n": "Warding Maneuver",
-              "d": "A reaction adds 1d8 to an ally's AC against one attack and halves the damage on a hit, a Constitution-modifier number of times per long rest."
+              "d": "When you or a creature you can see within 5 feet is hit, a reaction adds 1d8 to the target's AC against that attack while you wield a melee weapon or a shield, and the target resists its damage if it still hits; a Constitution-modifier number of times per long rest."
             }
           ],
           "10": [
@@ -1783,7 +1783,7 @@
           "3": [
             {
               "n": "Bonus Proficiency (Samurai)",
-              "d": "Proficiency in one social skill or a language."
+              "d": "Proficiency in History, Insight, Performance or Persuasion, or one language of your choice."
             },
             {
               "n": "Fighting Spirit",
@@ -1793,7 +1793,7 @@
           "7": [
             {
               "n": "Elegant Courtier",
-              "d": "Wisdom saving throws use your Charisma modifier if it is better, and you gain proficiency in Persuasion or expertise if already proficient."
+              "d": "Add your Wisdom modifier to Persuasion checks, and gain proficiency in Wisdom saving throws (Intelligence or Charisma if you already have it)."
             }
           ],
           "10": [
@@ -2301,7 +2301,7 @@
             },
             {
               "n": "Breath of the Dragon",
-              "d": "Replace one Attack-action attack with a 20-foot cone or 30-foot line dealing your martial arts die in damage, twice per long rest or by spending 1 ki."
+              "d": "Replace one Attack-action attack with a 20-foot cone or 30-foot line dealing two rolls of your martial arts die in damage, a proficiency-bonus number of times per long rest, or for 2 ki when none are left."
             }
           ],
           "6": [
@@ -3025,7 +3025,7 @@
             },
             {
               "n": "Otherworldly Glamour",
-              "d": "Add your Wisdom modifier to Charisma checks, and gain proficiency in one Charisma skill."
+              "d": "Add your Wisdom modifier to Charisma checks, and gain proficiency in Deception, Performance or Persuasion."
             },
             {
               "n": "Fey Wanderer Magic",
@@ -3548,7 +3548,7 @@
           "18": [
             {
               "n": "Unearthly Recovery",
-              "d": "Once per long rest, a bonus action at half hit points or less restores hit points equal to half your maximum."
+              "d": "Once per long rest, a bonus action when you have fewer than half your hit points left restores hit points equal to half your maximum."
             }
           ]
         }
@@ -3630,7 +3630,7 @@
           "18": [
             {
               "n": "Wind Soul",
-              "d": "Immunity to lightning and thunder damage, a 60-foot flying speed, and the ability to grant allies 30 feet of flight for an hour once per long rest."
+              "d": "Immunity to lightning and thunder damage, a 60-foot flying speed, and the ability to grant allies 30 feet of flight for an hour, once per short or long rest."
             }
           ]
         }
@@ -4805,7 +4805,7 @@
           "3": [
             {
               "n": "Tool Proficiency (Armorer)",
-              "d": "Proficiency with smith's tools."
+              "d": "Proficiency with heavy armor and smith's tools."
             },
             {
               "n": "Arcane Armor",

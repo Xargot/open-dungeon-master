@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { tableAuthors } from "@/lib/db/homebrew";
+import { subclassExtrasFor } from "@/lib/db/subclass-extras";
 import {
   isErrorResponse,
   requireMember,
@@ -538,6 +539,7 @@ export async function PATCH(
       spellOf: (name) => spellFactsFor(name, owner),
       featOf: (name) => featFactsFor(name, owner),
       subclassOffered: (classId, name) => subclassIsOffered(classId, name, owner),
+      subclassExtras: subclassExtrasFor(owner),
       // Under hpMethod "rolled" the hit die is a roll the table sees, as
       // every roll the server makes is (PR #61): a dice card on the record.
       rollDie: (sides) =>

@@ -13,6 +13,10 @@ import type { DeathTrack } from "@/lib/dm/death-logic";
 
 export const UNCONSCIOUS = "unconscious";
 export const PRONE = "prone";
+// Strength before Death (Samurai 18, XGtE): at 0 hit points and still on
+// their feet for the extra turn the reaction gives; the fall comes when that
+// turn ends (src/lib/dm/reaction-counters.ts, turn-end.ts).
+export const HOLDING_ON = "strength before death";
 // Written by the suffocation hazard on a creature that ran out of air, and
 // cleared (clear_condition) when it can breathe again. While it stands,
 // nothing heals or stabilizes the creature (SRD 5.1, Suffocating).
@@ -48,10 +52,15 @@ export function conditionsOf(sheet: {
   currentHp: number;
   deathSaves?: { dead: boolean } | null;
 }): string[] {
-  if (sheet.currentHp > 0 || sheet.deathSaves?.dead) {
+  if (sheet.currentHp > 0 || sheet.deathSaves?.dead || holdsOn(sheet)) {
     return sheet.conditions;
   }
   return downConditions({ conditions: sheet.conditions }).conditions;
+}
+
+// Up at 0 hit points for Strength before Death's extra turn.
+export function holdsOn(sheet: { conditions: string[]; deathSaves?: { dead: boolean } | null }): boolean {
+  return !sheet.deathSaves?.dead && sheet.conditions.some((entry) => entry.trim().toLowerCase() === HOLDING_ON);
 }
 
 // Hit points are back: the creature wakes and is still on the ground.

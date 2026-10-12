@@ -8,6 +8,7 @@
 // program starts, and each later message (a correction, a nudge) is sent to
 // the same running program rather than re-sending everything.
 
+import { splitAtMoment } from "../prompt-boundary.ts";
 import type { McpToolDefinition } from "./types.ts";
 
 type RenderMessage = {
@@ -110,12 +111,29 @@ export type RenderedTurn = {
   prompt: string;
 };
 
+export type RenderTurnOptions = {
+  // Whether the older transcript may join the system prompt in whole chunks
+  // (HarnessAdapter.settledTranscript). Only for a program that caches its
+  // system prompt in blocks and takes one of any size: the whole older
+  // transcript can run to hundreds of kilobytes, past what a program that
+  // reads its system prompt from an environment variable or a command line
+  // can be started with (Linux caps one at 128 KiB).
+  settledTranscript?: boolean;
+};
+
+// How many transcript lines join the system prompt at once. Each chunk that
+// closes writes the system prompt's second part again, so a chunk trades one
+// rewrite of that part for a turn-by-turn rewrite of its lines; at twenty
+// (about seven player inputs) it wrote 18-26% less per input on two recorded
+// sessions than leaving the whole transcript in the opening message.
+const TRANSCRIPT_CHUNK = 20;
+
 // The system message becomes the program's whole system prompt (replacing
 // its own coding persona, never added to it). Everything after it becomes
 // one opening message: the transcript so far, then the instruction to take
 // the turn. A turn resumed after dice carries its own tool calls and results,
 // which are written as engine lines so the program sees what was resolved.
-export function renderTurn(messages: readonly RenderMessage[]): RenderedTurn {
+export function renderTurn(messages: readonly RenderMessage[], options: RenderTurnOptions = {}): RenderedTurn {
   const systemParts: string[] = [];
   const lines: string[] = [];
   const toolNamesById = new Map<string, string>();
@@ -150,9 +168,22 @@ export function renderTurn(messages: readonly RenderMessage[]): RenderedTurn {
     }
   }
 
-  const system = [HARNESS_PREAMBLE, ...systemParts].join("\n\n");
-  const transcript = lines.length
-    ? `<table_transcript>\n${lines.join("\n\n")}\n</table_transcript>`
+  // The game state's turn-to-turn part goes after the transcript, so the
+  // system prompt an agent program starts from (the rules and the standing
+  // state) reads the same from one turn to the next and its cache holds.
+  const { standing, moment } = splitAtMoment([HARNESS_PREAMBLE, ...systemParts].join("\n\n"));
+  // The transcript's older part, in whole chunks, joins the system prompt
+  // after the standing state: it is written again only when a chunk closes,
+  // not on every turn. The newest line always stays in the opening message.
+  const settled = options.settledTranscript
+    ? Math.floor(Math.max(0, lines.length - 1) / TRANSCRIPT_CHUNK) * TRANSCRIPT_CHUNK
+    : 0;
+  const earlier = settled
+    ? `\n\n<table_transcript_earlier>\n${lines.slice(0, settled).join("\n\n")}\n</table_transcript_earlier>`
+    : "";
+  const recent = lines.slice(settled);
+  const transcript = recent.length
+    ? `<table_transcript>\n${recent.join("\n\n")}\n</table_transcript>`
     : "The table has not spoken yet.";
   const resumed = messages.some((message) => message.role === "tool");
   const instruction = resumed
@@ -160,7 +191,7 @@ export function renderTurn(messages: readonly RenderMessage[]): RenderedTurn {
     : lastUser
       ? "It is your turn as the Dungeon Master. Resolve what the players just did with your tools, then write the narration."
       : "It is your turn as the Dungeon Master. Open the scene: use your tools for anything mechanical, then write the narration.";
-  return { system, prompt: `${transcript}\n\n${instruction}` };
+  return { system: `${standing}${earlier}`, prompt: [transcript, moment, instruction].filter(Boolean).join("\n\n") };
 }
 
 // Messages that arrived after a program started, rendered as the follow-up

@@ -166,13 +166,13 @@ export function MapPanel({
   const mapItems: ContextMenuItem[] =
     shown && steersStory
       ? [
-          { id: "upload", label: shown.mapImage ? "Replace map with your own picture" : "Upload a map", glyph: "tab-handout", disabled: uploading || regenerating, onSelect: () => fileRef.current?.click() },
-          ...(canPaint ? [{ id: "redraw", label: "Redraw this map", glyph: "system-maps", disabled: regenerating || uploading, onSelect: () => void regenerate() }] : []),
-          ...(shown.mapImage ? [{ id: "clear", label: "Use the placeholder instead", glyph: "quest-hidden", disabled: uploading || regenerating, onSelect: () => void clearToPlaceholder() }] : []),
+          { id: "upload", label: shown.mapImage ? "Replace map with your own picture" : "Upload a map", glyph: "ui-upload", disabled: uploading || regenerating, onSelect: () => fileRef.current?.click() },
+          ...(canPaint ? [{ id: "redraw", label: "Redraw this map", glyph: "ui-paint", disabled: regenerating || uploading, onSelect: () => void regenerate() }] : []),
+          ...(shown.mapImage ? [{ id: "clear", label: "Use the placeholder instead", glyph: "ui-placeholder", disabled: uploading || regenerating, onSelect: () => void clearToPlaceholder() }] : []),
           { id: "populate", label: "Populate", glyph: "system-party", separated: true, disabled: populating, onSelect: () => void populate(shown.id) },
         ]
       : shown?.mapImage
-        ? [{ id: "enlarge", label: "Enlarge the map", glyph: "tab-map", onSelect: () => setEnlarged(true) }]
+        ? [{ id: "enlarge", label: "Enlarge the map", glyph: "ui-zoom", onSelect: () => setEnlarged(true) }]
         : [];
 
   return (

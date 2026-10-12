@@ -24,6 +24,7 @@ export default function LicensesPage() {
   return (
     <PageShell
       icon={PIXEL_ICONS.support}
+      glyph="ui-licenses"
       title="Licenses and attribution"
       blurb="Where the bundled rules, imported content and sounds come from."
       actions={

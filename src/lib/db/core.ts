@@ -7,6 +7,7 @@ import { maintenanceState } from "../maintenance.ts";
 import { populateFeatures, populateFeaturesForClasses } from "@/lib/srd/features";
 import { packSubclassExtras } from "@/lib/content/archetype-tables";
 import { extraSubclassOf, mergeExtras, type SubclassExtras } from "@/lib/srd/subclass-tables";
+import { repairedTraining } from "@/lib/srd/subclass-training";
 import { populateResources } from "@/lib/srd/class-resources";
 import { featsAsRun, registerTableFeatReader } from "@/lib/srd/feat-effects";
 import { tableFeatsFrom } from "@/lib/db/table-feats";
@@ -906,6 +907,25 @@ function ensureSchema(db: SqliteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_rule_chunks
       ON rule_chunks(campaign_id, chunk_index);
 
+    -- Coordinated actions (issue 254): a party's plan staged together
+    -- outside a fight and resolved as one DM beat
+    -- (src/lib/dm/coordination.ts). entries_json holds every character's
+    -- draft and state; resolved_seq is the first line the plan posted.
+    CREATE TABLE IF NOT EXISTS coordination_phases (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'drafting'
+        CHECK (status IN ('drafting','resolved','cancelled')),
+      opened_by TEXT NOT NULL,
+      prompt TEXT NOT NULL DEFAULT '',
+      entries_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      resolved_seq INTEGER,
+      outcome TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_coordination_campaign ON coordination_phases(campaign_id, created_at);
+
     -- DM-proposed inventory/gold changes awaiting the owning player's answer
     -- (game setting inventoryApprovals). The original tool args are stored so
     -- approval replays the exact mutation through applyDmMutation.
@@ -1290,6 +1310,17 @@ function ensureSchema(db: SqliteDatabase) {
     // A trade between two players (11.2): who the offer is made to. Empty
     // for the DM's own offers.
     ["to_character_id", `TEXT NOT NULL DEFAULT ''`],
+    // How settling it went, for the DM's next turn (issue 239): what
+    // applying it left on the sheet, or "failed: <why>" when approval could
+    // not apply and the row was closed as declined.
+    ["outcome", `TEXT NOT NULL DEFAULT ''`],
+  ]);
+
+  addColumns("campaign_members", [
+    // This member's own order for the Party panel's cards (issue 240): a
+    // JSON list of sheet ids, first card first. Empty means the campaign's
+    // own order. Display only; initiative and formation never read it.
+    ["party_order_json", `TEXT NOT NULL DEFAULT ''`],
   ]);
 
   addColumns("campaigns", [
@@ -1503,6 +1534,10 @@ function ensureSchema(db: SqliteDatabase) {
     ["companion_kind", `TEXT`],
     // Short personality/voice brief the DM roleplays from.
     ["personality", `TEXT NOT NULL DEFAULT ''`],
+    // Which battle cards its player keeps in the visible Hand, and in what
+    // order (src/lib/battlemap/hand-layout.ts, issue 231); NULL = the
+    // automatic split. A preference of the player's, never a rule.
+    ["hand_layout_json", `TEXT`],
     // 1 = the `ac` column is a hand-set number the AC engine must not
     // recompute (src/lib/srd/armor.ts). Sheets created before the engine are
     // backfilled to 1 so no existing character's armor class changes under
@@ -2676,6 +2711,13 @@ function bootSubclassExtras(db: SqliteDatabase, campaignId: string, cache: Map<s
   } catch {
     authors = [];
   }
+  const extras = bootExtrasFor(db, authors);
+  cache.set(campaignId, extras);
+  return extras;
+}
+
+// The workshop subclasses of these authors, then the pack's.
+function bootExtrasFor(db: SqliteDatabase, authors: string[]): SubclassExtras {
   const own: SubclassExtras = {};
   for (const author of [...new Set(authors)]) {
     const entries = db
@@ -2690,9 +2732,7 @@ function bootSubclassExtras(db: SqliteDatabase, campaignId: string, cache: Map<s
       }
     }
   }
-  const extras = mergeExtras(own, packSubclassExtras());
-  cache.set(campaignId, extras);
-  return extras;
+  return mergeExtras(own, packSubclassExtras());
 }
 
 // The boot resync below re-derives every sheet, and its answer depends only
@@ -2758,6 +2798,19 @@ function backfillSheetResources(db: SqliteDatabase) {
       return;
     }
   }
+  resyncSheets(db);
+  if (fingerprint) {
+    db.prepare(
+      `INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+    ).run(SHEET_RESYNC_KEY, JSON.stringify({ fingerprint }), nowIso());
+  }
+}
+
+// Every sheet and library character re-derived against this build's rules.
+// Exported so scripts/test-subclass-training.mjs can drive it against a row
+// it has broken on purpose, as the boot does.
+export function resyncSheets(db: SqliteDatabase) {
   resyncingDb = db;
   try {
     const started = Date.now();
@@ -2765,14 +2818,12 @@ function backfillSheetResources(db: SqliteDatabase) {
     if (checked > 0) {
       console.log(`[db] resynced ${checked} character sheets against this build's rules (${changed} changed) in ${Date.now() - started} ms`);
     }
+    const library = resyncLibraryTraining(db);
+    if (library > 0) {
+      console.log(`[db] added subclass training to ${library} library characters`);
+    }
   } finally {
     resyncingDb = null;
-  }
-  if (fingerprint) {
-    db.prepare(
-      `INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
-    ).run(SHEET_RESYNC_KEY, JSON.stringify({ fingerprint }), nowIso());
   }
 }
 
@@ -2784,7 +2835,7 @@ function resyncSheetResources(db: SqliteDatabase): { checked: number; changed: n
   const sheets = db
     .prepare(
       `SELECT id, campaign_id, class, subclass, race, level, abilities_json, features_json, resources_json,
-              classes_json, feats_json
+              classes_json, feats_json, proficiencies_json
          FROM character_sheets`,
     )
     .all() as Array<{
@@ -2799,19 +2850,20 @@ function resyncSheetResources(db: SqliteDatabase): { checked: number; changed: n
     resources_json: string | null;
     classes_json: string | null;
     feats_json: string | null;
+    proficiencies_json: string;
   }>;
   if (!sheets.length) {
     return { checked: 0, changed: 0 };
   }
   const update = db.prepare(
-    `UPDATE character_sheets SET features_json = ?, resources_json = ? WHERE id = ?`,
+    `UPDATE character_sheets SET features_json = ?, resources_json = ?, proficiencies_json = ? WHERE id = ?`,
   );
   const extrasByCampaign = new Map<string, SubclassExtras>();
-  const pending: Array<[string, string, string]> = [];
+  const pending: Array<[string, string, string, string]> = [];
   let changed = 0;
-  const flush = db.transaction((rows: Array<[string, string, string]>) => {
-    for (const [features, resources, id] of rows) {
-      update.run(features, resources, id);
+  const flush = db.transaction((rows: Array<[string, string, string, string]>) => {
+    for (const [features, resources, proficiencies, id] of rows) {
+      update.run(features, resources, proficiencies, id);
     }
   });
   for (const row of sheets) {
@@ -2852,8 +2904,16 @@ function resyncSheetResources(db: SqliteDatabase): { checked: number; changed: n
       );
       const nextFeatures = JSON.stringify(features);
       const nextResources = JSON.stringify(resources);
-      if (nextFeatures !== row.features_json || nextResources !== row.resources_json) {
-        pending.push([nextFeatures, nextResources, row.id]);
+      // The training its subclass grants, added where the sheet was written
+      // without it (issue 251). Only ever adds.
+      const training = repairedTraining(
+        { proficiencies: JSON.parse(row.proficiencies_json), abilities },
+        multiclass ? classes : [{ id: row.class, level: row.level, subclass: row.subclass ?? "" }],
+        extras,
+      );
+      const nextProficiencies = training ? JSON.stringify(training) : row.proficiencies_json;
+      if (nextFeatures !== row.features_json || nextResources !== row.resources_json || nextProficiencies !== row.proficiencies_json) {
+        pending.push([nextFeatures, nextResources, nextProficiencies, row.id]);
         changed += 1;
         if (pending.length >= RESYNC_BATCH) {
           flush(pending.splice(0));
@@ -2867,6 +2927,52 @@ function resyncSheetResources(db: SqliteDatabase): { checked: number; changed: n
     flush(pending.splice(0));
   }
   return { checked: sheets.length, changed };
+}
+
+// The library's characters, the same repair: a stored Life Domain cleric
+// gains the heavy armor its feature names before it next comes to a table.
+// Returns how many rows changed.
+export function resyncLibraryTraining(db: SqliteDatabase): number {
+  const rows = db
+    .prepare(`SELECT id, user_id, class, subclass, level, sheet_json FROM library_characters WHERE subclass != '' OR sheet_json LIKE '%"classes"%'`)
+    .all() as Array<{ id: string; user_id: string; class: string; subclass: string; level: number; sheet_json: string }>;
+  const update = db.prepare(`UPDATE library_characters SET sheet_json = ? WHERE id = ?`);
+  const extrasByUser = new Map<string, SubclassExtras>();
+  let changed = 0;
+  for (const row of rows) {
+    try {
+      const sheet = JSON.parse(row.sheet_json) as {
+        proficiencies?: Parameters<typeof repairedTraining>[0]["proficiencies"];
+        abilities?: Record<string, number>;
+        featChoices?: Parameters<typeof repairedTraining>[0]["featChoices"];
+        classes?: Array<{ id: string; level: number; subclass?: string }>;
+      };
+      if (!sheet.proficiencies) {
+        continue;
+      }
+      let extras = extrasByUser.get(row.user_id);
+      if (!extras) {
+        extras = bootExtrasFor(db, [row.user_id]);
+        extrasByUser.set(row.user_id, extras);
+      }
+      const classes =
+        Array.isArray(sheet.classes) && sheet.classes.length > 1
+          ? sheet.classes
+          : [{ id: row.class, level: row.level, subclass: row.subclass }];
+      const training = repairedTraining(
+        { proficiencies: sheet.proficiencies, abilities: sheet.abilities, featChoices: sheet.featChoices },
+        classes,
+        extras,
+      );
+      if (training) {
+        update.run(JSON.stringify({ ...sheet, proficiencies: training }), row.id);
+        changed += 1;
+      }
+    } catch {
+      // An unreadable row stays as it is.
+    }
+  }
+  return changed;
 }
 
 let plaintextWarned = false;

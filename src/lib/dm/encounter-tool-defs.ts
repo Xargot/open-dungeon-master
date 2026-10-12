@@ -15,7 +15,7 @@ export const startEncounterTool: ToolDef = {
   function: {
     name: "start_encounter",
     description:
-      "Begin combat with real, server-tracked enemies. Call this BEFORE narrating the first hostile exchange. Use monster slugs or names from the Enemy picks list, or any 5e monster; give an in-world name to reskin one for this setting.",
+      "Begin combat with real, server-tracked enemies.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -29,11 +29,11 @@ export const startEncounterTool: ToolDef = {
             properties: {
               monster: {
                 type: "string",
-                description: "Monster slug or name, e.g. 'goblin' or 'Gutter Punk'.",
+                description: "Monster slug or name ('goblin', 'Gutter Punk').",
               },
               name: {
                 type: "string",
-                description: "Optional in-world display name when reskinning.",
+                description: "In-world display name, to reskin one for this setting.",
               },
               count: { type: "integer", minimum: 1, maximum: 8 },
               cr: {
@@ -50,13 +50,13 @@ export const startEncounterTool: ToolDef = {
           type: "string",
           enum: ["enemies", "party"],
           description:
-            "Who was lying in wait, hidden: 'enemies' when they jump the party, 'party' when the party springs it. The server rolls the hiders' Stealth against each opponent's passive Perception and only those who notice nothing are surprised (they lose their first turn). Use this for an ambush instead of surprised.",
+            "Who was lying in wait, hidden: 'enemies' when they jump the party, 'party' when the party springs it. Those surprised lose their first turn.",
         },
         surprised: {
           type: "string",
           enum: ["none", "enemies", "party"],
           description:
-            "A whole side the story has already decided is caught off guard, overriding ambush. Default none.",
+            "A whole side the story has already decided is caught off guard, overriding ambush. Default 'none'.",
         },
         scene: {
           type: "string",
@@ -74,6 +74,12 @@ export const startEncounterTool: ToolDef = {
           type: "boolean",
           description: "True when the fight is in a legendary creature's lair, so the lair acts on initiative 20 each round (lair_action).",
         },
+        from: {
+          type: "string",
+          enum: ["ahead", "behind"],
+          description:
+            "Where the enemy comes from against the party's travel formation (GAME STATE): 'ahead' (the default) puts the front of the formation nearest them, 'behind' the rear. The formation only places the party; it grants no surprise or bonus.",
+        },
       },
       required: ["enemies"],
     },
@@ -85,21 +91,21 @@ export const damageEnemyTool: ToolDef = {
   function: {
     name: "damage_enemy",
     description:
-      "Deal damage to an enemy from a hazard or the environment (a falling chandelier, burning oil, a collapsing floor): never from an attack or a spell. Pass source 'hazard' or 'environment'; anything else is refused. A creature that falls: pass fallFeet instead of amount and the server rolls 1d6 bludgeoning per 10 feet (at most 20d6) and lays it prone. A character's or companion's blow is pc_attack; a spell is cast_at_enemy or aoe_damage; an ally who fights is recruited with add_companion and attacks with pc_attack. The enemy dies only when the result says dead: true.",
+      "Deal damage to an enemy from a hazard or the environment (a falling chandelier, burning oil, a collapsing floor): never from an attack or a spell. For a character's or companion's blow, use pc_attack; for a spell, cast_at_enemy or aoe_damage; an ally who fights is recruited with add_companion and attacks with pc_attack. The enemy dies only when the result says dead: true.",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
         enemyId: { type: "string", description: "Exact enemyId from GAME STATE." },
         amount: { type: "integer", minimum: 1, maximum: 200, description: "A damage total the server rolled this turn; omit it for a fall (fallFeet) or dice." },
-        dice: { type: "string", description: "Dice the server rolls for the damage, e.g. \"4d10\". Instead of amount." },
+        dice: { type: "string", description: "Dice the server rolls for the damage ('4d10'). Instead of amount." },
         fallFeet: {
           type: "integer",
           minimum: 1,
           maximum: 1000,
-          description: "The creature falls this far: the server rolls the damage and lays it prone.",
+          description: "A fall, instead of amount: how far the creature falls. The server rolls 1d6 bludgeoning per 10 feet (at most 20d6) and lays it prone.",
         },
-        type: { type: "string", description: "Damage type, e.g. slashing, fire." },
+        type: { type: "string", description: "Damage type (slashing, fire)." },
         magical: {
           type: "boolean",
           description:
@@ -108,7 +114,7 @@ export const damageEnemyTool: ToolDef = {
         source: {
           type: "string",
           enum: ["hazard", "environment"],
-          description: "What deals it: a hazard (a trap, a falling object) or the environment (fire, lava, acid).",
+          description: "What deals it: 'hazard' (a trap, a falling object) or 'environment' (fire, lava, acid); anything else is refused.",
         },
         reason: { type: "string", description: "Short in-fiction cause." },
       },
@@ -122,7 +128,7 @@ export const enemyAttackTool: ToolDef = {
   function: {
     name: "enemy_attack",
     description:
-      "An enemy attacks a character, on the enemy's own turn: once end_turn hands it to you (or it acts first in the round); before its turn comes it only reacts or takes a legendary action. The server rolls to-hit from the enemy's real stat block against the target's real AC and applies real damage, and reads what bears on the roll (conditions, exhaustion, light, Pack Tactics, Sunlight Sensitivity, Sanctuary, Chill Touch). Never invent an enemy's numbers or use request_roll for enemy attacks.",
+      "Resolve an enemy's attack on a character, on the enemy's own turn: once end_turn hands it to you (or it acts first in the round); before its turn comes it only reacts or takes a legendary action. The server rolls to-hit from the enemy's real stat block against the target's real AC and applies real damage, and reads what bears on the roll (conditions, exhaustion, light, Pack Tactics, Sunlight Sensitivity, Sanctuary, Chill Touch). Never invent an enemy's numbers or use request_roll for enemy attacks.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -134,7 +140,7 @@ export const enemyAttackTool: ToolDef = {
         },
         attack: {
           type: "string",
-          description: "Attack name from the enemy's attack list; defaults to its first.",
+          description: "Attack name from the enemy's attack list. Default: its first.",
         },
         advantage: {
           type: "string",

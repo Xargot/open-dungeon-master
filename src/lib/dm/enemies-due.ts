@@ -22,9 +22,18 @@ import { publishPersisted } from "@/lib/events";
 // floor is kept under the hold, as a lead's hold keeps it), and the fight
 // remembers who is due; the next player waits for them, End Turn included.
 // A person plays them from the console or has the server play them, then
-// hands the turn on; the AI's next turn may play them and its end plays the
-// rest (src/lib/dm/encounter-tools.ts advanceAfterTurn). Releasing the hold
-// any other way hands it on too (src/lib/dm/initiative.ts).
+// hands the turn on; the AI's next turn reads them in the pass's table note
+// and in GAME STATE (src/lib/dm/prompt.ts), may play them, and its end plays
+// the rest (src/lib/dm/encounter-tools.ts advanceAfterTurn). Releasing the
+// hold any other way hands it on too (src/lib/dm/initiative.ts).
+
+// How the AI plays the enemies it is handed, said the same way by end_turn's
+// result and by GAME STATE's line for the enemies due, so the two cues
+// cannot drift. One enemy_attack is the whole Attack action: it walks the
+// enemy into reach (src/lib/dm/enemy-approach.ts) and makes every swing of
+// a Multiattack (src/lib/dm/enemy-profile.ts plannedSwings).
+export const ENEMY_TURNS_CUE =
+  "Play each in order, one action apiece: enemy_attack (it walks the enemy into reach and makes every swing of a Multiattack), or cast_at_player / aoe_damage with casterEnemyId for an ability or spell. Then narrate and stop; any you leave make their default attack after your narration.";
 
 // Whether a person is playing the monsters right now: a human DM in the seat
 // and no AI cover stretch answering for them.

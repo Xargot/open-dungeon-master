@@ -289,7 +289,7 @@ export function AdminImagesSection({
   const others = offered.filter((group) => group !== active);
 
   return (
-    <PageSection id="admin-images" heading="Image generation" glyph="sense-truesight">
+    <PageSection id="admin-images" heading="Image generation" glyph="ui-paint">
       <div className="mb-3">
         <SelectField<Images["defaultBackend"]>
           label="Default backend"

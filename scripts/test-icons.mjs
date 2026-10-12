@@ -76,6 +76,25 @@ if (existsSync(path.join(ICONS, "manifest.json"))) {
     assert.deepEqual(Object.keys(subjects).filter((id) => !ids.has(id)), []);
   });
 
+  test("every glyph a screen names by hand is painted", () => {
+    // GameIcon renders nothing for a missing file, so a typo or a glyph
+    // that was never rendered shows an empty plate and no error.
+    const named = new Set();
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(entry.name)) {
+          const source = readFileSync(full, "utf8");
+          for (const m of source.matchAll(/\bglyph[:=]\s*"([a-z0-9]+-[a-z0-9-]+)"|kind: "glyph", key: "([a-z0-9]+-[a-z0-9-]+)"/g)) named.add(m[1] ?? m[2]);
+        }
+      }
+    };
+    walk(path.join(ROOT, "src"));
+    const missing = [...named].filter((key) => !existsSync(path.join(ICONS, "glyph", `${key}.webp`)));
+    assert.deepEqual(missing, []);
+  });
+
   test("the icon set and the UI furniture fit the budgets the apps carry them under", () => {
     assert.ok(folderBytes(ICONS) <= 12 * 1024 * 1024, `icons are ${(folderBytes(ICONS) / 1048576).toFixed(1)} MB`);
     if (existsSync(UI)) assert.ok(folderBytes(UI) <= 3 * 1024 * 1024, `ui is ${(folderBytes(UI) / 1048576).toFixed(1)} MB`);

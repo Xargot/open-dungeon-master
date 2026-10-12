@@ -112,7 +112,7 @@ export function AdminSpeechSection({
   }
 
   return (
-    <PageSection id="admin-speech" heading="Speech" glyph="tab-ambience">
+    <PageSection id="admin-speech" heading="Speech" glyph="ui-speech">
       <h3 className="mb-1 text-sm font-medium text-stone-200">Narration (text to speech)</h3>
       <p className="mb-3 text-xs text-stone-500">
         Reads each of the storyteller&apos;s passages aloud in campaigns that switch Narration on.

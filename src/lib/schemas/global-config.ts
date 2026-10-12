@@ -81,6 +81,11 @@ export const globalConfigSchema = z.object({
       utilityModel: z.string().trim().max(200).default(""),
       utilityBaseUrl: z.string().trim().max(500).default(""),
       utilityApiKey: z.string().trim().max(400).default(""),
+      // Processing speed on the server's own backend (issue 255): "" is the
+      // provider's default, "fast" asks for its paid Fast tier where the
+      // connection and model have one (src/lib/speed-tier.ts).
+      speed: z.enum(["", "fast"]).default(""),
+      utilitySpeed: z.enum(["", "fast"]).default(""),
     })
     .prefault({}),
   images: z
@@ -176,6 +181,9 @@ export const globalConfigSchema = z.object({
       // the story model.
       utilityModel: z.string().trim().max(200).default(""),
       effort: z.enum(["", "low", "medium", "high", "xhigh", "max"]).default(""),
+      // Processing speed for the story and bookkeeping models (issue 255).
+      speed: z.enum(["", "fast"]).default(""),
+      utilitySpeed: z.enum(["", "fast"]).default(""),
       // "native" lets the program paint with its own image tool, and is only
       // honoured once a test picture has succeeded (imagesVerifiedAt).
       images: z.enum(["off", "native"]).default("off"),

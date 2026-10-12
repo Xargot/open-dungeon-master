@@ -1,6 +1,7 @@
 // What the legality check is told about the table and the catalog. The check
 // itself (src/lib/srd/sheet-legality.ts) reads no database: whoever calls it
 // looks the rows up (src/lib/characters/catalog.ts) and hands them in.
+import type { SubclassExtras } from "@/lib/srd/subclass-tables";
 import type { BackgroundOption, ClassOption, RaceOption } from "@/lib/characters/options";
 import type { CreateSheetInput } from "@/lib/schemas/sheet";
 import type { HpMethod } from "@/lib/srd/hit-points";
@@ -64,6 +65,9 @@ export type LegalityContext = {
   // Whether a subclass name is one the class offers: the bundled tables,
   // the content pack's archetypes, the player's homebrew.
   subclassOffered: (classId: string, name: string) => boolean;
+  // The subclasses the bundled tables do not carry (a pack archetype, a
+  // workshop subclass), for the training their features grant.
+  subclassExtras?: SubclassExtras;
   // A die for the rolled HP method: the server's own.
   rollDie: (sides: number) => number;
 };

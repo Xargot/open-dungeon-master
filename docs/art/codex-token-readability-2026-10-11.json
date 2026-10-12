@@ -1,0 +1,483 @@
+{
+  "date": "2026-10-11",
+  "generator": "Codex built-in image_gen",
+  "baseCommit": "f0925661560383bbee9b875f57a0657ca3d75ef0",
+  "instructions": "Original subjects; large central features and simple contrast for circular 96px and40px previews. Historical votes remain unchanged.",
+  "repaints": 16,
+  "newSubjects": 5,
+  "entries": [
+    {
+      "key": "monster/construct",
+      "path": "public/assets/placeholders/monster/construct.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Edit target: the supplied ODM stone golem tile. Preserve its original mossy block-stone construction, turquoise rune glow, and painterly fantasy style. Recompose as a powerful tightly framed head-and-upper-shoulders token portrait: broad angular stone face and turquoise eyes centered, head extremely large, face plus shoulders fills about 85% of square. Remove ruins, full body, fist in foreground, ground and scenery. Simple dark desaturated background contrasting with light stone. Large bold shapes, strong face silhouette and clear eyes readable at 40 pixels through a circular crop. Keep main face fully inside central circle. Square standalone illustration, no border, no text, no watermark. Original stone golem design, not a published character.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "1b1751d534825ed42098261df1c48a66250f041537c653c678f83424ea4ff958",
+        "bytes": 98378
+      },
+      "generatedPngSha256": "c9e9567e8d35fd8a3deaa8b4f525a2cb26990f827702a3a1a8288d6246474a8c",
+      "sha256": "7a86b4cad847e33f71bcbe1215c17f9d8c114f970b275573b4a90cd2447dc32e",
+      "bytes": 118222,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-58931297-5c57-4c17-874f-7dac18e5de57.png"
+    },
+    {
+      "key": "monster/cyberpunk-boss",
+      "path": "public/assets/placeholders/monster/cyberpunk-boss.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve black armored colossal mech with one intense red horizontal visor and orange wear. Very tight face and upper shoulder armor only; visor forms the focal line. No city, guns in foreground, legs or skyline. Distinguished heavy angular commander chassis.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "be1a48f4850edc2cf9f2238f98176f40e07cb5abcb4cedcd1b75a1446ebd5a8d",
+        "bytes": 99118
+      },
+      "generatedPngSha256": "468cfdf52279813a9236176b6c056287c5903d3b5090a17eee2fe8f66f1cc8c8",
+      "sha256": "93a7925716dda8db05b5793455de3c7dc8f6d4c26e964135cf710501a94d78b3",
+      "bytes": 103562,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-b5f761b2-123e-40b1-890a-afbfb88a72b5.png"
+    },
+    {
+      "key": "monster/cyberpunk-combat-mech",
+      "path": "public/assets/placeholders/monster/cyberpunk-combat-mech.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve purple and charcoal combat robot and orange reactor accents. Tight armored head and upper shoulders, one small gun mounting at edge only, two amber optics and clear broad faceplate. No full-body stance, ruined city, laser battle or foreground cannon.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "cbdccc4d8dccbf405e7f7fa7f679511774e2dc987be00292c92d02008634017e",
+        "bytes": 90312
+      },
+      "generatedPngSha256": "f53d979fb5e168f2a32ec3c5c3020bf56236e07668f3d15a370c347a37357279",
+      "sha256": "5ed99b9c24f0916d26ceeb2c0505762d80984d9647479bdcf79aa7a2b4801922",
+      "bytes": 102386,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-cbd6f160-a883-45d8-993b-b9864295d022.png"
+    },
+    {
+      "key": "monster/dark-fantasy-boss",
+      "path": "public/assets/placeholders/monster/dark-fantasy-boss.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve the original ancient crowned skeletal king with iron crown, weathered bone face, dark armor and deep burgundy cloak. Tight skull face and collar portrait. Pale skull contrasts with dark burgundy background. Crown remains identifiable within circle. No sword covering face, throne, cathedral or full body.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "30eb71599bf5bd8f69209cd79326ffa6a710adad136e1cfad280fbd09601e80e",
+        "bytes": 79040
+      },
+      "generatedPngSha256": "32833615c9aaa207e99bc9836f2fb7b0ddfed4015c8fd591aa7dbf5d6ed9e23e",
+      "sha256": "f037126c8502f42e0f9b5d00d8f26917d70a99602ae22bb64ecc72732488a687",
+      "bytes": 82896,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-085889df-00b4-4183-be09-5266d5d63763.png"
+    },
+    {
+      "key": "monster/horror-boss",
+      "path": "public/assets/placeholders/monster/horror-boss.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve original enormous eldritch many-tentacled nonhuman creature, dark indigo/purple palette. Tight central monstrous alien head with luminous pale violet eyes and several broad curved tentacles framing face. Clearly nonhuman massive sea-horror anatomy, no human torso, no mind flayer, no beholder or eye stalks. Face fills circle, strong silhouette against simple lighter desaturated violet fog, no tiny people, arches or scenery.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "1b2556b23c7a773fc8f60adab47125c098c582f96919f4bcb31cd9f913d97448",
+        "bytes": 67536
+      },
+      "generatedPngSha256": "48b73442633cf274ba045c720457433c647b0073a24d8e7d06310ed8a23be3bb",
+      "sha256": "51ccef74e5afd04eea1e96f238864eceb46a8c06310b0884d246c86987254322",
+      "bytes": 87442,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-3f0289f7-4952-40a2-90fe-aac0afd66ae4.png"
+    },
+    {
+      "key": "monster/post-apocalyptic-boss",
+      "path": "public/assets/placeholders/monster/post-apocalyptic-boss.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve rust-orange scrap-built rolling fortress vehicle, spikes, dark armored cabin and red pennant. Extreme close-up of its menacing armored FRONT cabin, large twin slit headlights, broad bulldozer grille and just two thick spikes at lower edges. Recognizable vehicle not humanoid robot. Vehicle front fills circle, simple desaturated dark smoky background. No landscape, distant whole fortress, crowds or tiny wheels.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "2f69304e6b744db762c93f9cb12b84b115e107d610cd847cf5ba5560604a9f77",
+        "bytes": 85878
+      },
+      "generatedPngSha256": "aef3e71bbabfb2527cd21385de140e829b6256a5695952043ed70096e82b5aaa",
+      "sha256": "626c82d5e5f8df48a3d21c90b29608a55c2a8099632e5d5030f48d7e255c4550",
+      "bytes": 111502,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-e09108aa-3a87-43fa-a271-9a1fb6cebaa0.png"
+    },
+    {
+      "key": "monster/post-apocalyptic-feral-mutant",
+      "path": "public/assets/placeholders/monster/post-apocalyptic-feral-mutant.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve hulking bald pale scarred feral humanoid mutant with brutish brow and ragged shoulder armor. Huge head and upper shoulders, snarling heavy jaw and two clear eyes. Pale skin against dark dusty olive backdrop. No crawling full body, ground, buildings or foreground fists.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "e4ca2c5fbb6992de0f98f280d692c0b209f2dc2c05a931324347bf6aa51b079c",
+        "bytes": 89550
+      },
+      "generatedPngSha256": "b24c4cf800496f29df1e462527f5d150afdc671ed444ea080e8ec98722095ca0",
+      "sha256": "e8809d380ca7b8e0e2032806918a22a6ea74b0634ae9ac34e3c70478d8984e0f",
+      "bytes": 99548,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-6546afa1-f1f4-4d62-881a-625279aa6639.png"
+    },
+    {
+      "key": "monster/post-apocalyptic-rad-swarm",
+      "path": "public/assets/placeholders/monster/post-apocalyptic-rad-swarm.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve mutated green radioactive insect identity. One very large green-black insect head with mandibles and bright compound eyes in foreground, two smaller overlapping insect heads behind to communicate swarm. Tight cluster fills circle. Bold distinct mandible shape against flat dark desaturated background. No insect-covered landscape or dozens of tiny insects.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "af89d14e87c52e8b5415e633d1bead94ab931a982fa952d10a994a388f2a3839",
+        "bytes": 105752
+      },
+      "generatedPngSha256": "80974abb6dba287b6f3a794a87d920d87c3e1b044850370a92db2fe028ab7b70",
+      "sha256": "bf00f1084999eb2ca38b125ddcd026cbb4f6feffc529ad8a642c45073bca3b8d",
+      "bytes": 104558,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-f3e776ce-faa9-4c0a-8585-285b165cd11b.png"
+    },
+    {
+      "key": "monster/post-apocalyptic-scrap-hound",
+      "path": "public/assets/placeholders/monster/post-apocalyptic-scrap-hound.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve rusty mechanical hound with teal-blue optical eyes, metal canine ears, segmented muzzle and steel fangs. Tight head and neck portrait, recognizably canine with long muzzle. No legs, ground, full body, ruined town or running scene. Simple desaturated ochre backdrop against dark metal.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "0fa456b901cc6ba17328c6a3d7231607806984c08f2d43014b36618d28590c32",
+        "bytes": 94858
+      },
+      "generatedPngSha256": "e4e5cb5ed81aa867f41f9e9ee93418304b0451dd9ec8e02f42671c4405caee5b",
+      "sha256": "ca65ec6d5926cfac657225dad7076646cd244d47c04cab19d8f8588c27269c71",
+      "bytes": 116826,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-1bf49510-7ec8-4e65-a747-b6e23c2d4b1f.png"
+    },
+    {
+      "key": "monster/steampunk-aether-wraith",
+      "path": "public/assets/placeholders/monster/steampunk-aether-wraith.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve luminous electric-blue ghost with wispy skeletal face and brass apparatus accents. Tight very large ghostly face, shoulders dissolving to broad blue wisps, pale cyan eyes and cheekbones clearly readable. Dark navy backdrop, just a small brass collar. No sprawling machine, city, room or chaotic crisscrossing electrical arcs.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "26b3e0b763ed151115bef633dd89a0f508da0e362958b167b826944eadbac268",
+        "bytes": 84676
+      },
+      "generatedPngSha256": "599344c88c4f09770ad7ddff19fab626329b1365e73844183ec87d923a4338d5",
+      "sha256": "0e6c2f695a66f58e37b44fc982bdfabe1c7c2026eb8d63888f080ac53134cbfe",
+      "bytes": 90296,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-b1c8a7bc-98dc-430b-928d-3ea1dc75be21.png"
+    },
+    {
+      "key": "monster/steampunk-boss",
+      "path": "public/assets/placeholders/monster/steampunk-boss.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve imposing black-and-brass furnace automaton with orange furnace glow and tall cylindrical boiler. Tight head/front boiler upper-chest portrait. Massive central orange furnace grille as the face-like focal feature, thick black brow plate, large curved brass pipes at sides. Simpler bold silhouette distinguishable from smaller boiler-golem. No legs, city, people or smoke covering face.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "466c866efa7592964178b19fdf1b8d43607bda91c34f6d0e556f0ffb39cc2629",
+        "bytes": 87446
+      },
+      "generatedPngSha256": "525ae4470136e66c6162a7945d2a904011701ca5ccc9858c9d0a2c8b78934623",
+      "sha256": "81b54158d48adfdc1d109ac44d0e15e84efe1aee5903b7f76a324c307ff4a15a",
+      "bytes": 114962,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-591bda21-8f39-41e5-8864-a5dbdbec5d73.png"
+    },
+    {
+      "key": "monster/horror-wraith",
+      "path": "public/assets/placeholders/monster/horror-wraith.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve original dark hooded spectral skeletal wraith and purple-grey ragged shroud. Extreme close-up with face now much larger, clear pale skull and two cool glowing eyes, cowl rim framing the face. Soft desaturated lilac background contrasts dark hood, no graveyard, hands or full torso.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "19489ae9512e0cb7ddf9582d82c03048805d58a18ad73e21a6f8ba998179e3ba",
+        "bytes": 63958
+      },
+      "generatedPngSha256": "e76cbf9d7ef29fffc84c12666ace41c8922edcbe9d8fe9c383d3374dfad7dd78",
+      "sha256": "c268a8aa1bbb565f963cc85740244203b0cc50fe61dfa3a80a1266c4d0d5f401",
+      "bytes": 75006,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-f9dca37f-0af2-4e61-8cbe-ba3c744290a7.png"
+    },
+    {
+      "key": "monster/steampunk-boiler-golem",
+      "path": "public/assets/placeholders/monster/steampunk-boiler-golem.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve brass round-bodied boiler golem with prominent round glowing orange slatted furnace. Tight upper machinery portrait: one huge circular grille centered like a face, riveted round brass rim and two short thick side pipes. No full body, factory, legs or extended fists. Dark teal background, bright amber/brass focal disc. Distinct from the tall black furnace boss.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "a3ad66c8bbbbc21bd6b2d82f1506bbe57719990a746119a601b61dbd9d53f147",
+        "bytes": 89222
+      },
+      "generatedPngSha256": "2cc0f2a6308257bc358546d02a9648b68be886ae1ca493d7ee06432657650e65",
+      "sha256": "f2e2b44e7115f015f059fb072976204e330386920bc10c781bfd213a7cd53f61",
+      "bytes": 109450,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-e847f279-8120-4d83-99c2-6926b97ce1c5.png"
+    },
+    {
+      "key": "monster/high-fantasy-boss",
+      "path": "public/assets/placeholders/monster/high-fantasy-boss.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve red ancient dragon with black-red horns, ember orange eyes and fierce toothy muzzle. Tight three-quarter head and short neck portrait with dragon face dominating center. No castle, fire breath plume, wings, army or environment; simple cool dark charcoal background. Horn bases and snout stay in central circle, vivid red scales distinguish green dragon.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "4efff12c30a1007bbbd89b54669bce34fddeaeac9c8f25d2ff08196b48a30b3f",
+        "bytes": 83054
+      },
+      "generatedPngSha256": "e74512a658ff940662f003be36513fdf5974dfc5d6b7d91fcec2d03ed389efcd",
+      "sha256": "5794ed6202338cc8ca542c1e535c7ea737e74c8a419a4dfe3ca6733b9373eeb4",
+      "bytes": 95788,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-6dc78cbb-161c-4d05-acc5-eb1269cca0bf.png"
+    },
+    {
+      "key": "npc/scholar",
+      "path": "public/assets/placeholders/npc/scholar.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve the same adult young East Asian-appearing woman scholar with straight dark hair, thoughtful expression, olive-green robe and gold collar details. Tight face and shoulders portrait. Face is primary focus and at least 60% frame height, hair silhouette and shoulders fill about 85%. Only a narrow book edge below the collar if useful. No large book, scroll, hands, desk or library. Muted warm parchment background.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "efeb7287f0465a2a02671afb8404580cb30e60f3e77a120393bbadea1c547115",
+        "bytes": 66422
+      },
+      "generatedPngSha256": "ba0ba656249b6bcdf25566260b926ab9d60760ba9715dc76e592fd20013284e5",
+      "sha256": "c1f16e90d737aec37faa2ebab5bd751d67e5f1049ed0545127d7079d93c3391c",
+      "bytes": 78710,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-776bba43-aeb8-43f3-9270-db7e2bb99dd8.png"
+    },
+    {
+      "key": "npc/steampunk-inventor",
+      "path": "public/assets/placeholders/npc/steampunk-inventor.webp",
+      "action": "token readability repaint",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: identity-preserve. Edit target: supplied original ODM tile, preserve subject identity, palette, painterly fantasy concept-art style. Repaint the COMPOSITION for a small ROUND board token readable at 96px and 40px. Square illustration. Main head/recognizable feature and upper shoulders fill 80–90% of canvas; broad bold shapes, simple contrasting background. Face/primary feature fully inside central inscribed circle. Remove distracting scenery and small detail. No text, watermark, border, circular frame, logos or franchise character design. Preserve same adult young man inventor, tousled brown hair, brown eyes, copper goggles resting above forehead, light stubble, warm smile, brass/olive work clothing. Tight face and shoulders portrait; face at least60% frame height, goggles remain inside circle. No hand-held gadget, hands, workbench or machinery background. Muted dark teal background, warm face lighting.",
+      "reference": "Previous shipped tile at the same path, recorded by before.sha256",
+      "before": {
+        "sha256": "770fdad281d22af899276c60b903a9a0beca8c18768d5941186acfc6c689821d",
+        "bytes": 71890
+      },
+      "generatedPngSha256": "30392f1d7db3221fce2a8a615d3ac77609b933e86d117ecae072651f8c6dec9f",
+      "sha256": "a3baf677e15506c1bfb50981537d0c33c4870c7e2994e1fd5e87813263f99f83",
+      "bytes": 73190,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-f97e907a-4c93-4e4f-b507-1e52e1f61564.png"
+    },
+    {
+      "key": "monster/cyberpunk-microdrone",
+      "path": "public/assets/placeholders/monster/cyberpunk-microdrone.webp",
+      "action": "new backlog subject",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: stylized-concept. New original ODM board-token artwork. Painterly detailed fantasy concept art with crisp readable large shapes. Square illustration for a 96px and40px circular crop. Subject recognizable primary feature fills80–90% of square and stays inside central circle; tight portrait/macro composition, simple contrasting background, no full-body distant scenes, no text, no border, no watermark, no logos or known franchise designs. Tiny compact surveillance microdrone shown in extreme macro close-up: a single large cyan camera lens centered in pale ceramic body, two short compact rotor pods visible at sides. Elegant compact scout, not armed security drone. Dark violet backdrop. Lens and housing occupy most of image.",
+      "reference": null,
+      "before": null,
+      "generatedPngSha256": "e53bad6e4d01b607441ff4f0b5c82ccc21d619181bd59e3d9c98ae7cb5318b97",
+      "sha256": "307c2bc70632bb8f40239720813c336f39c294d1ff17d754c713bee324d4a0c9",
+      "bytes": 42748,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-6d50741c-702b-43fb-808d-7b094f4242ab.png"
+    },
+    {
+      "key": "monster/cyberpunk-walking-turret",
+      "path": "public/assets/placeholders/monster/cyberpunk-walking-turret.webp",
+      "action": "new backlog subject",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: stylized-concept. New original ODM board-token artwork. Painterly detailed fantasy concept art with crisp readable large shapes. Square illustration for a 96px and40px circular crop. Subject recognizable primary feature fills80–90% of square and stays inside central circle; tight portrait/macro composition, simple contrasting background, no full-body distant scenes, no text, no border, no watermark, no logos or known franchise designs. Compact autonomous walking gun turret, close-up of angular olive-grey turret head with red optical sensor and one short barrel just below it; two thick articulated support-leg joints frame bottom edges to communicate walking robot. Equipment not humanoid. Strong silhouette against muted pale blue-grey, no battlefield, no person, no sprawling legs.",
+      "reference": null,
+      "before": null,
+      "generatedPngSha256": "0bbd6a10bd135621feff4b6fa42721f853c1badd15293e70fd4ef6e7fb4116ef",
+      "sha256": "160f63e3aea11690edcbbacf6fe32e8477e590838828e514293b449c183932e0",
+      "bytes": 60708,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-5ed883f1-c3e8-4eb9-8eb3-9e8508017368.png"
+    },
+    {
+      "key": "monster/steampunk-clockwork-spider",
+      "path": "public/assets/placeholders/monster/steampunk-clockwork-spider.webp",
+      "action": "new backlog subject",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: stylized-concept. New original ODM board-token artwork. Painterly detailed fantasy concept art with crisp readable large shapes. Square illustration for a 96px and40px circular crop. Subject recognizable primary feature fills80–90% of square and stays inside central circle; tight portrait/macro composition, simple contrasting background, no full-body distant scenes, no text, no border, no watermark, no logos or known franchise designs. One original brass clockwork spider in extreme close-up, central broad brass body with two big green glass optical lenses and curved copper front legs framing body. Eight-legged spider anatomy implied, tips can extend out of frame, central machinery remains within circle. Dark aubergine background. Distinct from humanoid automaton.",
+      "reference": null,
+      "before": null,
+      "generatedPngSha256": "00e52c2ac429cb7838be4d83c371e40db646a687a9c8e24b9ce54831827ee66a",
+      "sha256": "cdb330383e5969843e428988a7798c4ad8acaa18f7579cc1473f2d53842c20b1",
+      "bytes": 76110,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-9b147da5-aee0-45c4-bb19-b4a764d62d86.png"
+    },
+    {
+      "key": "monster/steampunk-repair-swarm",
+      "path": "public/assets/placeholders/monster/steampunk-repair-swarm.webp",
+      "action": "new backlog subject",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: stylized-concept. New original ODM board-token artwork. Painterly detailed fantasy concept art with crisp readable large shapes. Square illustration for a 96px and40px circular crop. Subject recognizable primary feature fills80–90% of square and stays inside central circle; tight portrait/macro composition, simple contrasting background, no full-body distant scenes, no text, no border, no watermark, no logos or known franchise designs. Cluster of three original small brass repair beetle robots in macro close-up, one large beetle front center and two smaller beside/behind. Each has blue lens eyes and short tool-like forelimbs; one broad tiny wrench claw clearly readable. Overlapping bodies fill frame. Warm brass against simple dark teal, no room or factory. Readable cluster rather than a single robot or dozens of specks.",
+      "reference": null,
+      "before": null,
+      "generatedPngSha256": "be3a0ec0d95b90d67bed2ded24df86a4b69e74a00995b9586dd52dbcddca38fc",
+      "sha256": "20d4d26711af20a345da2a47fc5b33f62c835f7a8f75fbc60ec27be857ea1643",
+      "bytes": 79200,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-00a46d72-ff1d-4e1b-9870-97017bca44d2.png"
+    },
+    {
+      "key": "monster/steampunk-galvanic-corpse",
+      "path": "public/assets/placeholders/monster/steampunk-galvanic-corpse.webp",
+      "action": "new backlog subject",
+      "subjectBasis": "Original illustration; existing design reworked where applicable",
+      "prompt": "Use case: stylized-concept. New original ODM board-token artwork. Painterly detailed fantasy concept art with crisp readable large shapes. Square illustration for a 96px and40px circular crop. Subject recognizable primary feature fills80–90% of square and stays inside central circle; tight portrait/macro composition, simple contrasting background, no full-body distant scenes, no text, no border, no watermark, no logos or known franchise designs. Original reanimated adult factory laborer, very tight face-and-shoulders portrait: pallid grey face with sunken cheeks, short dark disheveled hair, brass electrode clips at temples, a few faint cyan electric sparks, worn workshirt collar. Corporeal undead, not ghost or machine; no gore. Large weary grim face, subtle asymmetry, no tall flat head or iconic film-monster neck bolts. Simple warm dark brown backdrop.",
+      "reference": null,
+      "before": null,
+      "generatedPngSha256": "158ba36bf1b2d5356ee4f32292976253b951e24576dafb6d56ff2164d40b0bc5",
+      "sha256": "970fc16987a97f922a4ede811d9225627916c9569a45668492be08be50d36029",
+      "bytes": 49126,
+      "width": 512,
+      "height": 512,
+      "encoding": {
+        "format": "webp",
+        "quality": 90,
+        "effort": 6
+      },
+      "sourceImageFile": "exec-31994bcf-0c6a-4cd9-9d95-dc272c9e0386.png",
+      "revision": {
+        "prompt": "Edit only the background of this image. Keep the exact same original reanimated factory worker face, head size, expression, electrodes, clothing and painterly texture. Remove the artificial circular vignette boundary and dark corner mask. Extend the same smooth dark warm-brown painted backdrop naturally to all four edges of the square canvas, with no visible circle, frame, oval or border. This must be an ordinary full-bleed SQUARE portrait; the application itself later applies its circular crop. Do not reduce the face size or zoom out. No text.",
+        "inputPngSha256": "0a0fb8eac971e9c0e1017ef8d3c624a26c2bb00dfac6e2732f8bee6aab49e3d5",
+        "reason": "Remove generated circular vignette; the app applies its own circular crop."
+      }
+    }
+  ]
+}

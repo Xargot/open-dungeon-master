@@ -138,7 +138,18 @@ export function ConnectedAgentsSection() {
       {grants === null ? (
         <div className="skeleton-block h-12 rounded-xl" aria-label="Loading connected agents" />
       ) : grants.length === 0 && !creating ? (
-        (loadError ? <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} /> : loaded ? <EmptyState art="board" size="sm" title="No agents connected." /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={() => setReloads((current) => current + 1)}
+          />
+        ) : loaded ? (
+          <EmptyState
+            size="sm"
+            art="board"
+            title="No agents connected."
+          />
+        ) : null)
       ) : (
         <ul className="stagger space-y-2">
           {grants.map((grant) => (

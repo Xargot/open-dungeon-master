@@ -6,6 +6,7 @@
 // src/lib/dm/pc-attack-options.ts, spendAttack and spendAction in
 // src/lib/dm/action-budget.ts), so a refusal on a card is the sentence
 // pc_attack would give. Pure; scripts/test-hand-engine.mjs drives it.
+import { racialNaturalWeapon } from "@/lib/srd/racial-weapons";
 import { spendAttack } from "@/lib/dm/action-budget";
 import { hasOpenHandTechnique, hurlProblem, OPEN_HAND_NOT_FLURRY } from "@/lib/dm/attack-choice-rules";
 import { inspirationProblem, strokeOfLuckProblem } from "@/lib/dm/attack-features";
@@ -188,6 +189,7 @@ export function bonusStrikeCards(
     srd: SrdWeapon | null,
     name: string,
     rules: string,
+    key = "",
   ): HandCard => {
     const profile = weaponAttackProfile(
       derived,
@@ -197,7 +199,7 @@ export function bonusStrikeCards(
     );
     const refused = optionRefusal(sheet, turn, profile, derived, { bonusAttack });
     const card: HandCard = {
-      id: `attack:${spellKey(weapon)}:${bonusAttack.replace(/\s+/g, "-")}`,
+      id: `attack:${spellKey(weapon)}:${bonusAttack.replace(/\s+/g, "-")}${key ? `:${key}` : ""}`,
       type: "attack",
       name,
       cost: "bonus",
@@ -265,6 +267,30 @@ export function bonusStrikeCards(
         `${feature} attack`,
         `${feature}: one weapon attack as a bonus action.`,
       ),
+    );
+  }
+  // The bonus attacks with a use, a trigger or a weapon of their own (War
+  // Priest, Unwavering Mark, Hungry Jaws, Pistol and Blade), judged by the
+  // engine's own check (src/lib/dm/feature-bonus-attacks.ts).
+  const melee = carried.find((entry) => entry.srd.kind === "melee");
+  const own: Array<{ feature: string; weapon: Carried | null; rules: string }> = [];
+  if (holds(sheet, "war priest")) {
+    own.push({ feature: "War Priest", weapon: carried[0] ?? null, rules: "After the Attack action: one weapon attack as a bonus action, a use of War Priest." });
+  }
+  if (holds(sheet, "unwavering mark")) {
+    own.push({ feature: "Unwavering Mark", weapon: melee ?? null, rules: "Against your marked creature that struck someone else: a melee attack with advantage and +half your fighter level damage." });
+  }
+  if (holds(sheet, "hungry jaws")) {
+    const bite = racialNaturalWeapon(sheet.features, "bite");
+    if (bite) own.push({ feature: "Hungry Jaws", weapon: { name: bite.srd.name, srd: bite.srd } as Carried, rules: "A bite as a bonus action; on a hit you gain your Constitution modifier in temporary hit points." });
+  }
+  if (holds(sheet, "pistol and blade")) {
+    const firearm = carried.find((entry) => entry.srd.category === "firearm");
+    if (firearm) own.push({ feature: "Pistol and Blade", weapon: firearm, rules: "After a melee weapon attack: one firearm attack as a bonus action." });
+  }
+  for (const entry of own) {
+    cards.push(
+      strike("feature", entry.weapon?.name ?? "Unarmed strike", entry.weapon?.srd ?? null, `${entry.feature} attack`, entry.rules, spellKey(entry.feature).replace(/\s+/g, "-")),
     );
   }
   return cards;

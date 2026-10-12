@@ -126,7 +126,18 @@ export function AdminInvitesSection() {
       </div>
       {error ? <p role="alert" className="motion-shake text-sm text-red-400">{error}</p> : null}
       {invites.length === 0 ? (
-        (loadError ? <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} /> : loaded ? <EmptyState art="scrolls" size="sm" title="No invite codes yet. Nobody can register until you create one." /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={() => setReloads((current) => current + 1)}
+          />
+        ) : loaded ? (
+          <EmptyState
+            size="sm"
+            art="scrolls"
+            title="No invite codes yet. Nobody can register until you create one."
+          />
+        ) : null)
       ) : (
         <ul className="stagger space-y-2">
           {invites.map((invite) => {

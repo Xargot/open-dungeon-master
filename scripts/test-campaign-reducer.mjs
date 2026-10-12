@@ -3,13 +3,15 @@
 // A narration flush must not produce a new state, an unknown ephemeral
 // event must not either, and hidden-roll refetches must land.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { register } from "node:module";
 
 register("./lib/register-alias.mjs", import.meta.url);
 
-const { campaignReducer, INITIAL_CAMPAIGN_STATE, refreshesBattleMap } = await import(
+const { campaignReducer, INITIAL_CAMPAIGN_STATE, refreshesBattleMap, STREAMED_EVENTS } = await import(
   "../src/app/campaigns/[campaignId]/useCampaignStream.ts"
 );
+const { EVENT_AUDIENCE } = await import("../src/lib/event-audience.ts");
 
 let passed = 0;
 function test(name, fn) {
@@ -206,6 +208,22 @@ test("issue 214: a sheet change redraws a board that is up, and only then", () =
   const sheet = { id: "s1", name: "Hero", level: 1, equipment: [] };
   const next = campaignReducer(loaded, event("sheet_updated", { sheet }));
   assert.equal(next.sheets.find((entry) => entry.id === "s1"), sheet);
+});
+
+test("every table event the reducer handles is one the stream listens for", () => {
+  // A case for a type the EventSource never subscribes to is dead: the
+  // travel formation (issue 230) saved but showed nothing until a reload.
+  const source = readFileSync(new URL("../src/app/campaigns/[campaignId]/useCampaignStream.ts", import.meta.url), "utf8");
+  const cases = new Set([...source.matchAll(/case "([a-z_]+)"/g)].map((match) => match[1]));
+  const streamed = new Set(STREAMED_EVENTS);
+  const unheard = Object.keys(EVENT_AUDIENCE).filter((type) => cases.has(type) && !streamed.has(type));
+  assert.deepEqual(unheard, []);
+  for (const type of ["party_updated", "npc_updated", "director_armed", "beat_recorded"]) {
+    assert.ok(streamed.has(type), type);
+  }
+  const party = { marchingOrder: ["a", "b"], formationChange: null };
+  const withCampaign = { ...loaded, campaign: { id: "c1", party: { marchingOrder: [] } } };
+  assert.deepEqual(campaignReducer(withCampaign, event("party_updated", { party }, 11)).campaign.party, party);
 });
 
 console.log(`\n${passed} campaign reducer tests passed.`);

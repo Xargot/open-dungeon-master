@@ -65,6 +65,8 @@ const CLASSES = {
     die: 8, saves: ["wis", "cha"], count: 2, armor: ["light", "medium", "shields"], weapons: ["simple"], tools: [],
     skills: ["history", "insight", "medicine", "persuasion", "religion"],
     subclassAt: 1, features: ["Spellcasting", "Divine Domain"], cantrips: 3, spells: "wis", pick: { subclass: "Life Domain" },
+    // Life Domain's Bonus Proficiency (issue 251): the domain the rig picks.
+    subclassArmor: ["heavy"],
   },
   druid: {
     die: 8, saves: ["int", "wis"], count: 2, armor: ["light", "medium", "shields (nonmetal)"], tools: ["herbalism kit"],
@@ -232,7 +234,7 @@ await test("the builder makes each class proficient in what the class grants, an
     const profs = sheet.proficiencies;
     assert.equal(sheet.level, 1);
     assert.deepEqual(profs.saves, row.saves, `${classId} saves`);
-    assert.deepEqual(profs.armor, row.armor, `${classId} armor`);
+    assert.deepEqual(sorted(profs.armor), sorted([...row.armor, ...(row.subclassArmor ?? [])]), `${classId} armor`);
     assert.deepEqual(sorted(profs.weapons), sorted(row.weapons), `${classId} weapons`);
     // The acolyte adds no tools; a human no training. A grant that leaves
     // the tool open is named on the sheet by the player's picks (the rig

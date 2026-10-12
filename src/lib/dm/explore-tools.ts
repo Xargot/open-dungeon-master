@@ -55,14 +55,14 @@ export const exploreTools: ToolDef[] = [
     function: {
       name: "lift",
       description:
-        "A character pushes, drags or lifts something heavy. The server checks it against their Strength: up to 30 x Strength pounds (doubled per size above Medium) can be moved at all, and past their carrying capacity (15 x Strength) they move at 5 feet while pushing or dragging it. Refused above the limit: narrate the strain and the failure. For carrying something, use grant_item, which refuses a pack past capacity.",
+        "Resolve a character pushing, dragging or lifting something heavy. The server checks it against their Strength: up to 30 x Strength pounds (doubled per size above Medium) can be moved at all, and past their carrying capacity (15 x Strength) they move at 5 feet while pushing or dragging it. Refused above the limit: narrate the strain and the failure. For carrying something, use grant_item, which refuses a pack past capacity.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           characterId: { type: "string", description: "Exact characterId from GAME STATE." },
           weightLb: { type: "number", minimum: 1, description: "The weight in pounds (a boulder, a fallen beam, a portcullis)." },
-          how: { type: "string", enum: ["lift", "push", "drag"], description: "Lift, push or drag. Defaults to lift." },
+          how: { type: "string", enum: ["lift", "push", "drag"], description: "Default 'lift'." },
           reason: { type: "string", description: "Short note on what is being moved." },
         },
         required: ["characterId", "weightLb"],
@@ -74,14 +74,14 @@ export const exploreTools: ToolDef[] = [
     function: {
       name: "set_lifestyle",
       description:
-        "Set the lifestyle characters live between adventures (SRD 5.1 Lifestyle Expenses): wretched (free), squalid (1 sp a day), poor (2 sp), modest (1 gp), comfortable (2 gp), wealthy (4 gp), aristocratic (10 gp). From then on each dawn that pass_time or a long rest crosses charges a day of it from their purse, and downtime charges its days; a purse that cannot keep it up lives the best it can pay for. Set it when the party settles into town; set none when they leave for the road (they live off their supplies there).",
+        "Set the lifestyle characters live between adventures (SRD 5.1 Lifestyle Expenses): wretched (free), squalid (1 sp a day), poor (2 sp), modest (1 gp), comfortable (2 gp), wealthy (4 gp), aristocratic (10 gp). From then on each dawn that pass_time or a long rest crosses charges a day of it from their purse, and downtime charges its days; a purse that cannot keep it up lives the best it can pay for. On the road they live off their supplies.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           characterIds: { type: "array", items: { type: "string" }, description: "Exact characterIds. Omit for the whole party." },
           lifestyle: { type: "string", enum: [...LIFESTYLES, "none"], description: "The lifestyle, or none to stop charging." },
-          reason: { type: "string", description: "Short note." },
+          reason: { type: "string", description: "Short in-fiction cause." },
         },
         required: ["lifestyle"],
       },
@@ -92,7 +92,7 @@ export const exploreTools: ToolDef[] = [
     function: {
       name: "downtime",
       description:
-        "Days of downtime between adventures (SRD 5.1 Downtime Activities), each character on one activity: crafting (5 gp of an item's value a day per crafter, materials half the value, the finished item lands in the pack), profession (work that pays their lifestyle), recuperating (a DC 15 CON save every three days against a disease or poison), research (1 gp a day; what is found is yours to say) or training (a language or tool in 250 days at 1 gp a day). The server moves the clock by the days once, charges lifestyles and costs, keeps the progress and applies the results. Give one character's activity at the top level, or several in activities.",
+        "Resolve days of downtime between adventures (SRD 5.1 Downtime Activities), each character on one activity: crafting (5 gp of an item's value a day per crafter, materials half the value, the finished item lands in the pack), profession (work that pays their lifestyle), recuperating (a DC 15 CON save every three days against a disease or poison), research (1 gp a day; what is found is yours to say) or training (a language or tool in 250 days at 1 gp a day). Give one character's activity at the top level.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -123,10 +123,10 @@ export const exploreTools: ToolDef[] = [
           characterId: { type: "string", description: "Exact characterId from GAME STATE." },
           kind: { type: "string", enum: ["disease", "madness", "poison"], description: "What it is." },
           name: { type: "string", description: "The disease or poison by name, or for madness: short, long or indefinite." },
-          save: { type: "boolean", description: "Default true: the server rolls the save against it. False when the character is already infected or has no save (a madness from a failed save you already rolled)." },
+          save: { type: "boolean", description: "The server rolls the save against it; false when the character is already infected or has no save (a madness from a failed save you already rolled). Default true." },
           dc: { type: "integer", minimum: 1, maximum: 30, description: "A disease's infection DC when the source sets its own; the SRD's otherwise." },
           saveDc: { type: "integer", minimum: 1, maximum: 30, description: "Madness only: the DC of the save that resists it." },
-          saveAbility: { type: "string", enum: ["wis", "cha"], description: "Madness only: the save's ability. Default wis." },
+          saveAbility: { type: "string", enum: ["wis", "cha"], description: "Madness only: the save's ability. Default 'wis'." },
           symptomsNow: { type: "boolean", description: "Disease only: the symptoms show now rather than after the incubation." },
           reason: { type: "string", description: "Short note on the source." },
         },

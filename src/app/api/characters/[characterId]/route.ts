@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { currentUser, unauthorized } from "@/lib/auth";
 import {
+  CHARACTER_ROLES,
   deleteCharacter,
   getCharacterForUser,
   listAssignmentsForCharacter,
@@ -8,7 +9,7 @@ import {
   updateCharacterPortrait,
 } from "@/lib/db/characters";
 import { listEventsForLibraryCharacter } from "@/lib/db/character-events";
-import { mirrorToCampaignSheets, portraitStatus } from "@/lib/portrait";
+import { mirrorToCampaignSheets, portraitStatus, queueLibraryPortrait } from "@/lib/portrait";
 import { admitSheet, refusal } from "@/lib/characters/admit";
 import { attachmentSchema, createSheetSchema } from "@/lib/schemas/sheet";
 
@@ -18,6 +19,9 @@ export const dynamic = "force-dynamic";
 const updateLibrarySchema = z.object({
   level: z.number().int().min(1).max(20),
   sheet: createSheetSchema,
+  // Who plays them. Changed only while no campaign holds a copy (issue
+  // 229): a seated copy came in through the door its role opened.
+  role: z.enum(CHARACTER_ROLES).optional(),
 });
 
 // Portrait-only PATCH from the library list page; attachmentSchema keeps
@@ -85,6 +89,18 @@ export async function PATCH(
   if (!stored) {
     return Response.json({ error: "Character not found." }, { status: 404 });
   }
+  const role = parsed.data.role;
+  if (role && role !== stored.role) {
+    const tables = listAssignmentsForCharacter(user.id, characterId);
+    if (tables.length) {
+      return Response.json(
+        {
+          error: `${stored.name} already has a copy at ${tables.map((table) => table.title).join(", ")}, so who plays them stays as it is. Duplicate them to file a copy the other way.`,
+        },
+        { status: 409 },
+      );
+    }
+  }
   // An edit keeps what the stored character holds and adds only what the
   // rules give: the stored sheet is the baseline the request is read against.
   const admitted = admitSheet({
@@ -97,12 +113,23 @@ export async function PATCH(
   if (!admitted.ok) {
     return refusal(admitted.problems);
   }
-  const character = updateCharacter(user.id, characterId, parsed.data.level, admitted.sheet);
+  const character = updateCharacter(user.id, characterId, parsed.data.level, admitted.sheet, role);
   if (!character) {
     return Response.json({ error: "Character not found." }, { status: 404 });
   }
   admitted.settle();
-  return Response.json({ character });
+  // The builder's "Regenerate portrait" clears the saved one to have a new
+  // one painted; a character with none (the placeholder chosen) stays so.
+  if (stored.sheet.portrait && !character.sheet.portrait) {
+    queueLibraryPortrait(character);
+  }
+  return Response.json({
+    character: {
+      ...character,
+      portraitStatus: portraitStatus(character.id),
+      campaigns: listAssignmentsForCharacter(user.id, characterId),
+    },
+  });
 }
 
 export async function DELETE(

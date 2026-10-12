@@ -5,7 +5,8 @@ import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { GameIcon } from "@/components/ui/GameIcon";
 import { InfoButton } from "@/components/ui/InfoDialog";
 import { cn } from "@/lib/cn";
-import { contentSlug, describeContentEntry, spellSummary } from "@/lib/help";
+import { contentSlug, describeContentEntry, spellRowConcentrates, spellSummary } from "@/lib/help";
+import { bundledSpellFacts } from "@/lib/srd/spell-facts";
 import { replayAnimation } from "@/lib/motion/replay";
 import { spellSupportFor, spellSupportWord } from "@/lib/srd/spell-support";
 import { compareNames } from "@/lib/language/text-logic";
@@ -50,7 +51,23 @@ export type SpellTile = {
   // reaches onTile, so the picker can explain at length, and the tile
   // shakes no.
   blocked?: string;
+  // Takes concentration: marked on the tile, so the choice is seen while
+  // picking rather than found in the info panel (issue 252). Read from the
+  // spell's row when the tile has none.
+  concentration?: boolean;
 };
+
+// Whether a tile's spell takes concentration: what the tile says, else its
+// row (a pack's or a homebrew spell's), else the bundled facts.
+export function tileConcentrates(tile: Pick<SpellTile, "name" | "data" | "concentration">): boolean {
+  if (typeof tile.concentration === "boolean") {
+    return tile.concentration;
+  }
+  if (tile.data && "concentration" in tile.data) {
+    return spellRowConcentrates(tile.data);
+  }
+  return bundledSpellFacts(tile.name)?.concentration === true;
+}
 
 export type SpellCounter = { label: string; value: number; max?: number | null; extra?: string };
 
@@ -168,6 +185,7 @@ export function SpellBook({
       ? [...shown].sort((a, b) => (position.get(a.name) ?? 0) - (position.get(b.name) ?? 0))
       : [...shown].sort(byRank);
   const presentStates = new Set(tiles.map((tile) => tile.state));
+  const anyConcentration = tiles.some(tileConcentrates);
   const toggles = (tile: SpellTile) =>
     Boolean(onTile) && (canToggle ? canToggle(tile) : tile.state !== "granted");
 
@@ -305,6 +323,7 @@ export function SpellBook({
                   <span className="min-w-0">
                     <span className="line-clamp-2 text-xs leading-tight [overflow-wrap:anywhere]" title={tile.label ?? tile.name}>
                       {tile.label ?? tile.name}
+                      {tileConcentrates(tile) ? <ConcentrationMark /> : null}
                       {tile.suggested ? (
                         <Star className="ml-1 inline size-3 fill-amber-300 text-amber-300" aria-label="suggested" />
                       ) : null}
@@ -346,6 +365,11 @@ export function SpellBook({
               {STATE_TEXT[state]}
             </span>
           ))}
+        {anyConcentration ? (
+          <span className="flex items-center gap-1">
+            <ConcentrationMark /> Concentration
+          </span>
+        ) : null}
         {tiles.some((tile) => tile.suggested) ? (
           <span className="flex items-center gap-1">
             <Star className="size-3 fill-amber-300 text-amber-300" aria-hidden="true" /> Suggested
@@ -354,6 +378,21 @@ export function SpellBook({
       </div>
       {footer}
     </div>
+  );
+}
+
+// The concentration mark: a ringed C, named for a screen reader.
+function ConcentrationMark() {
+  return (
+    <span
+      role="img"
+      aria-label="Concentration"
+      title="Concentration: casting another concentration spell ends this one"
+      data-concentration
+      className="ml-1 inline-flex size-3.5 translate-y-[-1px] items-center justify-center rounded-full border border-sky-300/70 align-middle text-[8px] font-bold leading-none text-sky-200"
+    >
+      C
+    </span>
   );
 }
 

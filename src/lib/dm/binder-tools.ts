@@ -25,14 +25,14 @@ export const binderTools: ToolDef[] = [
     function: {
       name: "show_handout",
       description:
-        "Put a handout on every player's screen: a lore entry by id (only one the party may read), or an uploaded picture. Use when the party finds a letter, a notice, a map, a page. It stays up until dismissed.",
+        "Put a handout on every player's screen: a lore entry by id (only one the party may read), or an uploaded picture. Call it when the party finds a letter, a notice, a map, a page. It stays up until dismissed.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           loreId: { type: "string", description: "The lore entry to show." },
           imagePath: { type: "string", description: "An uploaded picture (/uploads/...) instead of an entry." },
-          caption: { type: "string", description: "A line under it, optional." },
+          caption: { type: "string", description: "A line under it." },
         },
         required: [],
       },
@@ -51,7 +51,7 @@ export const binderTools: ToolDef[] = [
     function: {
       name: "set_quest",
       description:
-        "Write or update a quest in the party's log: a title, its objectives as short lines, and a status. Pass questId to change one that exists; leave it out to add one. Use when the party takes on a task the arc did not already list.",
+        "Write or update a quest in the party's log: a title, its objectives as short lines, and a status. Call it when the party takes on a task the arc did not already list.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -59,7 +59,7 @@ export const binderTools: ToolDef[] = [
           questId: { type: "string", description: "The quest to change; omit to add one." },
           title: { type: "string", description: "What the quest is called." },
           objectives: { type: "array", items: { type: "string" }, description: "The steps, one line each. Replaces the list." },
-          status: { type: "string", enum: ["active", "done", "failed"], description: "Defaults to active." },
+          status: { type: "string", enum: ["active", "done", "failed"], description: "Default 'active'." },
         },
         required: [],
       },
@@ -69,14 +69,14 @@ export const binderTools: ToolDef[] = [
     type: "function",
     function: {
       name: "tick_objective",
-      description: "Mark one objective of a quest done (or undone). Use when the party completes a step.",
+      description: "Mark one objective of a quest done (or undone). Call it when the party completes a step.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           questId: { type: "string" },
           objectiveId: { type: "string" },
-          done: { type: "boolean", description: "Defaults to true." },
+          done: { type: "boolean", description: "Default true." },
         },
         required: ["questId", "objectiveId"],
       },

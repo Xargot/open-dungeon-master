@@ -127,7 +127,7 @@ export function PicturesStep({
         <ChoiceCard
           picked={draft.pictures === "comfyui"}
           onPick={() => pick("comfyui")}
-          glyph="sense-truesight"
+          glyph="ui-paint"
           title="ComfyUI on this computer"
           sub="Portraits, scene art and battle maps, painted on your own GPU. Free to run."
           badge={scanning || checkingComfy ? { text: "Looking…", tone: "off" } : comfy && !comfy.error ? { text: "Found", tone: "ready" } : { text: "Not found", tone: "off" }}
@@ -332,7 +332,7 @@ export function VoiceStep({
         <ChoiceCard
           picked={draft.narration === "kokoro"}
           onPick={() => pick("kokoro")}
-          glyph="tab-ambience"
+          glyph="ui-speech"
           title="Kokoro on this computer"
           sub="Reads each passage aloud in the campaign's chosen voice. Free, and the text stays here."
           badge={scanning ? { text: "Looking…", tone: "off" } : kokoro ? { text: "Found", tone: "ready" } : { text: "Not found", tone: "off" }}

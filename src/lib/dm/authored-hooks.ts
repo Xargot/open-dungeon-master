@@ -21,6 +21,8 @@
 // hit points, concentration, death, the token), so this module never imports
 // enemy-damage.ts, which reaches it.
 
+import { UNWAVERING_STRIKE } from "@/lib/dm/feature-bonus-attacks";
+import { untilTurnEnd } from "@/lib/dm/turn-end";
 import type { Campaign } from "@/lib/db/campaigns";
 import { getBattleMapForEncounter, listTokens } from "@/lib/db/battle-maps";
 import { tilesApart } from "@/lib/dm/board-reach";
@@ -152,6 +154,25 @@ export function authoredAfterHit(
     return lines;
   }
   const target = getSheetById(input.target.id) ?? input.target;
+  // Unwavering Mark: a marked creature that damages anyone else opens its
+  // marker's bonus attack against it on their next turn
+  // (src/lib/dm/feature-bonus-attacks.ts).
+  const mark = input.attacker.conditions.find((entry) => lower(entry) === "unwavering mark");
+  const marker = mark ? metaOf(input.attacker, mark)?.source : undefined;
+  if (marker && marker !== target.id) {
+    const cavalier = getSheetById(marker);
+    if (cavalier && !cavalier.deathSaves?.dead) {
+      const held = cavalier.conditions.filter((entry) => lower(entry) !== UNWAVERING_STRIKE);
+      const updated = patchSheet(cavalier.id, {
+        conditions: [...held, UNWAVERING_STRIKE],
+        conditionMeta: { ...cavalier.conditionMeta, [UNWAVERING_STRIKE]: untilTurnEnd(cavalier.id, { source: input.attacker.id }) },
+      });
+      if (updated) {
+        publishPersisted(campaign.id, "sheet_updated", { sheet: updated });
+      }
+      lines.push(`Unwavering Mark: ${input.attacker.displayName} struck someone other than ${cavalier.name}, who may make a bonus-action melee attack against it on their next turn, with advantage and +half their fighter level damage (pc_attack bonusAttack "feature").`);
+    }
+  }
   for (const { effect, held } of activeAuthored(target, "retaliate")) {
     const live = getEnemy(input.attacker.id);
     if (!live || live.status !== "alive") {

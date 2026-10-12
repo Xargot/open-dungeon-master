@@ -14,7 +14,9 @@ import {
   PACK_ORDER,
   SECTION_SHARES,
   npcFloorTokens,
+  cutCoveredHistory,
   fitHistory,
+  SUMMARY_SEAM_FLOOR,
   packBlocks,
   usableTokens,
   MAX_RESPONSE_RESERVE_TOKENS,
@@ -358,6 +360,18 @@ check("the packing window takes the tool definitions and the grown reserve off t
   // Tools larger than the window: the floor keeps usableTokens on its own floor rather than going negative.
   assert.equal(usableTokens(promptWindowTokens(16_384, 27_246)), 1_024);
   assert.equal(promptWindowTokens(Number.NaN, Number.NaN), promptWindowTokens(DEFAULT_CONTEXT_TOKENS, 0), "bad inputs fall back");
+});
+
+check("the transcript a summary covers is left out, but the newest few at the seam", () => {
+  const entries = Array.from({ length: 20 }, (_, at) => ({ seq: at * 2 + 1 }));
+  assert.equal(SUMMARY_SEAM_FLOOR, 6);
+  assert.deepEqual(cutCoveredHistory(entries, null), { kept: entries, cut: 0 }, "no summary, nothing cut");
+  assert.deepEqual(cutCoveredHistory(entries, 9), { kept: entries, cut: 0 }, "five covered stay under the floor");
+  const cut = cutCoveredHistory(entries, 29);
+  assert.equal(cut.cut, 9, "fifteen covered, six kept at the seam");
+  assert.deepEqual(cut.kept, entries.slice(9));
+  assert.deepEqual(cutCoveredHistory(entries, 39).kept, entries.slice(14), "all covered: only the floor is left");
+  assert.equal(cutCoveredHistory([], 39).cut, 0);
 });
 
 console.log(`context-budget: ${passed} tests passed`);

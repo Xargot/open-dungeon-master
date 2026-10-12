@@ -104,6 +104,8 @@ export function StatblockFinder({
                   cr={match.cr}
                   genre={genre}
                   seed={match.slug}
+                  slug={match.slug}
+                  name={match.name}
                   size="size-8"
                 />
                 <span className="text-xs text-stone-200">

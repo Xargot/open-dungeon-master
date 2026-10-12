@@ -1,19 +1,58 @@
 import { z } from "zod";
 import { isErrorResponse, steersStory, requireMember } from "@/lib/campaign-api";
-import { getItemProposal, resolveItemProposal } from "@/lib/db/item-proposals";
+import { allocateSeq } from "@/lib/db/campaigns";
+import { getItemProposal, resolveItemProposal, type ItemProposal } from "@/lib/db/item-proposals";
+import { insertCampaignMessage } from "@/lib/db/messages";
 import { getSheetById, listSheets } from "@/lib/db/sheets";
 import { applyTrade } from "@/lib/dm/trade";
 import { canResolveTrade } from "@/lib/dm/trade-logic";
 import { applyDmMutation } from "@/lib/dm/mutations";
 import { settleTurn, turnHolder } from "@/lib/dm/encounter-tools";
-import { canResolveProposal } from "@/lib/dm/proposal-logic";
+import {
+  appliedOutcome,
+  canResolveProposal,
+  OFFER_NOTE_PREFIX,
+  parseOfferArgs,
+  resolutionNote,
+  VITALS_PROPOSAL_TOOL_NAMES,
+  type OfferResolution,
+} from "@/lib/dm/proposal-logic";
 import { publicItemProposal } from "@/lib/dm/proposal-intercept";
-import { publishPersisted } from "@/lib/events";
+import { publishPersisted, publishWithSeq } from "@/lib/events";
+import type { SystemGlyph } from "@/lib/system-glyphs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({ action: z.enum(["approve", "decline", "cancel"]) });
+
+function glyphFor(toolName: string): SystemGlyph {
+  if (toolName === "apply_damage") return "cue-battle";
+  if (toolName === "heal") return "cue-heal";
+  if (VITALS_PROPOSAL_TOOL_NAMES.has(toolName)) return "cue-bell";
+  return "cue-coin";
+}
+
+// Settling an offer is told to the whole table as a system line, so the DM's
+// next turn reads which offer was answered, how, and what it left on the
+// sheet (issue 239); the chronicle shows the same words.
+function announceSettled(
+  campaignId: string,
+  proposal: ItemProposal,
+  status: OfferResolution,
+  who: { characterName: string; byLead: boolean; withdrawnBy?: string },
+  outcome: string,
+) {
+  const seq = allocateSeq(campaignId);
+  const message = insertCampaignMessage({
+    campaignId,
+    seq,
+    authorType: "system",
+    glyph: glyphFor(proposal.toolName),
+    content: `${OFFER_NOTE_PREFIX}${resolutionNote({ status, summary: proposal.summary, ...who, outcome })}`,
+  });
+  publishWithSeq(campaignId, seq, "message_added", { message });
+}
 
 // The owning player answers a DM item offer; the lead may also answer or
 // withdraw it. Approval replays the original mutation through the normal
@@ -42,11 +81,21 @@ export async function POST(
   }
   const actorIsOwner = proposal.userId === context.user.id;
   const isTrade = proposal.toolName === "trade";
+  // Whose offer it is to answer: the counterparty of a trade, else the
+  // character it is made to.
+  const answerer = getSheetById(isTrade ? proposal.toCharacterId : proposal.characterId);
+  const characterName = answerer?.name ?? "the character";
+  // Who settled it, for the table note: the player, the lead for them, or
+  // (a trade) its own proposer taking it back.
+  const who = { characterName, byLead: !actorIsOwner, withdrawnBy: "" };
   if (isTrade) {
     // A trade: the counterparty answers, the proposer may withdraw, the
     // lead may do either (docs/vtt-parity-implementation-plan.md 11.2).
-    const counterparty = getSheetById(proposal.toCharacterId);
-    const actorIsCounterparty = Boolean(counterparty && counterparty.userId === context.user.id);
+    const actorIsCounterparty = Boolean(answerer && answerer.userId === context.user.id);
+    who.byLead = !actorIsCounterparty && !actorIsOwner;
+    if (actorIsOwner && !actorIsCounterparty) {
+      who.withdrawnBy = getSheetById(proposal.characterId)?.name ?? "The offerer";
+    }
     if (!canResolveTrade(action, actorIsOwner, actorIsCounterparty, steersStory(context))) {
       return Response.json({ error: "Only the other side, the offerer or the lead can do that." }, { status: 403 });
     }
@@ -56,12 +105,15 @@ export async function POST(
     });
   }
 
+  // What applying it did, for the row, the stream and the table note.
+  let outcome = "";
   if (action === "approve" && isTrade) {
     const applied = applyTrade(context.campaign, proposal);
     if ("error" in applied) {
-      const declined = resolveItemProposal(proposalId, "declined");
+      const declined = resolveItemProposal(proposalId, "declined", `failed: ${applied.error}`);
       if (declined) {
         publishPersisted(campaignId, "item_proposal_resolved", { proposal: publicItemProposal(declined) });
+        announceSettled(campaignId, declined, "failed", who, String(applied.error));
       }
       return Response.json({ error: `The trade could not go through: ${applied.error}` }, { status: 409 });
     }
@@ -82,29 +134,43 @@ export async function POST(
     settleTurn(context.campaign, holder);
     if ("error" in result) {
       // The world moved under the offer (item gone, gold spent); resolve it
-      // as declined so the bar clears rather than wedging.
-      const declined = resolveItemProposal(proposalId, "declined");
+      // as declined so the bar clears rather than wedging, and say why.
+      const why = String(result.error);
+      const declined = resolveItemProposal(proposalId, "declined", `failed: ${why}`);
       if (declined) {
         publishPersisted(campaignId, "item_proposal_resolved", {
           proposal: publicItemProposal(declined),
         });
+        announceSettled(campaignId, declined, "failed", who, why);
       }
       return Response.json(
-        { error: `The offer could not be applied: ${String(result.error)}` },
+        { error: `The offer could not be applied: ${why}` },
         { status: 409 },
       );
     }
+    const after = getSheetById(proposal.characterId);
+    if (after) {
+      outcome = appliedOutcome(proposal.toolName, parseOfferArgs(proposal.argsJson), {
+        name: after.name,
+        equipment: after.equipment,
+        gold: after.gold,
+        copper: after.copper,
+        currentHp: after.currentHp,
+        maxHp: after.maxHp,
+        tempHp: after.tempHp,
+        conditions: after.conditions,
+      });
+    }
   }
 
-  const resolved = resolveItemProposal(
-    proposalId,
-    action === "approve" ? "approved" : action === "decline" ? "declined" : "cancelled",
-  );
+  const status = action === "approve" ? "approved" : action === "decline" ? "declined" : "cancelled";
+  const resolved = resolveItemProposal(proposalId, status, outcome);
   if (!resolved) {
     return Response.json({ error: "The offer was already resolved." }, { status: 400 });
   }
   publishPersisted(campaignId, "item_proposal_resolved", {
     proposal: publicItemProposal(resolved),
   });
+  announceSettled(campaignId, resolved, status, who, outcome);
   return Response.json({ proposal: publicItemProposal(resolved) });
 }

@@ -156,7 +156,13 @@ export function QuestsPanel({ campaignId, steersStory, refreshKey }: { campaignI
           </div>
         </div>
       ) : null}
-      {!quests.length ? (loadError ? <LoadFailed error={loadError} onRetry={() => setReload((current) => current + 1)} /> : loaded ? <EmptyState size="sm" art="scrolls" title="Nothing on the log yet." /> : null) : null}
+      {!quests.length ? (
+        loadError ? (
+          <LoadFailed error={loadError} onRetry={() => setReload((current) => current + 1)} />
+        ) : loaded ? (
+          <EmptyState size="sm" art="scrolls" title="Nothing on the log yet." />
+        ) : null
+      ) : null}
       <ul className="stagger space-y-1.5">
         {[...active, ...settled].map((quest) => (
           <QuestRow key={quest.id} quest={quest} steersStory={steersStory} onPatch={(body) => void patch(quest.id, body)} onRemove={() => void remove(quest)} />
@@ -189,7 +195,7 @@ function QuestRow({
           onSelect: () => onPatch({ status }),
         })),
         ...(quest.source === "dm"
-          ? [{ id: "remove", label: "Take it off the log", glyph: "quest-failed", tone: "danger" as const, separated: true, onSelect: onRemove }]
+          ? [{ id: "remove", label: "Take it off the log", glyph: "ui-delete", tone: "danger" as const, separated: true, onSelect: onRemove }]
           : []),
       ]
     : [];

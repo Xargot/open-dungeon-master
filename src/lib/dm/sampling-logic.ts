@@ -143,6 +143,10 @@ export function toolsUnsupportedByServer(kind: EndpointKind, body: string): bool
 // handled by the retry-without-tools path, and dropping tool_choice alone
 // would leave a tool-less model still holding 60 tool definitions.
 const DROPPABLE_PARAMS = new Set([
+  // The Fast tier (issue 255): a model or account without it answers 400
+  // naming the field, and the call goes out again at standard speed, which
+  // the admin panel then shows (src/lib/speed-status.ts).
+  "service_tier",
   "temperature",
   "top_p",
   "top_k",

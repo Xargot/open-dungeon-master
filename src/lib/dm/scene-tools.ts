@@ -39,13 +39,13 @@ export const sceneTools: ToolDef[] = [
     function: {
       name: "start_scene",
       description:
-        "Begin a structured non-combat scene with a clock: a chase, a negotiation, crossing something dangerous, a ritual under pressure. The party needs N successes before M failures, one check per character per round. Use this when a scene has real stakes and will take several exchanges; do not use it for a single check.",
+        "Begin a structured non-combat scene with a clock: a chase, a negotiation, crossing something dangerous, a ritual under pressure. The party needs N successes before M failures, one check per character per round. Call it when a scene has real stakes and will take several exchanges; do not call it for a single check.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           kind: { type: "string", enum: [...TRACKER_KINDS] },
-          title: { type: "string", description: "What the scene is, e.g. 'Talking the reeve round'." },
+          title: { type: "string", description: "What the scene is ('Talking the reeve round')." },
           successesNeeded: { type: "integer", minimum: 1, maximum: 12 },
           failuresAllowed: { type: "integer", minimum: 1, maximum: 12 },
           onSuccess: { type: "string", description: "What happens if they win it." },
@@ -61,13 +61,13 @@ export const sceneTools: ToolDef[] = [
     function: {
       name: "scene_check",
       description:
-        "One character's attempt in the running scene. The server rolls their check and moves the clock. Ask for the skill their stated approach actually calls for, not the same skill every round.",
+        "Resolve one character's attempt in the running scene. The server rolls their check and moves the clock. Ask for the skill their stated approach actually calls for, not the same skill every round.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           characterId: { type: "string" },
-          skill: { type: "string", description: "Skill name, e.g. 'persuasion'." },
+          skill: { type: "string", description: "Skill name ('persuasion')." },
           ability: { type: "string", enum: ["str", "dex", "con", "int", "wis", "cha"] },
           difficulty: {
             type: "string",

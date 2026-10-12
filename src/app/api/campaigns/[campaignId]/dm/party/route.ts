@@ -3,12 +3,9 @@ import { isErrorResponse, requireDm } from "@/lib/campaign-api";
 import { getParty, updateParty } from "@/lib/db/party";
 import { listSheets } from "@/lib/db/sheets";
 import { payOutBankedXp } from "@/lib/dm/party-tools";
-import {
-  moveInMarchingOrder,
-  PARTY_ACTIVITY_MAX,
-  PARTY_LOCATION_MAX,
-  reconcileMarchingOrder,
-} from "@/lib/dm/party-logic";
+import { formationView } from "@/lib/dm/formation-logic";
+import { moveInMarchingOrder, PARTY_ACTIVITY_MAX, PARTY_LOCATION_MAX } from "@/lib/dm/party-logic";
+import { formationPartyIds } from "@/lib/dm/roster";
 import { publishPersisted } from "@/lib/events";
 
 export const runtime = "nodejs";
@@ -44,13 +41,12 @@ export async function GET(
     return context;
   }
   // The order is reconciled on read rather than on every join and departure:
-  // one place to get it right, and it can never name someone who left.
+  // one place to get it right, and it can never name someone who left. A
+  // character who joined since is not placed until the party places them
+  // (issue 230): the panel shows them apart, and the DM is told so.
   const party = updateParty(campaignId, (current) => ({
     ...current,
-    marchingOrder: reconcileMarchingOrder(
-      current.marchingOrder,
-      listSheets(campaignId).map((sheet) => sheet.id),
-    ),
+    marchingOrder: formationView(current.marchingOrder, formationPartyIds(context.campaign, listSheets(campaignId))).placed,
   }));
   return Response.json({ party });
 }

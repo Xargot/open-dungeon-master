@@ -2,9 +2,11 @@
 // 5.2): what a prepared spell or a limited-use feature costs, rolls and
 // spends, read from the same tables the cast and use_resource tools read.
 import type { CharacterSheet } from "@/lib/schemas/sheet";
-import { casterStateProblem, componentProblem, focusProblem, materialPlan, slotPlan, turnCharge } from "@/lib/dm/cast-rules";
+import { bonusCastOf, casterStateProblem, componentProblem, focusProblem, materialPlan, slotPlan, turnCharge } from "@/lib/dm/cast-rules";
 import { computeSheetDerived, spellAttackFor, spellSaveDcFor } from "@/lib/srd";
 import { resourceDef, resourceLevel, type ResourceDef } from "@/lib/srd/class-resources";
+import { psionicOptions } from "@/lib/dm/option-costs";
+import { BONUS_ATTACK_COUNTERS } from "@/lib/dm/feature-bonus-attacks";
 import { isMeleeSpellAttack } from "@/lib/srd/melee-spell";
 import { bundledSpellFacts } from "@/lib/srd/spell-facts";
 import { aoeSpendFor } from "@/lib/srd/aoe-spend";
@@ -248,14 +250,19 @@ function spellCard(sheet: CharacterSheet, turn: HandTurn, riders: CombatRiders, 
     inFight: true,
     budget: turn.myTurn ? budgetOf(turn, sheet) : null,
     reactionSpent: turn.reactionUsed,
+    // Mantle of Majesty, Elder Champion (the school is the pack's, so
+    // Embodiment of the Law is the engine's to decide).
+    bonusCast: bonusCastOf(sheet, facts, null),
   });
   const melee = mech.resolution === "attack" && isMeleeSpellAttack(engine, facts?.range.kind);
   if (melee) notes.unshift("Melee spell attack: a creature beside you.");
+  // A feature that moves the spell to the bonus action shows it there.
+  const shownCost: HandCost = !("error" in charge) && charge.kind === "budget" && charge.cost === "bonus action" ? "bonus" : cost;
   const card: HandCard = {
     id: `spell:${spellKey(name)}`,
     type,
     name,
-    cost,
+    cost: shownCost,
     range: feet(fact.range),
     dice,
     roll,
@@ -331,6 +338,8 @@ const FEATURE_COST: Record<string, HandCost> = {
 function featureCost(def: ResourceDef): HandCost {
   const named = FEATURE_COST[def.id];
   if (named) return named;
+  // The cost the engine charges (ResourceDef.action), when the counter has one.
+  if (def.action) return def.action === "none" ? "free" : def.action;
   if (/bonus action/i.test(def.guidance)) return "bonus";
   if (/\breaction\b/i.test(def.guidance)) return "reaction";
   return "action";
@@ -345,7 +354,12 @@ export function featureCards(sheet: CharacterSheet, turn: HandTurn): HandCard[] 
     // Ki is spent through its techniques, each a card of its own (hand-class.ts
     // Flurry of Blows, and the bonus-action moves in hand.ts).
     // A feat's pour-in (Inner Resilience's ki) lives under the class counter's id, never its own card.
+    // Channel Divinity and Psionic Energy are one card per option, each at its
+    // own cost (hand-options.ts).
     if (!def || def.passive || def.into || id === "sub_superiority_dice" || id === "ki" || def.effect.kind === "recover_slots") continue;
+    if (id === "channel_divinity" || (id === "sub_psionic_energy" && psionicOptions(sheet).length)) continue;
+    // Spent by the bonus attack itself (hand-class.ts bonusStrikeCards).
+    if (BONUS_ATTACK_COUNTERS.includes(id)) continue;
     const level = resourceLevel(def, sheet);
     const effect = def.effect;
     const left = state.max - state.used;

@@ -10,6 +10,7 @@ export default function PrivacyPage() {
   return (
     <PageShell
       icon={PIXEL_ICONS.localData}
+      glyph="ui-lock"
       title="Privacy policy"
       blurb="What this server stores, what it never does, and who is responsible for it."
       actions={

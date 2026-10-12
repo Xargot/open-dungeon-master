@@ -95,7 +95,7 @@ export const addEnemiesTool: ToolDef = {
   function: {
     name: "add_enemies",
     description:
-      "Bring NEW enemies into the ongoing fight: reinforcements arriving, summoned creatures, an ambusher revealing itself. Call this BEFORE narrating them appearing; they become real server-tracked combatants with initiative slots and map tokens. Never narrate a new combatant into existence without it.",
+      "Bring NEW enemies into the ongoing fight: reinforcements arriving, summoned creatures, an ambusher revealing itself. Call it BEFORE narrating them appearing; they become real server-tracked combatants with initiative slots and map tokens. Never narrate a new combatant into existence without it.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -109,11 +109,11 @@ export const addEnemiesTool: ToolDef = {
             properties: {
               monster: {
                 type: "string",
-                description: "Monster slug or name, e.g. 'goblin' or 'Gutter Punk'.",
+                description: "Monster slug or name ('goblin', 'Gutter Punk').",
               },
               name: {
                 type: "string",
-                description: "Optional in-world display name when reskinning.",
+                description: "In-world display name, to reskin one for this setting.",
               },
               count: { type: "integer", minimum: 1, maximum: 8 },
               cr: {

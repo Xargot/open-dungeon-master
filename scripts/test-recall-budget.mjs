@@ -6,7 +6,9 @@
 // summaries. Ask and the lore check run on the fake harness, whose log holds
 // exactly what the model would have been sent. Ask reaches the archive only
 // through the search the model asks for, so its fake searches over ODM's real
-// MCP door, served here on a loopback port.
+// MCP door, served here on a loopback port. A DM turn leaves out the
+// transcript the chapter summaries and the rolling summary already cover,
+// beyond a few messages at the seam, and recall_story still finds it.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -33,8 +35,11 @@ globalThis.__odmEmbedderPromise = Promise.resolve((texts) =>
 
 const { saveGlobalConfig } = await import("../src/lib/db/app-settings.ts");
 const { createUser } = await import("../src/lib/db/users.ts");
-const { createCampaign, getCampaignById, setCampaignStatus, updateStorySettings, allocateSeq } = await import("../src/lib/db/campaigns.ts");
-const { insertCampaignMessage } = await import("../src/lib/db/messages.ts");
+const { createCampaign, getCampaignById, setCampaignStatus, updateStorySettings, allocateSeq, setCampaignSummaryState } =
+  await import("../src/lib/db/campaigns.ts");
+const { insertCampaignMessage, countMessagesUpToSeq } = await import("../src/lib/db/messages.ts");
+const { startDmTurn } = await import("../src/lib/dm/turn.ts");
+const { getDmTurn, getLatestDmTurnId } = await import("../src/lib/db/dm-turns.ts");
 const { ensureOpenChapter, closeChapterRow } = await import("../src/lib/db/chapters.ts");
 const { indexChapter } = await import("../src/lib/dm/memory-index.ts");
 const { handleRecallStory } = await import("../src/lib/dm/recall.ts");
@@ -76,7 +81,8 @@ const campaign = createCampaign(lead.id, {
   maxPlayers: 4,
   startingLevel: 1,
   difficulty: "normal",
-  gameSettings: {},
+  // No voice: a DM turn's narration would call a local speech server.
+  gameSettings: { ttsEnabled: false },
 });
 updateStorySettings(campaign.id, { textProvider: "harness", imageGenerationEnabled: false, autoImages: false });
 setCampaignStatus(campaign.id, "active");
@@ -93,7 +99,10 @@ for (const index of [1, 2]) {
       campaignId: campaign.id,
       seq: allocateSeq(campaign.id),
       authorType: "dm",
-      content: `Chapter ${index}, scene ${line}: the Lantern Mill burns while the miller shouts at the river. `.repeat(8),
+      content:
+        `Chapter ${index}, scene ${line}: the Lantern Mill burns while the miller shouts at the river. `.repeat(8) +
+        // The one scene the transcript later leaves out, findable by its own words (every vector ties here).
+        (index === 1 && line === 0 ? "The miller's daughter hides the brass key in the flour bin." : ""),
     });
   }
   const closed = closeChapterRow(chapter.id, {
@@ -231,6 +240,59 @@ await test("the lore check does the same", async () => {
     globalThis.__odmFakeHarnessLog = [];
     await check();
     assertWhole(sentToModel());
+  });
+});
+
+// What the DM turn's model was handed: the opening message holds the
+// transcript.
+const dmTurn = async () => {
+  fs.writeFileSync(process.env.HARNESS_FAKE_SCRIPT, JSON.stringify([[{ text: "The river runs grey with ash." }]]));
+  globalThis.__odmFakeHarnessLog = [];
+  await startDmTurn(campaign.id);
+  fs.writeFileSync(process.env.HARNESS_FAKE_SCRIPT, JSON.stringify([[{ text: "{}" }]]));
+  const prompt = globalThis.__odmFakeHarnessLog.find((entry) => entry.kind === "prompt");
+  const trace = getDmTurn(getLatestDmTurnId(campaign.id)).contextTrace;
+  return { transcript: String(prompt.detail), history: trace.blocks.find((block) => block.id === "history").reason };
+};
+const scene = (chapter, line) => `Chapter ${chapter}, scene ${line}:`;
+const say = (content) =>
+  insertCampaignMessage({ campaignId: campaign.id, seq: allocateSeq(campaign.id), authorType: "player", content });
+
+await test("a DM turn leaves out what the chapter summaries cover, but the newest six, and recall_story still finds it", async () => {
+  // What chapter close does: the rolling summary restarts after the sealed chapters (src/lib/dm/chapter-close.ts).
+  setCampaignSummaryState(campaign.id, "", countMessagesUpToSeq(campaign.id, lastDm.seq));
+  ensureOpenChapter(campaign.id);
+  say("I look for the miller.");
+  const { transcript, history } = await dmTurn();
+  for (const line of [0, 1]) assert.ok(!transcript.includes(scene(1, line)), `chapter 1 scene ${line} was sent again`);
+  for (const line of [2, 3]) assert.ok(transcript.includes(scene(1, line)), `the seam lost chapter 1 scene ${line}`);
+  for (const line of [0, 1, 2, 3]) assert.ok(transcript.includes(scene(2, line)), `the seam lost chapter 2 scene ${line}`);
+  assert.ok(transcript.includes("I look for the miller."));
+  assert.equal(history, "kept 7 of 9 messages; 2 covered by the summaries left out");
+  const recalled = await handleRecallStory(getCampaignById(campaign.id), JSON.stringify({ query: "the brass key in the flour bin" }));
+  assert.ok(JSON.stringify(recalled.scenes).includes(scene(1, 0)), "recall_story lost the scene the transcript left out");
+});
+
+await test("the open chapter's start, once the rolling summary folds it in, is left out the same way", async () => {
+  const opened = [];
+  for (let line = 0; line < 10; line += 1) {
+    opened.push(say(`Open chapter, line ${line}: the ford is quiet.`));
+  }
+  setCampaignSummaryState(campaign.id, "The party searched the ford.", countMessagesUpToSeq(campaign.id, opened[7].seq));
+  say("I call out to the miller again.");
+  const { transcript, history } = await dmTurn();
+  for (const line of [0, 1, 2, 3]) assert.ok(!transcript.includes(scene(2, line)), `chapter 2 scene ${line} was sent again`);
+  for (const line of [0, 1]) assert.ok(!transcript.includes(`Open chapter, line ${line}:`), `open line ${line} was sent again`);
+  for (const line of [2, 7, 9]) assert.ok(transcript.includes(`Open chapter, line ${line}:`), `open line ${line} is missing`);
+  // Covered: the 8 sealed lines, the first turn's 2 messages and open lines 0-7.
+  assert.equal(history, "kept 9 of 21 messages; 12 covered by the summaries left out");
+});
+
+await test("the token budget still applies to what the summaries leave", async () => {
+  say(`I tell the whole tale of the ford again: ${"the water, the ash, the miller. ".repeat(400)}`);
+  await atWindow(8_000, async () => {
+    const { history } = await dmTurn();
+    assert.match(history, /^kept \d+ of 23 messages; 12 covered by the summaries left out; \d+ older dropped over the history budget$/);
   });
 });
 

@@ -148,7 +148,7 @@ export function VoiceDock({
             !open && onCall && "session-hbtn-call",
           )}
         >
-          <HeaderGlyph glyph="cue-turn" className={cn(onCall && someoneSpeaking && "animate-pulse")} />
+          <HeaderGlyph glyph="ui-voice" className={cn(onCall && someoneSpeaking && "animate-pulse")} />
           <span className="hidden text-sm md:inline">Voice</span>
           {count ? (
             <span

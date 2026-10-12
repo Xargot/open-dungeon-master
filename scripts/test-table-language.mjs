@@ -26,6 +26,7 @@ const { getCampaignById } = await import("../src/lib/db/campaigns.ts");
 const { buildDmSystem } = await import("../src/lib/dm/prompt.ts");
 const { languageDirective } = await import("../src/lib/dm/table-language-logic.ts");
 const { TABLE_LANGUAGES } = await import("../src/lib/schemas/game-settings-options.ts");
+const { THIS_TURN_HEADING } = await import("../src/lib/prompt-boundary.ts");
 
 // A URL, not a template literal: Vitest would read the literal as a one-level
 // glob, which the nested route paths below never match.
@@ -122,10 +123,14 @@ await test("English has no directive; every other language names itself", () => 
 await test("the DM's system prompt carries the directive, and an English one reads as before", async () => {
   const english = getCampaignById(await newCampaign({}));
   const italian = { ...english, gameSettings: { ...english.gameSettings, tableLanguage: "italian" } };
-  const englishPrompt = buildDmSystem(english);
-  const italianPrompt = buildDmSystem(italian);
+  const englishPrompt = buildDmSystem(english, []);
+  const italianPrompt = buildDmSystem(italian, []);
   assert.ok(!englishPrompt.includes("TABLE LANGUAGE"));
-  assert.equal(italianPrompt, `${englishPrompt}\n\n${languageDirective("italian")}`);
+  // The directive is per campaign, so it joins the campaign-static rules, above the turn heading.
+  assert.equal(
+    italianPrompt,
+    englishPrompt.replace(`\n\n${THIS_TURN_HEADING}`, `\n\n${languageDirective("italian")}\n\n${THIS_TURN_HEADING}`),
+  );
 });
 
 console.log(`\n${passed} table language tests passed`);

@@ -20,6 +20,11 @@ export type GrantedAttack = {
   abilityToDamage: boolean;
   ranged: boolean;
   bonusAction: boolean;
+  // The first attack comes with the activation itself (Starry Form's Archer,
+  // Tentacle of the Deep, Spiritual Weapon: "when you cast the spell, you can
+  // make..."), so it costs no second bonus action. The number is the
+  // condition's full duration in rounds: still whole, it was laid this turn.
+  withActivation?: number;
   // Cast from a higher slot: `dice` more for every `every` slot levels above
   // `baseLevel` (Spiritual Weapon: 1d8 per two levels above 2nd).
   upcast?: { baseLevel: number; every: number; dice: string };

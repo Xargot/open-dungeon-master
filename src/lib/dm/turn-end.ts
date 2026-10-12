@@ -21,6 +21,7 @@ import { getEnemy, listEnemies, patchEnemyConditions } from "@/lib/db/encounters
 import { getSheetById, listSheets, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
 import { HURLED, hurlReturn } from "@/lib/dm/attack-onhit";
+import { HOLDING_ON, downConditions } from "@/lib/dm/vitals-logic";
 import { spellTurnEndHook } from "@/lib/dm/spell-turn-end";
 import { authoredTurnEnd } from "@/lib/dm/authored-turns";
 import { zoneTurnEnd } from "@/lib/dm/zone-triggers";
@@ -185,9 +186,16 @@ export function endTurns(
     if (!removed.changed) {
       continue;
     }
-    const updated = patchSheet(sheet.id, { conditions: removed.conditions, conditionMeta: removed.meta });
+    // Strength before Death's extra turn is over: still at 0, they fall.
+    const falls =
+      removed.gone.some(([name]) => name.trim().toLowerCase() === HOLDING_ON) && sheet.currentHp <= 0 && !sheet.deathSaves?.dead;
+    const down = falls ? downConditions({ conditions: removed.conditions, conditionMeta: removed.meta }) : null;
+    const updated = patchSheet(sheet.id, down ?? { conditions: removed.conditions, conditionMeta: removed.meta });
     if (updated) {
       publishPersisted(campaign.id, "sheet_updated", { sheet: updated });
+    }
+    if (falls) {
+      lines.push(`${sheet.name}'s extra turn ends at 0 hit points, and they fall unconscious.`);
     }
   }
   // What an authored subclass feature does as a turn ends (Protective Spirit): authored-hooks.ts.

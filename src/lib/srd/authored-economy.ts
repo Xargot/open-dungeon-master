@@ -6,6 +6,10 @@
 
 import { activeAuthored, type AuthoredSheet } from "@/lib/srd/authored-effects";
 
+// An arrow missed this turn ("curving-shot:<enemyId>"): Curving Shot may
+// reroll it at another creature.
+export const CURVING_SHOT = "curving-shot:";
+
 // A feature that makes this action a bonus action.
 export function authoredBonusRoute(sheet: AuthoredSheet, action: string): { feature: string; ki: number } | null {
   const held = activeAuthored(sheet, "bonus_route").find(({ effect }) => effect.action === action);
@@ -32,6 +36,8 @@ export function authoredBonusAttackProblem(
         ? (budget?.attacksMade ?? 0) > 0 && !castWithAction
         : effect.after === "telekinesis"
           ? /telekinesis/i.test(sheet.concentratingOn ?? "")
+          : effect.after === "missed_arrow"
+            ? (budget?.oncePerTurn ?? []).some((key) => key.startsWith(CURVING_SHOT))
           : effect.after === "cantrip"
             ? castWithAction && !levelled
             : castWithAction;
@@ -45,6 +51,8 @@ export function authoredBonusAttackProblem(
       ? "after they take the Attack action"
       : first.effect.after === "telekinesis"
         ? "while they concentrate on telekinesis"
+        : first.effect.after === "missed_arrow"
+          ? "as a reroll of an arrow that just missed, at a different target within 60 feet of the first"
         : first.effect.after === "cantrip"
           ? "after they cast a cantrip with their action"
           : "after they cast a spell with their action";

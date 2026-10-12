@@ -17,6 +17,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { register } from "node:module";
+import { GLYPH_NEGATIVE, GLYPH_STYLE, UI_GLYPHS } from "./glyph-set.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 
@@ -158,26 +159,6 @@ const GLYPHS = {
     ["hostile", "Hostile", "a red crossed pair of blades"], ["wary", "Wary", "an amber narrowed eye"], ["neutral", "Neutral", "grey balanced scales"],
     ["friendly", "Friendly", "a green open hand"], ["allied", "Allied", "two gold hands clasped"],
   ],
-  tab: [
-    ["dm", "Dungeon master", "a crowned hooded figure"], ["lead", "Story lead", "a quill over a lantern"], ["party", "Party", "three silhouettes side by side"],
-    ["battle", "Battle", "two crossed swords over a shield"], ["map", "Map", "a rolled map with a compass rose"], ["story", "Story", "an open book with a bookmark"],
-    ["quests", "Quests", "a quest scroll with a seal"], ["timeline", "Timeline", "an hourglass with a winding path"], ["facts", "Facts", "a stack of index cards with a pin"],
-    ["log", "Log", "a ledger with a quill"], ["notes", "Notes", "a parchment note with a pin"], ["chat", "Chat", "two speech ribbons"],
-    ["context", "Context", "a lantern lighting a stack of books"], ["settings", "Settings", "a brass cog"], ["bonds", "Bonds", "a red thread tied between two rings"],
-    ["factions", "Factions", "a heraldic banner"], ["market", "Market", "a merchant's scale with coins"], ["handout", "Handout", "a folded letter with a seal"],
-    ["shop", "Shop", "a shop awning over a counter"], ["trade", "Trade", "two hands exchanging a pouch"], ["loot", "Loot", "an open treasure chest"],
-    ["journal", "Journal", "a leather journal with a strap"], ["session", "Session", "a candle and an hourglass"], ["friends", "Friends", "two clasped hands with a ribbon"],
-    ["reference", "Reference", "a thick book with a brass bookmark"], ["characters", "Characters", "a portrait medallion"], ["campaigns", "Campaigns", "a banner over a map"],
-    ["ambience", "Ambience", "a lute and a candle"], ["dice", "Dice", "two rolling dice"], ["admin", "Admin", "a key and a seal"],
-  ],
-  system: [
-    ["storyboard", "Storyboard", "three pinned cards on a board"], ["party", "Party", "a party banner"], ["maps", "Battle maps", "a folded battle map with a token"],
-    ["region", "Region", "a globe with a compass"], ["encounters", "Encounters", "crossed swords over a scale"], ["cast", "Cast", "a row of theatre masks"],
-    ["factions", "Factions", "a heraldic flag"], ["bestiary", "Bestiary", "a horned skull over a book"], ["homebrew", "Homebrew", "a bubbling alchemist's flask"],
-    ["lore", "Lore", "an open tome with a glowing page"], ["tables", "Tables", "a die over a scroll"], ["rules", "Rules", "balanced scales on a book"],
-    ["plugin", "Plugin", "a puzzle piece with a glow"], ["share", "Share", "a sealed bundle with a ribbon"], ["rulesets", "Rulesets", "a stack of rule books"],
-    ["world", "WorldForge", "a small glowing world sphere resting on a blacksmith's anvil, sparks rising from it"],
-  ],
 };
 
 const ITEM_KIND_HINT = {
@@ -201,6 +182,12 @@ function entry(group, key, label, subject, extra = {}) {
     prompt: `${subject}, ${ICON_STYLE}`,
     ...extra,
   };
+}
+
+// A UI glyph (tab, workshop system, menu verb): the small-size style, on
+// Qwen Image (scripts/glyph-set.mjs).
+function glyphEntry(group, key, label, subject, extra = {}) {
+  return { ...entry(group, key, label, subject, extra), prompt: `${subject}, ${GLYPH_STYLE}`, negative: GLYPH_NEGATIVE, model: "qwen" };
 }
 
 export async function buildIconList() {
@@ -372,6 +359,13 @@ export async function buildIconList() {
   for (const [group, table] of Object.entries(GLYPHS)) {
     for (const [id, label, subject] of table) {
       list.push(entry("glyph", `${group}-${id}`, label, `${subject}, a wordless pictogram`));
+    }
+  }
+  // The UI chrome: session tabs, workshop systems and menu verbs, drawn to
+  // be read at 16 to 28 pixels.
+  for (const [group, table] of Object.entries(UI_GLYPHS)) {
+    for (const [id, label, subject] of table) {
+      list.push(glyphEntry("glyph", `${group}-${id}`, label, subject));
     }
   }
 

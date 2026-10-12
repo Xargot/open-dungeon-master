@@ -32,6 +32,8 @@ import {
 import { serverEnv } from "@/lib/server-env";
 import { isPrivateBackendHost } from "@/lib/backend-host";
 import { chatUsage, ollamaUsage, type TokenUsage } from "@/lib/usage/parse";
+import { apiSpeedEligibility } from "@/lib/speed-tier";
+import { noteSpeed } from "@/lib/speed-status";
 import { localModelContextWindow } from "@/lib/text-models";
 import { harnessConfig, harnessContextTokens } from "@/lib/harness/status";
 import { onWindows } from "@/lib/host-platform";
@@ -129,6 +131,9 @@ export type ChatRequestOptions = {
   // Set only by requestCustomMessage's own unsupported-parameter path; no
   // caller outside this module should populate it.
   dropParams?: readonly string[];
+  // Which of the server's two models this call is for: the admin's Fast
+  // setting is per role (issue 255). Unset reads as the story model.
+  role?: "story" | "utility";
   // Only read by the "harness" provider (src/lib/harness/bridge.ts). An agent
   // program reads its tool list once, when it starts, so the DM loop hands
   // over every tool the turn could offer; the bridge still refuses a call
@@ -571,7 +576,16 @@ export async function requestCustomMessage(
   ]);
   const chatEndpoint = customChatEndpoint(trimmedBase);
   const endpoint = viaResponses ? customResponsesEndpoint(trimmedBase) : chatEndpoint;
-  const { isUtilityBackend, resolvedKey } = resolveCustomKey(trimmedBase, apiKey, endpoint);
+  const { isGlobalBackend, isUtilityBackend, resolvedKey } = resolveCustomKey(trimmedBase, apiKey, endpoint);
+  // The Fast tier (issue 255): asked for only on the server's own backend
+  // for this role (a campaign's own key is never spent at a premium on the
+  // admin's word), on OpenAI's API, for a model that has it. Anywhere else
+  // nothing is sent, so a local or third-party server never sees the field.
+  const role = options.role ?? "story";
+  const speedWanted =
+    (role === "utility" ? globalText.utilitySpeed : globalText.speed) === "fast" &&
+    (role === "utility" ? isUtilityBackend : isGlobalBackend) &&
+    apiSpeedEligibility({ endpointKind: caps.kind, model: resolvedModel }).ok;
   // Thinking runs cooler per Qwen guidance; 0.9 there makes the thought
   // ramble past the point of ever emitting the tool call.
   // Per-role sampling, resolved from the admin config
@@ -647,8 +661,16 @@ export async function requestCustomMessage(
     }
   }
 
+  if (speedWanted) {
+    requestPayload.service_tier = "fast";
+  }
   for (const field of dropped) {
     delete requestPayload[field];
+  }
+  // A Fast request the provider refused (the drop below): said once, in
+  // the panel, as the standard-speed call it became.
+  if (speedWanted && dropped.has("service_tier")) {
+    noteSpeed(role, { model: resolvedModel, refused: "The provider refused the Fast tier for this model or account; calls run at standard speed." });
   }
 
   const timeoutMs = resolveTextTimeoutMs(
@@ -830,6 +852,9 @@ export async function requestCustomMessage(
           ),
         };
       }
+      if (speedWanted && !dropped.has("service_tier")) {
+        noteSpeed(role, { model: resolvedModel, reported: reply.serviceTier ?? null });
+      }
       return {
         message: reply.message,
         ...(reply.finishReason ? { finishReason: reply.finishReason } : {}),
@@ -844,6 +869,7 @@ export async function requestCustomMessage(
     // OpenAI-compatible SSE: "data: {...}" lines carrying content and
     // tool-call fragments, terminated by "data: [DONE]".
     let streamUsage = null as TokenUsage | null;
+    let serviceTier = "";
     const contentParts: string[] = [];
     const toolCalls: Array<StreamedToolCall | undefined> = [];
     let upstreamError = "";
@@ -867,7 +893,11 @@ export async function requestCustomMessage(
         const record = parsed as {
           choices?: Array<{ delta?: { content?: unknown; tool_calls?: unknown }; finish_reason?: unknown }>;
           error?: { message?: string } | string;
+          service_tier?: unknown;
         };
+        if (typeof record.service_tier === "string" && record.service_tier) {
+          serviceTier = record.service_tier;
+        }
         if (record.error) {
           upstreamError =
             typeof record.error === "string"
@@ -926,6 +956,9 @@ export async function requestCustomMessage(
     }
 
     const completedToolCalls = toolCalls.filter(Boolean) as StreamedToolCall[];
+    if (speedWanted && !dropped.has("service_tier")) {
+      noteSpeed(role, { model: resolvedModel, reported: serviceTier || null });
+    }
     return {
       message: {
         content: contentParts.join(""),
@@ -936,7 +969,7 @@ export async function requestCustomMessage(
     };
   }
 
-  let data: { choices?: Array<{ message?: UpstreamChatMessage; finish_reason?: unknown }> };
+  let data: { choices?: Array<{ message?: UpstreamChatMessage; finish_reason?: unknown }>; service_tier?: unknown };
   try {
     const body = await readBody(upstream, MAX_BACKEND_BODY_BYTES);
     if (!body.complete) {
@@ -953,6 +986,9 @@ export async function requestCustomMessage(
   }
 
   const finishReason = data?.choices?.[0]?.finish_reason;
+  if (speedWanted && !dropped.has("service_tier")) {
+    noteSpeed(role, { model: resolvedModel, reported: typeof data?.service_tier === "string" ? data.service_tier : null });
+  }
   return {
     message: data?.choices?.[0]?.message,
     ...(typeof finishReason === "string" && finishReason ? { finishReason } : {}),

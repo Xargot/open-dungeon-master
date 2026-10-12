@@ -7,7 +7,7 @@ import { SectionHead } from "@/components/ui/SectionHead";
 import { PanelError, kitButtonClass, panelField } from "./PanelKit";
 import type { Floor } from "@/lib/db/campaigns";
 import type { PublicEncounter } from "@/lib/db/encounter-view";
-import { REFLEX_LABEL, orderRowKey } from "@/lib/battlemap/initiative-rows";
+import { extraTurnTag, orderRowKey } from "@/lib/battlemap/initiative-rows";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 
 // Who may speak right now, from the lead's desk. The same route the DM
@@ -48,11 +48,17 @@ export function LeadFloorControl({
   floor,
   sheets,
   encounter,
+  aiNarrates = false,
+  coordinating = false,
 }: {
   campaignId: string;
   floor: Floor;
   sheets: CharacterSheet[];
   encounter?: PublicEncounter | null;
+  // Coordinate actions (issue 254) is offered at a table the AI narrates,
+  // outside a fight, when no plan is being drafted already.
+  aiNarrates?: boolean;
+  coordinating?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -60,6 +66,10 @@ export function LeadFloorControl({
   // players behind them and drops companions itself.
   const [picked, setPicked] = useState<string[]>([]);
   const [prompt, setPrompt] = useState("");
+  // Coordinate actions: the characters in the plan (companions too, who act
+  // in it without holding it up), the whole party when none are picked.
+  const [planned, setPlanned] = useState<string[]>([]);
+  const [planPrompt, setPlanPrompt] = useState("");
 
   // Companions have no player to wait on, so they cannot hold the floor.
   const players = sheets.filter((sheet) => !sheet.isCompanion);
@@ -98,7 +108,30 @@ export function LeadFloorControl({
     }
   }
 
-  function togglePick(id: string) {
+  async function coordinate() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/coordination`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "open", characterIds: planned, prompt: planPrompt.trim() }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        setError(data.error ?? "The plan did not open.");
+        return;
+      }
+      setPlanned([]);
+      setPlanPrompt("");
+    } catch {
+      setError("Could not reach the table.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+    function togglePick(id: string) {
     setPicked((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
   }
 
@@ -118,7 +151,7 @@ export function LeadFloorControl({
                   // Keyed by position: a thief's second round-1 turn repeats the id.
                   <span
                     key={orderRowKey(entry, index)}
-                    title={entry.reflex ? REFLEX_LABEL : undefined}
+                    title={extraTurnTag(entry)?.title}
                     className={cn(
                       "transition-colors duration-200",
                       index === encounter.turnIndex ? "font-medium text-amber-200" : undefined,
@@ -126,7 +159,7 @@ export function LeadFloorControl({
                   >
                     {index > 0 ? " > " : ""}
                     {entry.name}
-                    {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300">2nd</sup> : null}
+                    {entry.reflex ? <sup className="motion-pop ml-0.5 text-[9px] text-amber-300">{extraTurnTag(entry)?.short}</sup> : null}
                   </span>
                 ))}
               </>
@@ -281,6 +314,67 @@ export function LeadFloorControl({
           </div>
         </>
       )}
+
+      {aiNarrates && floor.mode !== "initiative" && !coordinating ? (
+        <div className="mt-3" data-coordinate-open>
+          <SectionHead
+            title="Coordinate actions"
+            glyph="tab-party"
+            level="h4"
+            aside={planned.length ? `${planned.length} picked` : "whole party"}
+          />
+          <p className="mb-1.5 text-xs text-stone-500">
+            Each player stages what their characters do in the same moment, edits it until ready or passes, and the DM
+            resolves the whole plan as one beat. Companions join without holding it up.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {sheets.map((sheet) => {
+              const on = planned.includes(sheet.id);
+              return (
+                <button
+                  key={sheet.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setPlanned((prev) => (prev.includes(sheet.id) ? prev.filter((id) => id !== sheet.id) : [...prev, sheet.id]))}
+                  aria-pressed={on}
+                  data-on={on ? "" : undefined}
+                  className="pk-pill pk-tap motion-press py-0.5"
+                >
+                  {sheet.name}
+                  {sheet.isCompanion ? <span className="text-[10px] text-stone-500"> companion</span> : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-1.5 flex gap-1.5">
+            <input
+              value={planPrompt}
+              onChange={(event) => setPlanPrompt(event.target.value)}
+              maxLength={300}
+              placeholder="The moment you are planning (optional)"
+              aria-label="The moment you are planning (optional)"
+              className={cn(panelField, "w-auto min-w-0 flex-1")}
+            />
+            <button
+              type="button"
+              disabled={busy || !sheets.some((sheet) => !sheet.isCompanion)}
+              onClick={() => void coordinate()}
+              title="Open a shared plan; nothing reaches the DM until the players are ready"
+              className={kitButtonClass("primary", "shrink-0")}
+              data-coordinate-start
+            >
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              Coordinate
+            </button>
+          </div>
+        </div>
+      ) : coordinating ? (
+        // The plan itself is drawn above the composer for every seat; on a
+        // phone that is the Table view, not this panel.
+        <p className="motion-pop mt-3 rounded-md border border-amber-500/30 bg-amber-950/20 px-2.5 py-1.5 text-xs text-amber-100/90" data-coordinating-note>
+          The party is coordinating. The plan, with Resolve now and Set aside, is above the box where everyone types.
+        </p>
+      ) : null}
 
       {error ? <PanelError className="mt-1.5">{error}</PanelError> : null}
     </div>

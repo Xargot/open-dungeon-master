@@ -18,6 +18,7 @@ import type { ArchetypeOption, BackgroundOption, ClassOption, RaceOption } from 
 import type { BuilderActions, BuilderDerived } from "../useBuilderDerived";
 import type { BuilderState } from "../useBuilderState";
 import { ClassChoices } from "./ClassChoices";
+import FeatChoicesFields, { knownTraining } from "../FeatChoicesFields";
 import { Field, PickPill, StepPanel, inputClass } from "./shared";
 
 // Step 3: the class (painted cards in the picker's groups and order, the
@@ -183,6 +184,20 @@ export function CallingStep({
                 </span>
               )}
             </span>
+            {/* What the subclass trains the character in (issue 251): its
+                armor and weapons said outright, and its picks asked for here,
+                as a feat's are. */}
+            {derived.subclassTraining.map((grant) => (
+              <FeatChoicesFields
+                key={grant.name}
+                feat={grant.name}
+                spec={grant.spec}
+                picks={state.featChoices[grant.name.trim().toLowerCase()]}
+                known={knownTraining(derived)}
+                onChange={(picks) => state.setFeatPicks(grant.name, picks)}
+                source="subclass"
+              />
+            ))}
           </Field>
         ) : subclassLockedAt !== null && klass ? (
           // Below the class's subclass level the menu stays shut and says

@@ -119,14 +119,14 @@ export function AdminUsersPanel({ meId }: { meId: string }) {
         disabled: busy,
         onSelect: () => void toggleAdmin(user),
       },
-      { id: "reset", label: "Reset password", glyph: "tab-admin", disabled: busy, onSelect: () => void resetPassword(user) },
+      { id: "reset", label: "Reset password", glyph: "ui-key", disabled: busy, onSelect: () => void resetPassword(user) },
       ...(user.deletionDueAt
-        ? [{ id: "keep", label: "Call off the scheduled deletion", glyph: "rest-hp", disabled: busy, onSelect: () => void keepAccount(user) }]
+        ? [{ id: "keep", label: "Call off the scheduled deletion", glyph: "ui-restore", disabled: busy, onSelect: () => void keepAccount(user) }]
         : []),
       {
         id: "delete",
         label: user.deletionDueAt ? "Erase now instead of waiting" : "Delete user",
-        glyph: "quest-failed",
+        glyph: "ui-delete",
         tone: "danger" as const,
         separated: true,
         // An admin cannot delete the account they are signed in with.

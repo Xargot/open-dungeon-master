@@ -26,6 +26,7 @@ import { AUTHORED_DATA_A } from "@/lib/srd/authored-effects-data";
 import { AUTHORED_DATA_A2 } from "@/lib/srd/authored-effects-data-b";
 import { AUTHORED_DATA_B } from "@/lib/srd/authored-effects-data2";
 import { AUTHORED_DATA_B2 } from "@/lib/srd/authored-effects-data3";
+import { GENRE_AUTHORED } from "@/lib/srd/authored-effects-genre";
 import type {
   Ability,
   AuthoredEffect,
@@ -93,6 +94,7 @@ export function heldAuthored(sheet: AuthoredSheet): HeldAuthored[] {
     const full = lower(feature.name);
     const chosen = /^(.*?)\s*\(([^)]+)\)\s*$/.exec(full);
     const candidates = feature.classId ? [lower(feature.classId)] : classIds;
+    let found = false;
     for (const classId of candidates) {
       const exact = BY_KEY.get(`${classId}::${full}`);
       const bare = chosen ? BY_KEY.get(`${classId}::${chosen[1]}`) : undefined;
@@ -104,12 +106,21 @@ export function heldAuthored(sheet: AuthoredSheet): HeldAuthored[] {
           choice: !exact && chosen ? chosen[2].trim().toLowerCase() : null,
           level: classLevel(sheet, classId),
         });
+        found = true;
         break;
       }
+    }
+    // A genre class's feature, found by its name (authored-effects-genre.ts).
+    const genre = found ? undefined : GENRE_BY_NAME.get(full);
+    if (genre && (!genre.classes || genre.classes.some((id) => candidates.includes(lower(id))))) {
+      const classId = candidates[0] ?? "";
+      out.push({ key: `genre::${full}`, classId, feature: genre.feature, entry: genre.entry, name: feature.name, choice: null, level: classLevel(sheet, classId) });
     }
   }
   return out;
 }
+
+const GENRE_BY_NAME = new Map(GENRE_AUTHORED.map((row) => [lower(row.feature), row]));
 
 export function hasCondition(sheet: AuthoredSheet, name: string): boolean {
   const wanted = lower(name);

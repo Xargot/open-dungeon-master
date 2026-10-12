@@ -1,0 +1,26 @@
+{
+  "currentBytes": 28410320,
+  "pr246DeltaBytes": 469642,
+  "pr236DeltaBytes": 63638,
+  "combinedBytes": 28943600,
+  "budgetBytes": 29360128,
+  "units": "All MB figures reported by test-placeholders are binary MiB.",
+  "visualReview": {
+    "finalTiles": 21,
+    "sizes": [
+      96,
+      40
+    ],
+    "surrounds": [
+      "dark",
+      "light"
+    ],
+    "result": "pass; judged from shipped WebP circular previews"
+  },
+  "automatedChecks": {
+    "placeholders": 21692,
+    "reachable": 556,
+    "typescript": "passed",
+    "eslintTouchedFiles": "passed"
+  }
+}

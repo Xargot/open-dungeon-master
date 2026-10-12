@@ -41,6 +41,8 @@ export function MonsterSection({ draft, onDraft }: SectionProps) {
               cr={entry.cr}
               genre={draft.baseGenre}
               seed={entry.slug}
+              slug={entry.slug}
+              name={entry.name}
               art={draft.art[packArtKey("monster", entry.slug)] ?? null}
               size="size-8"
             />

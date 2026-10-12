@@ -42,7 +42,9 @@ export function kiLeft(sheet: Pick<CharacterSheet, "resources">): number | null 
 
 // The feature that lets this character take `action` as a bonus action,
 // free ones first, or null when nothing does.
-export function bonusRouteFor(sheet: CharacterSheet, action: MoveAction): BonusRoute | null {
+// `context.allyDown`: an ally at the table lies at 0 hit points (Under Fire,
+// the trauma doc's Combat Medevac: "when moving toward a downed ally").
+export function bonusRouteFor(sheet: CharacterSheet, action: MoveAction, context: { allyDown?: boolean } = {}): BonusRoute | null {
   const rogue = classLevelFor(sheet, "rogue");
   const ranger = classLevelFor(sheet, "ranger");
   const monk = classLevelFor(sheet, "monk");
@@ -57,6 +59,9 @@ export function bonusRouteFor(sheet: CharacterSheet, action: MoveAction): BonusR
   }
   if (action !== "dodge" && holdsFeature(sheet, "adrenaline surge") && usesLeft(sheet, ADRENALINE_SURGE) !== null) {
     return { feature: "Adrenaline Surge", ki: 0, counter: ADRENALINE_SURGE };
+  }
+  if ((action === "dash" || action === "disengage") && context.allyDown && holdsFeature(sheet, "under fire")) {
+    return { feature: "Under Fire", ki: 0 };
   }
   // Expeditious Retreat (the spell): the Dash as a bonus action while it lasts.
   if (action === "dash" && sheet.conditions.some((entry) => entry.trim().toLowerCase() === EXPEDITIOUS_RETREAT)) {

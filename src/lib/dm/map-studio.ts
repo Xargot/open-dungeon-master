@@ -1,4 +1,6 @@
 import type { Campaign } from "@/lib/db/campaigns";
+import { getParty } from "@/lib/db/party";
+import { placeByFormation } from "@/lib/dm/formation-logic";
 import {
   createEncounter,
   endEncounter,
@@ -277,14 +279,16 @@ export function openScene(
     lights: generated.lights,
     seed,
   });
+  // In the order of the party's travel formation (issue 230).
+  const { spots } = placeByFormation(sheets, generated.pcSpawns, [], getParty(campaign.id).marchingOrder);
   placeTokens(
     map.id,
     campaign.id,
-    sheets.map((sheet, index) => ({
+    sheets.map((sheet) => ({
       kind: "pc" as const,
       refId: sheet.id,
       name: sheet.name,
-      spot: generated.pcSpawns[index] ?? generated.pcSpawns[0] ?? { x: 1, y: 1 },
+      spot: spots.get(sheet.id) ?? generated.pcSpawns[0] ?? { x: 1, y: 1 },
       ...carriedLightFields(campaign.id, sheet),
     })),
   );

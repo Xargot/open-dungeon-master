@@ -313,6 +313,26 @@ export type HistoryFit = {
   tokens: number;
 };
 
+// The transcript a summary already covers is left out before the budget
+// applies: a closed chapter is owned by its summary in GAME STATE
+// (src/lib/dm/chapter-close.ts), and the open chapter's compacted start by
+// the rolling summary (src/lib/dm/compaction.ts), so sending those messages
+// too only says the same thing twice. recall_story still finds their scenes.
+// The newest covered messages stay: three exchanges carry the scene across
+// the seam, so the turn after a chapter closes still reads what it answers.
+export const SUMMARY_SEAM_FLOOR = 6;
+
+// Entries in ascending seq order; coveredSeq is the newest message a summary
+// covers, or null when none does.
+export function cutCoveredHistory<T extends { seq: number }>(
+  entries: readonly T[],
+  coveredSeq: number | null,
+): { kept: T[]; cut: number } {
+  const covered = coveredSeq === null ? 0 : entries.filter((entry) => entry.seq <= coveredSeq).length;
+  const cut = Math.max(0, covered - SUMMARY_SEAM_FLOOR);
+  return { kept: entries.slice(cut), cut };
+}
+
 export function fitHistory(entries: HistoryEntry[], allowanceTokens: number): HistoryFit {
   const kept: HistoryEntry[] = [];
   let tokens = 0;

@@ -30,10 +30,12 @@ import { kiSpend } from "@/lib/dm/bonus-actions";
 import { applyEnemyDamage, publishEncounter, resolveEnemyRef } from "@/lib/dm/enemy-damage";
 import { classLevelFor } from "@/lib/srd/multiclass";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
-import { spellFactsFor } from "@/lib/content";
+import { spellEngineName, spellFactsFor } from "@/lib/content";
 import { addSheetCondition, rollCard } from "@/lib/dm/action-common";
 import { tilesBetween } from "@/lib/dm/attack-spatial";
 import { reactionRefusal } from "@/lib/dm/reaction-gate";
+import { reactionTimingOf, timingOfDoes, type ReactionTiming } from "@/lib/dm/reaction-kinds";
+import { authoredReactionNamed, heldReaction } from "@/lib/srd/authored-effects";
 import { removeConditions } from "@/lib/dm/condition-logic";
 import { freshLastHit, rerollAttacker, type LastHit, type SwingRecord } from "@/lib/dm/last-hit";
 import type { RollAttacker } from "@/lib/db/rolls";
@@ -43,6 +45,10 @@ import { settleLastHit } from "@/lib/dm/reaction-refund";
 import { authoredReaction } from "@/lib/dm/authored-reactions";
 import { freeAuthoredReaction } from "@/lib/dm/authored-reactions-more";
 import { srdFeatureReaction } from "@/lib/dm/srd-reactions";
+import { maneuverReaction } from "@/lib/dm/maneuver-reactions";
+// For the counter reactions' spend; mutations never imports back.
+import { applyDmMutation } from "@/lib/dm/mutations";
+import { matchResource } from "@/lib/srd/class-resources";
 import { resolveSheetRef } from "@/lib/dm/rolls";
 import { spellAuthorsFor } from "@/lib/dm/spell-authors";
 import { PRONE } from "@/lib/dm/vitals-logic";
@@ -371,6 +377,35 @@ function slowFall(ctx: Ctx): Record<string, unknown> {
   };
 }
 
+// When this reaction may still be taken by a character the triggering hit
+// dropped (src/lib/dm/reaction-kinds.ts, issue 233). A reaction for another
+// creature is judged as the reactor is now; one for themselves by what it
+// does to the hit: an authored reaction by its effect, a spell and every
+// named feature by the table.
+function timingOfUseReaction(
+  campaign: Campaign,
+  sheet: CharacterSheet,
+  args: Args,
+  sheets: CharacterSheet[],
+  sheetsById: Map<string, CharacterSheet>,
+): ReactionTiming {
+  const other = args.targetCharacterId ? resolveSheetRef(args.targetCharacterId, sheets, sheetsById) : null;
+  if (other && other.id !== sheet.id) {
+    return "after";
+  }
+  const feature = args.feature.trim();
+  const authored = heldReaction(sheet, feature) ?? authoredReactionNamed(feature.replace(/\s*\(.*$/, ""));
+  if (authored) {
+    return timingOfDoes(authored.reaction.does);
+  }
+  const authors = spellAuthorsFor(campaign);
+  const spell = spellFactsFor(feature, authors);
+  if (spell?.castingTime === "reaction") {
+    return reactionTimingOf(spellEngineName(spell.name, authors));
+  }
+  return reactionTimingOf(feature);
+}
+
 export function handleUseReaction(
   campaign: Campaign,
   turn: DmTurn,
@@ -391,7 +426,7 @@ export function handleUseReaction(
   }
   const encounter = getActiveEncounter(campaign.id);
   const feature = args.feature.trim();
-  const refused = reactionRefusal(campaign.id, sheet, encounter, feature);
+  const refused = reactionRefusal(campaign.id, sheet, encounter, feature, timingOfUseReaction(campaign, sheet, args, sheets, sheetsById));
   if (refused) {
     return { error: refused };
   }
@@ -437,6 +472,33 @@ export function handleUseReaction(
   const spell = spellFactsFor(feature, spellAuthorsFor(campaign));
   if (spell?.castingTime === "reaction") {
     return reactionSpell(ctx, spell.name);
+  }
+  // A limited-use reaction with a counter (Stone's Endurance, Misty Escape,
+  // Warding Maneuver, Strength before Death...) is a use_resource spend: the
+  // use, the reaction and the effect go together there, where before this
+  // branch let use_reaction spend the reaction and leave the counter full.
+  const counter = matchResource(feature);
+  if (counter?.action === "reaction" && sheet.resources?.[counter.id]) {
+    return applyDmMutation(
+      campaign,
+      turn.id,
+      "use_resource",
+      JSON.stringify({
+        characterId: sheet.id,
+        resource: feature,
+        ...(args.targetCharacterId ? { targetCharacterId: args.targetCharacterId } : {}),
+        ...(args.targetEnemyId ? { targetEnemyId: args.targetEnemyId } : {}),
+        reason: args.reason ?? feature,
+      }),
+      sheets,
+      sheetsById,
+    ).result;
+  }
+  // Parry, Riposte and Brace, and the ally's side of Maneuvering Attack and
+  // Commander's Strike (src/lib/dm/maneuver-reactions.ts).
+  const maneuver = maneuverReaction(ctx);
+  if (maneuver) {
+    return maneuver;
   }
   if (/uncanny dodge/.test(lowered)) {
     return uncannyDodge(ctx);

@@ -36,6 +36,7 @@ import { builderCasting, builderSpellAdvice } from "./casting";
 import { grantedSkillSources } from "./reconcile";
 import { authoredFeatDesc } from "@/lib/srd/feat-effects";
 import { applyFeatGrants, featGrantSpec, type FeatGrantSpec } from "@/lib/srd/feat-grants";
+import { applySubclassTraining, subclassGrants } from "@/lib/srd/subclass-training";
 import { featSpellGrants, featSpellNames } from "@/lib/srd/feat-spells";
 import { expandBackgroundGear } from "@/lib/srd/gear-choices";
 import { splitToolGrants, type ToolChoice } from "@/lib/srd/tool-choices";
@@ -294,6 +295,13 @@ export function useBuilderDerived({
   // background's grants, every skill and language picked, and what the
   // feats grant beyond their point (issue #125), the picks as made so far
   // and the fixed grants always, the way the server applies them.
+  // What the chosen subclass trains the character in by this level (issue
+  // 251), each grant shaped as a feat's so the class step asks for its picks
+  // with the feat pickers (src/lib/srd/subclass-training.ts).
+  const subclassTraining = useMemo(
+    () => (klass && subclass ? subclassGrants([{ id: klass.id, level: effectiveLevel, subclass }]) : []),
+    [klass, subclass, effectiveLevel],
+  );
   const training = useMemo(() => {
     const skills = proficientSkills;
     const proficiencies = {
@@ -318,13 +326,16 @@ export function useBuilderDerived({
       armor: [...new Set([...(klass?.armor ?? []), ...(race?.armor ?? [])])],
       weapons: [...new Set([...(klass?.weapons ?? []), ...(race?.weapons ?? [])])],
     };
-    return applyFeatGrants({
+    const withFeats = applyFeatGrants({
       proficiencies,
       feats: featNames.map((name) => ({ name, desc: featDescOf(name) })),
       choices: featChoices,
       strict: false,
     }).proficiencies;
-  }, [proficientSkills, klass, race, background, expertisePicks, bonusLanguages, trainedTools, featNames, featDescOf, featChoices]);
+    // And the subclass's training (issue 251): a Life Domain's heavy armor,
+    // a Lore bard's three skills as picked on the class step.
+    return applySubclassTraining({ proficiencies: withFeats, grants: subclassTraining, choices: featChoices, strict: false }).proficiencies;
+  }, [proficientSkills, klass, race, background, expertisePicks, bonusLanguages, trainedTools, featNames, featDescOf, featChoices, subclassTraining]);
 
   const preview = useMemo(() => {
     if (!shownAbilities || !race || !klass || !background) {
@@ -383,11 +394,11 @@ export function useBuilderDerived({
   // The training a kit's "(if proficient)" options ask about.
   const kitTraining = useMemo<KitTraining>(
     () => ({
-      armor: [...(klass?.armor ?? []), ...(race?.armor ?? [])],
-      weapons: [...(klass?.weapons ?? []), ...(race?.weapons ?? [])],
+      armor: [...(klass?.armor ?? []), ...(race?.armor ?? []), ...subclassTraining.flatMap((grant) => grant.spec.armor)],
+      weapons: [...(klass?.weapons ?? []), ...(race?.weapons ?? []), ...subclassTraining.flatMap((grant) => grant.spec.fixedWeapons)],
       subclass,
     }),
-    [klass, race, subclass],
+    [klass, race, subclass, subclassTraining],
   );
   const startingKit = useMemo(
     () =>
@@ -657,6 +668,7 @@ export function useBuilderDerived({
     featNames,
     featDescOf,
     featSpecOf,
+    subclassTraining,
     training,
     preview,
     equipmentSuggestions,

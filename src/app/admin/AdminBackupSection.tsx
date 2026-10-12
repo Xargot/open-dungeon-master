@@ -197,7 +197,18 @@ export function AdminBackupSection() {
         </p>
       ) : null}
       {backups.length === 0 ? (
-        (loadError ? <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} /> : loaded ? <EmptyState art="scrolls" size="sm" title="No backups yet. Take one before a big session, or restore one you made with scripts/odm-backup.mjs." /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={() => setReloads((current) => current + 1)}
+          />
+        ) : loaded ? (
+          <EmptyState
+            size="sm"
+            art="scrolls"
+            title="No backups yet. Take one before a big session, or restore one you made with scripts/odm-backup.mjs."
+          />
+        ) : null)
       ) : (
         <ul className="stagger space-y-2">
           {backups.map((backup) => (

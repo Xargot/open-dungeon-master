@@ -55,12 +55,24 @@ await test("Only the kinds engine state can rule on are asked, and nothing is as
 await test("The request lists the kinds, the refs and the narration; the instructions name every skill id.", () => {
   const input = renderReaderInput(
     ["hit", "roll_ask"],
-    { creatures: [{ ref: "goblin", display: "Goblin 1" }], party: [{ ref: "c1", name: "Kara" }], speakers: [{ ref: "n1", name: "Marla" }] },
+    { creatures: [{ ref: "goblin", display: "Goblin 1" }], party: [{ ref: "c1", name: "Kara" }], speakers: [{ ref: "n1", name: "Marla" }], spent: [] },
     "Kara colpisce il goblin.",
   );
   assert.doesNotMatch(input, /Speaker refs/, "speakers are listed only when asked");
+  assert.doesNotMatch(input, /Spent refs/, "spends are listed only when a cast is asked");
+  const spent = [{ ref: "s1", name: "Hexblade's Curse", by: "Vesper" }, { ref: "s2", name: "dash", by: "Kara" }];
+  assert.doesNotMatch(renderReaderInput(["hit"], { creatures: [], party: [], speakers: [], spent }, "x"), /Spent refs/);
+  assert.doesNotMatch(renderReaderInput(["cast"], { creatures: [], party: [], speakers: [], spent: [] }, "x"), /Spent refs/, "nothing spent, nothing listed");
   assert.match(
-    renderReaderInput(["speaker"], { creatures: [], party: [], speakers: [{ ref: "n1", name: "Marla Venn", aliases: ["il Capitano"] }, { ref: "c1", name: "Kara" }] }, "«Basta», dice il Capitano."),
+    renderReaderInput(["cast"], { creatures: [], party: [], speakers: [], spent }, "x"),
+    /^Spent refs: "s1" for Hexblade's Curse \(Vesper\), "s2" for dash \(Kara\)$/m,
+  );
+  assert.match(readerSystem([], false), /Add "spent":SPENT_REF only when/, "a cast can say which spend it describes");
+  assert.doesNotMatch(readerSystem([], false), /"spell":"English spell name","spent"/, "spent is no field of the cast template");
+  assert.match(readerSystem([], false), /Never for a spell the narration names or says is cast/);
+
+  assert.match(
+    renderReaderInput(["speaker"], { creatures: [], party: [], speakers: [{ ref: "n1", name: "Marla Venn", aliases: ["il Capitano"] }, { ref: "c1", name: "Kara" }], spent: [] }, "«Basta», dice il Capitano."),
     /^Speaker refs: "n1" for Marla Venn \(also: il Capitano\), "c1" for Kara$/m,
     "each speaker's other names are listed, so a line tagged by one finds them",
   );
@@ -95,6 +107,7 @@ const context = (text, kinds) => ({
   leveledSpells: leveledSpellNames(),
   normalizeSpell: normalizeSpellName,
   skills: new Set(["perception", "stealth"]),
+  spent: new Map(),
   speakers: namedSpeakers(
     text,
     new Map([
@@ -124,6 +137,19 @@ await test("A claim of a kind not asked, about a creature the engine does not kn
   assert.deepEqual(fireball, { kind: "cast", caster: "Mira", spell: "fireball", quote: "Mira casts Fireball." });
 });
 
+await test("A cast tied to something its own caster spent this turn is that spend, not a spell; tied to anything else it is still a cast.", () => {
+  const text = "Un'ombra fredda scivola sul chierico: un marchio nero gli brucia sulla tunica. Mira lo paralizza con un gesto.";
+  const ctx = { ...context(text, ["cast"]), spent: new Map([["s1", mira.id], ["s2", "kara-id"]]) };
+  const bane = { kind: "cast", caster: mira.id, spell: "Bane", quote: "un marchio nero gli brucia sulla tunica" };
+  const hold = { kind: "cast", caster: mira.id, spell: "Hold Person", quote: "Mira lo paralizza con un gesto" };
+  assert.deepEqual(checkClaims([{ ...bane, spent: "s1" }], ctx), [], "her own spend");
+  assert.equal(checkClaims([{ ...hold, spent: "s2" }], ctx).length, 1, "somebody else's spend");
+  assert.equal(checkClaims([{ ...hold, spent: "s9" }], ctx).length, 1, "a spend the turn never made");
+  // A reader that fills the field it leaves empty with null.
+  assert.equal(checkClaims([{ ...hold, spent: null }], ctx).length, 1, "no spend, written as null");
+  assert.deepEqual(checkClaims([{ ...bane, spent: "s1" }, hold], ctx), [{ kind: "cast", caster: "Mira", spell: "hold person", quote: hold.quote }]);
+});
+
 await test("A cantrip cast, an unknown skill or a save with no ability is dropped; a malformed claim drops alone.", () => {
   const text = "Mira casts Fire Bolt. Everyone, roll Perception. Make a save!";
   const ctx = context(text, ALL);
@@ -140,6 +166,17 @@ await test("A cantrip cast, an unknown skill or a save with no ability is droppe
     ctx,
   );
   assert.deepEqual(kept, [{ kind: "roll_ask", character: "all", check: "skill", skill: "perception", quote: "roll Perception" }]);
+});
+
+await test("A roll ask whose empty fields the reader wrote as null is kept as if they were left out.", () => {
+  const text = "Mira, roll Perception. Mira, make a Wisdom saving throw, DC 13.";
+  const ctx = context(text, ALL);
+  const skill = { kind: "roll_ask", character: mira.id, check: "skill", skill: "perception", quote: "Mira, roll Perception." };
+  const save = { kind: "roll_ask", character: mira.id, check: "save", ability: "wis", dc: 13, quote: "make a Wisdom saving throw, DC 13" };
+  assert.deepEqual(checkClaims([{ ...skill, ability: null, dc: null }], ctx), [skill]);
+  assert.deepEqual(checkClaims([{ ...save, skill: null }], ctx), [save]);
+  // Null is no skill: a skill check still needs one.
+  assert.deepEqual(checkClaims([{ ...skill, skill: null }], ctx), []);
 });
 
 await test("A speaker claim acts only on a quoted line, a known ref, and a person the prose itself names.", () => {

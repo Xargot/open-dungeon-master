@@ -49,7 +49,7 @@ export const legendaryTools: ToolDef[] = [
     function: {
       name: "legendary_action",
       description:
-        "A legendary creature spends one of its legendary actions at the END of another creature's turn: one option per turn that ends, never two at once. Name the action from its stat block; the server checks the pool (it refills at the start of the creature's own turn), the cost and the turn. If the action is one of its attacks, follow with enemy_attack naming the same attack; otherwise narrate the effect the block describes.",
+        "Spend one of a legendary creature's legendary actions at the END of another creature's turn: one option per turn that ends, never two at once. The server checks the pool (it refills at the start of the creature's own turn), the cost and the turn. If the action is one of its attacks, follow with enemy_attack naming the same attack; otherwise narrate the effect the block describes.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -80,7 +80,7 @@ export const legendaryTools: ToolDef[] = [
     function: {
       name: "lair_action",
       description:
-        "On initiative count 20 of each round (losing ties), when the fight is in a lair, the lair itself acts once. The server announces the moment (\"Initiative 20: the lair stirs\") and refuses the call at any other. Name one of the lair options the block prints (its words or its number); a lair with none printed takes a line of your own. The server records it, refuses a second in the round, and says how an option with a save resolves.",
+        "Resolve the lair's own action: on initiative count 20 of each round (losing ties), when the fight is in a lair, the lair itself acts once. The server announces the moment (\"Initiative 20: the lair stirs\") and refuses the call at any other. The server records it, refuses a second in the round, and says how an option with a save resolves.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -202,7 +202,7 @@ export function handleLegendaryAction(campaign: Campaign, rawArguments: string):
   const turnDue =
     Boolean(encounter.legendary.handoff?.enemyIds.includes(enemy.id)) && !enemyActedThisRound(encounter, enemy.id);
   if ((current && orderEntryId(current) === enemy.id) || turnDue) {
-    return { error: `It is ${enemy.displayName}'s own turn; legendary actions come at the end of other creatures' turns. Take its turn with enemy_attack (or its ability or spell) first.` };
+    return { error: `It is ${enemy.displayName}'s own turn; legendary actions come at the end of other creatures' turns. Take its turn first: enemy_attack, or cast_at_player / aoe_damage with casterEnemyId for an ability or spell.` };
   }
   // One option at the end of each other creature's turn: the turn is the
   // pointer's, and each enemy that acts since closes a turn of its own.

@@ -71,7 +71,7 @@ export function requestDmMessage(
       settings.customModel,
       settings.customApiKey,
       messages,
-      options,
+      { ...options, role: "story" },
     ),
   );
 }
@@ -115,7 +115,7 @@ export async function requestUtilityMessage(
               model,
               settings.utilityApiKey,
               messages,
-              options,
+              { ...options, role: "utility" },
             ),
           );
   if (!result.error) {

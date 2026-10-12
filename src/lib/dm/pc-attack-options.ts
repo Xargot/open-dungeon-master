@@ -15,7 +15,8 @@ import { resourceLeft } from "@/lib/dm/attack-rules";
 import type { AttackKind } from "@/lib/dm/pc-attack-profile";
 import { acBreakdownFor, type SheetDerived } from "@/lib/srd";
 import { RAGING } from "@/lib/srd/class-resources";
-import { authoredBonusAttackProblem } from "@/lib/srd/authored-economy";
+import { CURVING_SHOT, authoredBonusAttackProblem } from "@/lib/srd/authored-economy";
+import { featureBonusAttack, type FeatureBonusAttack } from "@/lib/dm/feature-bonus-attacks";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 
 export const BONUS_ATTACKS = ["martial arts", "frenzy", "feature"] as const;
@@ -71,6 +72,9 @@ export type AttackOptions = {
   // Horde Breaker's extra attack: it spends no attack of the action, only
   // the once-per-turn key it claims.
   hordeBreaker: boolean;
+  // A feature's bonus attack with its own use, trigger or extras (War
+  // Priest, Unwavering Mark, Hungry Jaws: feature-bonus-attacks.ts).
+  featureBonus?: FeatureBonusAttack | null;
 };
 
 export function checkAttackOptions(input: {
@@ -137,12 +141,25 @@ export function checkAttackOptions(input: {
       const featBonus = greatWeapon ? "Great Weapon Master" : featBonusAttack(sheet, budget, { weaponAttack, melee: meleeWeapon, weapon: profile.weapon });
       // Battle Magic, War Magic, Sudden Strike, Telekinetic Master...
       // (src/lib/srd/authored-effects.ts).
-      const granted = featBonus ? { ok: true } : authoredBonusAttackProblem(sheet, budget);
+      const authored = featBonus ? { ok: true } : authoredBonusAttackProblem(sheet, budget);
+      // War Priest, Unwavering Mark, Hungry Jaws, Pistol and Blade
+      // (src/lib/dm/feature-bonus-attacks.ts).
+      const own = "refused" in authored ? featureBonusAttack({ sheet, budget, profile, melee: meleeWeapon, targetId: input.targetId, mods: derived.abilityMods }) : null;
+      const granted = own && !("refused" in own) ? { ok: true } : own && "refused" in authored && /^No feature/.test(authored.refused) ? own : authored;
       if ("refused" in granted || !weaponAttack) {
         const gwmHint = holdsFeat(sheet, "Great Weapon Master") ? " Great Weapon Master's bonus attack follows a melee critical hit or a kill on this turn." : "";
         return { refused: "refused" in granted ? `${sheet.name}: ${granted.refused}${gwmHint}${featBonusAttackHint(sheet)}` : "A feature's bonus-action attack is a weapon attack." };
       }
       options.bonusFeat = featBonus;
+      options.featureBonus = own && !("refused" in own) ? own : null;
+      // Curving Shot rerolls the missed arrow at a different creature.
+      if ("feature" in authored && authored.feature === "Curving Shot") {
+        const missed = budget.oncePerTurn.find((key) => key.startsWith(CURVING_SHOT))?.slice(CURVING_SHOT.length);
+        if (missed && input.targetId === missed) {
+          return { refused: `${sheet.name}: Curving Shot sends the missed arrow at a different target, not the creature it missed.` };
+        }
+        options.featureBonus = { feature: "Curving Shot", noAmmo: true };
+      }
     } else {
       if (!hasFeature(sheet, "frenzy")) {
         return { refused: `${sheet.name} has no Frenzy; the bonus-action attack of a frenzy is a Berserker's.` };

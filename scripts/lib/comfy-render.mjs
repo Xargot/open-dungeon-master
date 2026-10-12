@@ -9,6 +9,9 @@
 //   "flux":           Flux schnell, four steps, no negative prompt. Painted,
 //                     stylised and consistent, which is what the map art needs;
 //                     the SDXL checkpoint paints photographs.
+//   "qwen":           Qwen Image 2.1, the slowest and the most obedient: it
+//                     draws the one object a prompt names and keeps it clean,
+//                     which is what the small UI glyphs need.
 
 import { execFileSync } from "node:child_process";
 
@@ -24,6 +27,14 @@ export const FLUX = {
   clip2: "clip_l.safetensors",
   vae: "ae.safetensors",
   steps: 4,
+};
+
+export const QWEN = {
+  unet: "qwen_image_2.1_int8_convrot.safetensors",
+  clip: "qwen3vl_8b_int8_convrot.safetensors",
+  vae: "qwen_image_2.1_vae_bf16.safetensors",
+  steps: 16,
+  cfg: 4,
 };
 
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
@@ -167,8 +178,39 @@ function buildFlux(o) {
   return { workflow, image: ["8", 0], vae: ["3", 0] };
 }
 
+// Square only: the 2.1 text encoder hands back an empty latent of
+// `resolution` on each side, the size the model was tuned to sample.
+function buildQwen(o) {
+  const workflow = {
+    "1": { class_type: "UNETLoader", inputs: { unet_name: QWEN.unet, weight_dtype: "default" } },
+    "2": { class_type: "CLIPLoader", inputs: { clip_name: QWEN.clip, type: "qwen_image", device: "default" } },
+    "3": { class_type: "VAELoader", inputs: { vae_name: QWEN.vae } },
+    "4": {
+      class_type: "TextEncodeQwenImage21",
+      inputs: { clip: ["2", 0], prompt: o.prompt, negative_prompt: o.negative || "", resolution: o.width },
+    },
+    "5": {
+      class_type: "KSampler",
+      inputs: {
+        model: ["1", 0],
+        positive: ["4", 0],
+        negative: ["4", 1],
+        latent_image: ["4", 2],
+        seed: o.seed,
+        steps: o.steps ?? QWEN.steps,
+        cfg: o.cfg ?? QWEN.cfg,
+        sampler_name: "euler",
+        scheduler: "simple",
+        denoise: 1,
+      },
+    },
+    "6": { class_type: "VAEDecode", inputs: { samples: ["5", 0], vae: ["3", 0] } },
+  };
+  return { workflow, image: ["6", 0], vae: ["3", 0] };
+}
+
 function buildWorkflow(o) {
-  const built = o.model === "flux" ? buildFlux(o) : buildSdxl(o);
+  const built = o.model === "flux" ? buildFlux(o) : o.model === "qwen" ? buildQwen(o) : buildSdxl(o);
   const { workflow, image } = built;
   workflow["90"] = { class_type: "SaveImage", inputs: { images: image, filename_prefix: o.prefix } };
   if (o.cutout) {

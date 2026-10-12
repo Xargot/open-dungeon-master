@@ -479,6 +479,64 @@
   to { opacity: 1; transform: none; }
 }
 
+/* ---- customize the hand (issue 231): seats, rows, the buttons that move a card ---- */
+
+.hand-arrange-seats { display: inline-flex; gap: 3px; }
+.hand-arrange-seat {
+  width: 10px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(212, 171, 58, 0.45);
+  background: rgba(13, 11, 28, 0.6);
+  transition: background-color var(--dur-quick) var(--ease-snap), box-shadow var(--dur-quick) var(--ease-snap), transform 240ms var(--ease-spring);
+}
+.hand-arrange-seat[data-filled="true"] {
+  background: linear-gradient(180deg, #ecd287, #b8902c);
+  box-shadow: 0 0 8px rgba(236, 210, 135, 0.45);
+  transform: translateY(-1px);
+}
+.hand-arrange-row[data-place="hand"] > div { border-color: rgba(212, 171, 58, 0.35); }
+.hand-arrange-step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 113, 108, 0.5);
+  color: #d6d3d1;
+  transition: border-color var(--dur-quick) var(--ease-snap), color var(--dur-quick) var(--ease-snap), transform 240ms var(--ease-spring);
+}
+.hand-arrange-step:disabled { opacity: 0.3; cursor: default; }
+.hand-arrange-step:not(:disabled):is(:hover, :focus-visible) { border-color: rgba(244, 224, 166, 0.85); color: #fde68a; outline: none; transform: translateY(-1px); }
+.hand-arrange-move {
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(212, 171, 58, 0.45);
+  background: rgba(48, 40, 83, 0.35);
+  color: #ecd287;
+  font-size: 12px;
+  white-space: nowrap;
+  transition: border-color var(--dur-quick) var(--ease-snap), background-color var(--dur-quick) var(--ease-snap), transform 240ms var(--ease-spring);
+}
+.hand-arrange-move:is(:hover, :focus-visible) { border-color: rgba(244, 224, 166, 0.9); background: rgba(72, 60, 120, 0.45); outline: none; transform: translateY(-1px); }
+.hand-arrange-move[data-full="true"] { opacity: 0.6; }
+.hand-arrange-done {
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ecd287, #b8902c);
+  color: #1c1407;
+  font-size: 13px;
+  font-weight: 600;
+  transition: filter var(--dur-quick) var(--ease-snap), transform 240ms var(--ease-spring);
+}
+.hand-arrange-done:is(:hover, :focus-visible) { filter: brightness(1.08); outline: none; transform: translateY(-1px); }
+html[data-theme="light"] .hand-arrange-seat { background: rgba(255, 250, 235, 0.8); border-color: #a6842a; }
+html[data-theme="light"] .hand-arrange-step { color: #44403c; border-color: rgba(120, 100, 60, 0.5); }
+html[data-theme="light"] .hand-arrange-move { color: #6b4f12; background: rgba(255, 248, 225, 0.8); border-color: #a6842a; }
+
 /* ---- quieter tables ---- */
 
 [data-effects="low"] .hand-card-foil::after { animation: none; opacity: 0; }
@@ -489,6 +547,7 @@
   .hand-slot { animation: none; transition: none; --spread: 0px !important; }
   .hand-more { transition: none; }
   .hand-more:is(:hover, :focus-visible) { transform: none; }
+  .hand-arrange-seat, .hand-arrange-step, .hand-arrange-move, .hand-arrange-done { transition: none; transform: none; }
   .hand-card-foil::after { animation: none; opacity: 0; }
   .hand-card[data-played="true"] { animation: none; opacity: 0.3; }
   .hand-preview, .hand-art-icon, .hand-art, .hand-card-foil, .hand-card-corner, .hand-card-ribbon { transition: none; }

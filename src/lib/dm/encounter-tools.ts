@@ -1,4 +1,5 @@
 import type { SystemGlyph } from "@/lib/system-glyphs";
+import { holdsOn } from "@/lib/dm/vitals-logic";
 import { fieldedSheets } from "@/lib/dm/roster";
 import { spellAuthorsFor } from "@/lib/dm/spell-authors";
 import { sceneIds } from "@/lib/ambience/catalog";
@@ -121,7 +122,7 @@ import { handleReaperCast } from "@/lib/dm/authored-reaper";
 import { sweepSummons } from "@/lib/dm/summon-store";
 import { endConcentrationOnFadedSummons } from "@/lib/dm/concentration-upkeep";
 import { afflictionsAtCombatStart } from "@/lib/dm/afflictions";
-import { enemiesDue, enemiesOwedTurn, holdForEnemies } from "@/lib/dm/enemies-due";
+import { ENEMY_TURNS_CUE, enemiesDue, enemiesOwedTurn, holdForEnemies } from "@/lib/dm/enemies-due";
 import { approachForCompanion } from "@/lib/dm/companion-approach";
 import { dmRoll } from "@/lib/dm/roll-card";
 
@@ -195,6 +196,10 @@ const startArgsSchema = z.object({
     return value !== null && Number.isFinite(feet) && feet >= 5 ? Math.min(feet, 600) : undefined;
   }, z.number().optional()),
   lair: z.boolean().optional(),
+  // Where the enemy comes from against the party's travel formation (issue
+  // 230): ahead puts its front nearest them, behind its rear. Anything else
+  // a weak caller sends reads as ahead.
+  from: z.preprocess((value) => (value === "behind" || value === "ahead" ? value : undefined), z.enum(["ahead", "behind"]).optional()),
 });
 
 // Accepts the documented {enemies:[...]} shape, or flat monster/name/count
@@ -326,7 +331,7 @@ function handleStartEncounter(
   // plan.md 4.1), written with the fight so the tracker shows them at once.
   initLegendaryPools(encounter, enemies, args.lair === true);
   saveEncounter(encounter);
-  createBattleMapForEncounter(campaign, encounter, enemies, sheets, args.distanceFeet, args.scene);
+  const placed = createBattleMapForEncounter(campaign, encounter, enemies, sheets, args.distanceFeet, args.scene, args.from);
   publishEncounter(campaign.id);
   // The fight's card: the opening line in ember, "Ambush" when the party
   // was caught, with the combat sting (SceneTitle.tsx).
@@ -385,6 +390,7 @@ function handleStartEncounter(
       ? { warning: "This fight can kill characters. Telegraph the danger." }
       : {}),
     map: "A tactical battle map was generated; positions appear in GAME STATE on your next call.",
+    ...(placed ? { formation: placed.formation } : {}),
     ...(ambushLines.length ? { ambush: ambushLines.join(" ") } : {}),
     ...(surprisedNames.length
       ? {
@@ -409,7 +415,7 @@ function handleStartEncounter(
 function entryAlive(entry: OrderEntry, enemiesById: Map<string, EncounterEnemy>): boolean {
   if (entry.kind === "pc") {
     const sheet = getSheetById(entry.characterId);
-    return (sheet?.currentHp ?? 0) > 0 && !isIncapacitated(sheet?.conditions ?? []);
+    return ((sheet?.currentHp ?? 0) > 0 || Boolean(sheet && holdsOn(sheet))) && !isIncapacitated(sheet?.conditions ?? []);
   }
   if (entry.kind === "enemy") {
     return enemiesById.get(entry.enemyId)?.status === "alive";
@@ -998,7 +1004,7 @@ function handleEndTurn(
       names.length
         ? ` ${names.join(" and ")} act${names.length === 1 ? "s" : ""} before ${next?.name}${
             turn.actor === "ai"
-              ? ": take their turns now, one enemy_attack (or ability or spell) each, then narrate and stop. Any you leave act on their own after your narration."
+              ? `. ${ENEMY_TURNS_CUE}`
               : "."
           }`
         : ""
@@ -1381,11 +1387,16 @@ function advancePointer(
   }
   publishEncounter(campaign.id);
   // The pointer move is announced as a table note so the transcript can
-  // never silently disagree with the banner about whose turn it is.
+  // never silently disagree with the banner about whose turn it is. Held for
+  // the enemies due, the banner says they go first, and so does the note:
+  // it is the newest line the DM turn the pass wakes answers.
+  const landedOn = encounter.order[encounter.turnIndex];
+  const owed = enemiesOwedTurn(encounter).map((enemy) => enemy.displayName);
+  const owedNote = owed.length ? ` ${owed.join(" and ")} act${owed.length === 1 ? "s" : ""} before ${landedOn.name}.` : "";
   if (typeof options?.announce === "function") {
-    tableNote(campaign, options.announce(encounter.order[encounter.turnIndex]), "cue-battle");
+    tableNote(campaign, `${options.announce(landedOn)}${owedNote}`, "cue-battle");
   } else if (options?.announce !== false) {
-    announceTurn(campaign, encounter, lairOpen(encounter) ? LAIR_NOTE : "");
+    announceTurn(campaign, encounter, `${lairOpen(encounter) ? LAIR_NOTE : ""}${owedNote}`);
   }
   // Downed PCs the pointer skipped make their death saves now, once per
   // pass, announced to the table as system messages and dice cards.

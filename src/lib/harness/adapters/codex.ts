@@ -27,6 +27,7 @@
 // seen rather than silently ignored.
 
 import { existsSync, readFileSync } from "node:fs";
+import { noteSpeed } from "@/lib/speed-status";
 import os from "node:os";
 import path from "node:path";
 import { startJsonRpc } from "../jsonrpc-stdio.ts";
@@ -249,14 +250,23 @@ async function start(options: HarnessStartOptions) {
     capabilities: { experimentalApi: true },
   });
   peer.notify("initialized", {});
-  const started = await peer.request<{ thread?: { id?: string }; threadId?: string }>("thread/start", {
+  const started = await peer.request<{ thread?: { id?: string }; threadId?: string; serviceTier?: string | null }>("thread/start", {
     cwd: options.cwd,
     approvalPolicy: "never",
     sandbox: "read-only",
     ephemeral: true,
     baseInstructions: options.system,
     ...(options.model ? { model: options.model } : {}),
+    // Fast for this thread alone (issue 255): the app-server's own
+    // parameter, so the user's config.toml is never changed.
+    ...(options.speed ? { serviceTier: "fast" } : {}),
   });
+  if (options.speed) {
+    noteSpeed(options.speed.role === "utility" ? "agent-utility" : "agent-story", {
+      model: options.model,
+      reported: typeof started.serviceTier === "string" ? started.serviceTier : null,
+    });
+  }
   threadId = started.thread?.id ?? started.threadId ?? "";
   if (!threadId) {
     peer.kill();
@@ -335,7 +345,10 @@ async function probeAppServer(binary: string, env: Record<string, string>) {
     let cursor: string | undefined;
     for (let page = 0; page < 5; page += 1) {
       const listed = await peer
-        .request<{ data?: Array<{ id?: string; model?: string; displayName?: string }>; nextCursor?: string }>(
+        .request<{
+          data?: Array<{ id?: string; model?: string; displayName?: string; serviceTiers?: Array<{ id?: string }> }>;
+          nextCursor?: string;
+        }>(
           "model/list",
           cursor ? { cursor } : {},
           15_000,
@@ -344,7 +357,13 @@ async function probeAppServer(binary: string, env: Record<string, string>) {
       for (const entry of listed?.data ?? []) {
         const id = entry.model ?? entry.id;
         if (id) {
-          models.push({ id, label: entry.displayName ?? id, cheap: /mini|nano/i.test(id) });
+          models.push({
+            id,
+            label: entry.displayName ?? id,
+            cheap: /mini|nano/i.test(id),
+            // The tiers this sign-in offers for the model (issue 255).
+            fast: (entry.serviceTiers ?? []).some((tier) => /^(fast|priority)$/i.test(tier.id ?? "")),
+          });
         }
       }
       cursor = listed?.nextCursor;

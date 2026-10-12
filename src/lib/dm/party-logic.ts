@@ -1,4 +1,5 @@
 import { normalizeReputation } from "@/lib/dm/faction-logic";
+import { describeFormation, normalizeFormationChange, type FormationChange } from "@/lib/dm/formation-logic";
 
 // The party as a thing in its own right.
 //
@@ -45,7 +46,11 @@ export type PartyState = {
   location: string;
   // The marching order, as character ids. Front of the list walks first,
   // which is what a trap, an ambush and a narrow corridor all want to know.
+  // The travel formation in force (issue 230, formation-logic.ts).
   marchingOrder: string[];
+  // The last change to it and the answers of the players it moved: a
+  // proposal waiting on them, or a change already in force.
+  formationChange: FormationChange | null;
   // What the party is doing between scenes: "resting", "on the road to
   // Dunmar", "searching the archive". One line, shown to the table.
   activity: string;
@@ -64,6 +69,7 @@ export function emptyParty(): PartyState {
     bankedXp: 0,
     location: "",
     marchingOrder: [],
+    formationChange: null,
     activity: "",
   };
 }
@@ -89,6 +95,7 @@ export function normalizeParty(raw: unknown): PartyState {
     marchingOrder: Array.isArray(record.marchingOrder)
       ? (record.marchingOrder as unknown[]).slice(0, 12).map((id) => String(id))
       : [],
+    formationChange: normalizeFormationChange(record.formationChange),
     activity: String(record.activity ?? "").slice(0, PARTY_ACTIVITY_MAX),
   };
 }
@@ -233,6 +240,10 @@ export function describeParty(
   party: PartyState,
   formatMoney: (copper: number) => string,
   nameOf: (characterId: string) => string,
+  // The characters in the party now. Given, the travel formation is read
+  // against them (who is placed, who is not yet); absent, the stored order
+  // is named as it stands.
+  partyIds?: string[],
 ): string {
   const lines: string[] = [];
   if (party.location) {
@@ -254,7 +265,12 @@ export function describeParty(
         .join(", ")}`,
     );
   }
-  if (party.marchingOrder.length > 1) {
+  if (partyIds) {
+    const formation = describeFormation(party, partyIds, nameOf);
+    if (formation) {
+      lines.push(formation);
+    }
+  } else if (party.marchingOrder.length > 1) {
     lines.push(`Marching order (front first): ${party.marchingOrder.map(nameOf).join(", ")}`);
   }
   return lines.length ? `The party as a whole:\n${lines.join("\n")}` : "";

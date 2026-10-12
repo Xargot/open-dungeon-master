@@ -81,16 +81,16 @@ export const worldTools: ToolDef[] = [
     function: {
       name: "roll_treasure",
       description:
-        "Generate treasure scaled to a challenge and pay it into the party's purses. Pass the CR (or the toughest enemy's CR) of what they overcame; the server rolls the coin value from the DMG hoard tables, splits it among the named characters, and moves the gold with modify_gold so loot is real, not narrated. It also tells you how many magic items a hoard of that size tends to hold, which you then hand out with grant_item. Call this instead of inventing a gold figure.",
+        "Generate treasure scaled to a challenge from the DMG hoard tables and pay it into the named characters' purses through modify_gold.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          cr: { type: "number", description: "The challenge rating the treasure is scaled to." },
+          cr: { type: "number", description: "The challenge rating of what they overcame (or the toughest enemy's), which the treasure is scaled to." },
           characterIds: {
             type: "array",
             items: { type: "string" },
-            description: "Who shares the coin. Omit to split among the whole party.",
+            description: "Who shares the coin: exact characterIds from GAME STATE. Omit to split among the whole party.",
           },
           individual: {
             type: "boolean",
@@ -108,13 +108,13 @@ export const worldTools: ToolDef[] = [
     function: {
       name: "damage_object",
       description:
-        "Resolve an attempt to break an inanimate object (a door, a chest, a rope, a window) against the DMG object table. Give its name, material and size (or an explicit ac and hp). For a character's weapon blow pass characterId (and weapon): the server rolls their attack against the object's AC and their damage. For anything else pass the damage. A named object keeps the damage it has taken, so each call is one blow; the server reports whether it breaks. Objects are immune to poison and psychic damage. A section of a Wall of Ice is named 'Wall of Ice section N' (10-foot sections from the end it was laid from): the server uses its AC 12 and 30 hit points, doubles fire, and when it breaks opens its squares and lays the frigid air.",
+        "Resolve an attempt to break an inanimate object (a door, a chest, a rope, a window) against the DMG object table. Give its name, material and size (or an explicit ac and hp). Each call is one blow. Objects are immune to poison and psychic damage. A section of a Wall of Ice is named 'Wall of Ice section N' (10-foot sections from the end it was laid from): the server uses its AC 12 and 30 hit points, doubles fire, and when it breaks opens its squares and lays the frigid air.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          name: { type: "string", description: "What the object is, e.g. 'the oak door'. The server keeps its damage between blows." },
-          characterId: { type: "string", description: "The character striking it with a weapon; the server rolls their attack and damage." },
+          name: { type: "string", description: "What the object is ('the oak door'). The server keeps its damage between blows." },
+          characterId: { type: "string", description: "The character striking it with a weapon: exact characterId from GAME STATE." },
           weapon: { type: "string", description: "The weapon they strike with, from their equipment." },
           damageType: { type: "string", description: "Damage type, for damage you pass yourself." },
           material: { type: "string", enum: MATERIALS, description: "What the object is made of." },
@@ -135,7 +135,7 @@ export const worldTools: ToolDef[] = [
     function: {
       name: "travel",
       description:
-        "Resolve a stretch of overland travel, one day's leg at a time. Pass the hours travelled, or the miles to cover, and the pace (fast, normal, slow); the server moves the clock, reports the miles covered (4, 3 or 2 an hour, half in difficult terrain, less in snow or a storm), the pace's effect on watchfulness (fast travellers take -5 passive Perception; only a slow pace allows stealth, so Stealth checks are refused while the party marches at a normal or fast pace) and, for a forced march beyond 8 hours, rolls each character's Constitution save and applies a level of exhaustion to any who fail. Call this for a day's march instead of deciding distance or fatigue yourself.",
+        "Resolve a stretch of overland travel, one day's leg at a time. Snow or a storm slows the march further; fast travellers take -5 passive Perception; only a slow pace allows stealth, so Stealth checks are refused while the party marches at a normal or fast pace; a failed forced-march save costs a level of exhaustion.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -148,17 +148,17 @@ export const worldTools: ToolDef[] = [
           terrain: {
             type: "string",
             enum: ["normal", "difficult"],
-            description: "Difficult terrain (dense forest, deep swamp, steep mountains, ice) halves the distance covered. Defaults to normal.",
+            description: "Difficult terrain (dense forest, deep swamp, steep mountains, ice) halves the distance covered. Default 'normal'.",
           },
           pace: {
             type: "string",
             enum: ["fast", "normal", "slow"],
-            description: "Travel pace. Defaults to normal.",
+            description: "Travel pace. Default 'normal'.",
           },
           characterIds: {
             type: "array",
             items: { type: "string" },
-            description: "Who is travelling. Omit for the whole party.",
+            description: "Who is travelling: exact characterIds from GAME STATE. Omit for the whole party.",
           },
           water: WATER_PROPERTY,
           reason: { type: "string", description: "Short note on the journey." },
@@ -172,7 +172,7 @@ export const worldTools: ToolDef[] = [
     function: {
       name: "pass_time",
       description:
-        "Move the in-world clock forward when time passes and nothing else accounts for it: waiting out a storm, a night at an inn, a week of downtime, a long conversation. Travel and rests already advance the clock themselves, so do not call this alongside them. Time only moves forward.",
+        "Move the in-world clock forward when time passes and nothing else accounts for it: waiting out a storm, a night at an inn, a week of downtime, a long conversation. Travel and rests already advance the clock themselves, so do not call it alongside them. Time only moves forward.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -181,7 +181,7 @@ export const worldTools: ToolDef[] = [
           unit: {
             type: "string",
             enum: ["minutes", "hours", "days", "weeks"],
-            description: "Unit of the amount. Defaults to hours.",
+            description: "Unit of the amount. Default 'hours'.",
           },
           water: WATER_PROPERTY,
           reason: { type: "string", description: "Short note on what filled the time." },
@@ -210,7 +210,7 @@ export const worldTools: ToolDef[] = [
             type: "integer",
             minimum: 0,
             maximum: 3,
-            description: "0 none, 1 light, 2 steady, 3 heavy. Defaults from the sky.",
+            description: "0 none, 1 light, 2 steady, 3 heavy. Default: from the sky.",
           },
           reason: { type: "string" },
         },
@@ -223,13 +223,13 @@ export const worldTools: ToolDef[] = [
     function: {
       name: "show_title",
       description:
-        "Put a title card on every screen for a moment: a chapter name, a place the party arrives at, a dramatic reveal. Chapters, fights and dawns already show their own cards; use this for a beat that deserves one.",
+        "Put a title card on every screen for a moment: a chapter name, a place the party arrives at, a dramatic reveal. Chapters, fights and dawns already show their own cards; call it for a beat that deserves one.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           title: { type: "string", description: "A few words in display type." },
-          subtitle: { type: "string", description: "One line under it, optional." },
+          subtitle: { type: "string", description: "One line under it." },
           tone: {
             type: "string",
             enum: ["gold", "ember", "dawn", "plain"],

@@ -3,29 +3,25 @@
 // conditions a rider can leave on the target. Split from pc-attack.ts, which
 // decides the attack these belong to.
 
-import { holdsFeat } from "@/lib/srd/feat-effects";
+import { CURVING_SHOT } from "@/lib/srd/authored-economy";
+import { storeBudget } from "@/lib/dm/turn-budget";
 import { untilTurnEnd } from "@/lib/dm/turn-end";
 import type { Campaign } from "@/lib/db/campaigns";
 import type { PendingAttack } from "@/lib/db/dm-turns";
-import { getEnemy, patchEnemyConditions, type EncounterEnemy } from "@/lib/db/encounters";
+import { getActiveEncounter, getEnemy, patchEnemyConditions, type EncounterEnemy } from "@/lib/db/encounters";
 import { rollEnemySave } from "@/lib/dm/forced-save";
 import { resourceLeft } from "@/lib/dm/attack-rules";
 import type { ManeuverPick } from "@/lib/dm/pc-attack-plan";
-import { classLevelFor } from "@/lib/srd/multiclass";
 import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
 import { removeConditions, type ConditionMeta } from "@/lib/dm/condition-logic";
 import { sizeRank } from "@/lib/bestiary/statblock";
 import { publishEncounter } from "@/lib/dm/enemy-damage";
 import { applyDmMutation } from "@/lib/dm/mutations";
+import { GRAPPLING_STRIKE, MANEUVERED, maneuverDieFor, maneuverUse, offSwingRefusal, type ManeuverUse } from "@/lib/dm/maneuver-rules";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 
-// Battle Master superiority die by fighter level.
-export function superiorityDie(level: number): string {
-  if (level >= 18) return "d12";
-  if (level >= 10) return "d10";
-  return "d8";
-}
+export { superiorityDie, maneuverDieFor } from "@/lib/dm/maneuver-rules";
 
 // The condition a maneuver's rider save decides, when it has one.
 export const MANEUVER_RIDERS: Array<{ match: RegExp; condition: string; save: "str" | "wis" }> = [
@@ -64,6 +60,11 @@ export function pickManeuver(
       }`,
     };
   }
+  // A reaction, a bonus action of its own or a check is not part of a swing.
+  const elsewhere = offSwingRefusal(asked);
+  if (elsewhere) {
+    return { refused: elsewhere };
+  }
   const pool = resourceLeft(sheet, "Superiority Dice");
   if (pool === null || pool.left < 1) {
     return {
@@ -76,14 +77,14 @@ export function pickManeuver(
   return {
     maneuver: {
       name: asked.trim(),
-      // Multiclass: the superiority die grows with FIGHTER levels.
-      // Martial Adept's die is a d6 without a Battle Master's own.
-      die: classLevelFor(sheet, "fighter") ? superiorityDie(classLevelFor(sheet, "fighter")) : holdsFeat(sheet, "Martial Adept") ? "d6" : superiorityDie(sheet.level),
+      die: maneuverDieFor(sheet),
       precision: /precision/i.test(term),
       rider: MANEUVER_RIDERS.find((entry) => entry.match.test(term)) ?? null,
+      use: maneuverUse(term),
     },
   };
 }
+
 
 // What a hit spends, decided before the roll and paid after it: the smite
 // slot and the Superiority Die of an on-hit maneuver. Carried on a parked
@@ -91,7 +92,9 @@ export function pickManeuver(
 export type OnHitSpends = {
   characterId: string;
   smite?: { slot: number; dice: number; undeadOrFiend: boolean };
-  maneuver?: { name: string; die: string };
+  // `use` and `targetId`: Grappling Strike's die waits for the grapple, and
+  // Maneuvering Attack's hit opens an ally's move (maneuver-rules.ts).
+  maneuver?: { name: string; die: string; use?: ManeuverUse; targetId?: string };
   // Stunning Strike: 1 ki on the hit, then the target's CON save at this DC.
   stun?: { dc: number };
   // The damage before any on-hit dice, and what a critical adds to it.
@@ -120,6 +123,7 @@ export type ParkedAttack = PendingAttack & {
     openHand?: { choice: "prone" | "push" | "no reactions"; dc: number };
     hurl?: boolean;
     poison?: boolean;
+    tempHp?: { amount: number; feature: string };
   };
 };
 
@@ -151,7 +155,14 @@ export function spendOnHit(
       stunPaid = true;
     }
   }
-  if (spends.maneuver) {
+  if (spends.maneuver?.use === "grapple") {
+    // The die rides the grapple's Athletics check, which is the bonus
+    // action that may follow this hit (take_action grapple, bonus).
+    markAttacker(campaign, spends.characterId, `${GRAPPLING_STRIKE} (1${spends.maneuver.die})`, spends.maneuver.targetId);
+    notes.push(
+      `${spends.maneuver.name}: they may now try to grapple the target as a bonus action (take_action grapple with bonus true); the Superiority Die is spent on that Athletics check and added to it`,
+    );
+  } else if (spends.maneuver) {
     const spent = applyDmMutation(
       campaign,
       turnId,
@@ -168,6 +179,12 @@ export function spendOnHit(
       notes.push(`${spends.maneuver.name}: no Superiority Die left, so the hit lands without it`);
     } else {
       suffix += `+1${spends.maneuver.die}`;
+      if (spends.maneuver.use === "ally_move") {
+        markAttacker(campaign, spends.characterId, MANEUVERED, spends.maneuver.targetId);
+        notes.push(
+          `${spends.maneuver.name}: an ally who can see or hear them may use its reaction to move up to half its speed without drawing an opportunity attack from the target (use_reaction for that ally, feature "Maneuvering Attack", with x and y)`,
+        );
+      }
     }
   }
   if (spends.smite) {
@@ -190,6 +207,57 @@ export function spendOnHit(
     }
   }
   return { suffix, notes, stunPaid };
+}
+
+// A mark a maneuver's hit leaves on the attacker for the rest of this turn
+// (turnBegun: the turn it ends with is the one under way), naming the
+// creature it was against.
+function markAttacker(campaign: Campaign, characterId: string, condition: string, targetId: string | undefined) {
+  const sheet = getSheetById(characterId);
+  if (!sheet) {
+    return;
+  }
+  const held = sheet.conditions.filter((entry) => entry.toLowerCase().split(" (")[0] !== condition.split(" (")[0]);
+  const updated = patchSheet(sheet.id, {
+    conditions: [...held, condition],
+    conditionMeta: { ...sheet.conditionMeta, [condition]: untilTurnEnd(characterId, { turnBegun: true, ...(targetId ? { source: targetId } : {}) }) },
+  });
+  if (updated) {
+    publishPersisted(campaign.id, "sheet_updated", { sheet: updated });
+  }
+}
+
+// An Arcane Archer's arrow missed: Curving Shot may reroll it at another
+// creature with the bonus action, this turn (authored-economy.ts).
+export function openCurvingShot(campaignId: string, sheet: CharacterSheet, enemyId: string, weapon: string): string | null {
+  const holds = sheet.features.some((feature) => feature.name.trim().toLowerCase() === "curving shot");
+  if (!holds || !/bow\b/i.test(weapon)) {
+    return null;
+  }
+  const encounter = getActiveEncounter(campaignId);
+  const budget = encounter?.turnBudget;
+  if (!encounter || !budget || budget.ownerId !== sheet.id || budget.bonusUsed) {
+    return null;
+  }
+  storeBudget(encounter, { ...budget, oncePerTurn: [...budget.oncePerTurn.filter((key) => !key.startsWith(CURVING_SHOT)), `${CURVING_SHOT}${enemyId}`] });
+  return "Curving Shot: the bonus action may reroll this arrow at a different creature within 60 feet of this one (pc_attack bonusAttack \"feature\" at it)";
+}
+
+// Temporary hit points a hit gives the attacker (Hungry Jaws): they do not
+// stack, so the better of the two stays.
+export function gainTempHp(campaign: Campaign, sheetId: string, amount: number, feature: string): string {
+  const sheet = getSheetById(sheetId);
+  if (!sheet) {
+    return "";
+  }
+  if (amount <= (sheet.tempHp ?? 0)) {
+    return `${feature}: ${sheet.name} keeps their ${sheet.tempHp} temporary hit points, more than the ${amount} the bite gives.`;
+  }
+  const updated = patchSheet(sheet.id, { tempHp: amount });
+  if (updated) {
+    publishPersisted(campaign.id, "sheet_updated", { sheet: updated });
+  }
+  return `${feature}: ${sheet.name} gains ${amount} temporary hit points.`;
 }
 
 // Stunning Strike's save, once the ki is paid: CON against the monk's ki DC,

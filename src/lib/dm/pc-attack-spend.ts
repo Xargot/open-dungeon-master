@@ -5,6 +5,7 @@
 // the attack's profile and options are known. The budget is a copy; nothing
 // is stored until pc-attack.ts stores it.
 
+import { MELEE_ATTACKED } from "@/lib/dm/feature-bonus-attacks";
 import { holdsFeat } from "@/lib/srd/feat-effects";
 import { evadesOpportunityAttacksAfterMelee, isPolearm, MOBILE_ATTACKED, ONE_HANDED_ATTACKED, POLEARM_READY } from "@/lib/srd/feat-combat";
 import { attacksLeft, spendAction, spendAttack, type TurnBudget } from "@/lib/dm/action-budget";
@@ -34,12 +35,21 @@ export function spendAttackEconomy(input: {
   budget: TurnBudget | null;
   options: AttackOptions;
   grantedBonusAction: BuiltAttack["grantedBonusAction"];
+  // A swing that is itself the bonus action (Quick Toss), by its name.
+  bonusSwing?: string;
+  // A granted attack that comes with its activation (pc-attack-profile.ts).
+  grantedWithActivation?: string | null;
   encounterId: string;
   enemyId: string;
 }):
   | { budget: TurnBudget | null; spendNote: string | undefined; notes: string[] }
   | { refused: string } {
-  const { sheet, args, profile, kind, atRange, weaponAttack, options, grantedBonusAction, encounterId, enemyId } = input;
+  const { sheet, args, profile, kind, atRange, weaponAttack, options, grantedBonusAction, bonusSwing, encounterId, enemyId } = input;
+  // Once a turn, and only when the activation spent the bonus action.
+  const ridesActivation = (budget: TurnBudget) =>
+    input.grantedWithActivation && budget.bonusUsed && !budget.oncePerTurn.includes(`granted:${input.grantedWithActivation.toLowerCase()}`)
+      ? input.grantedWithActivation
+      : null;
   let budget = input.budget;
   // Notes the spends leave before the roll's situation is known.
   const notes: string[] = [];
@@ -65,7 +75,7 @@ export function spendAttackEconomy(input: {
   }
   if (budget) {
     const usesAttackAction =
-      !grantedBonusAction && !args.offHand && !options.bonusAttack && !options.hordeBreaker && kind !== "spell" && !multiattack;
+      !grantedBonusAction && !bonusSwing && !args.offHand && !options.bonusAttack && !options.hordeBreaker && kind !== "spell" && !multiattack;
     if (usesAttackAction) {
       const loading = loadingProblem({ who: sheet.name, profile, budget, feats: sheet.feats, campaignId: sheet.campaignId });
       // A new action (Action Surge, Haste) reloads; only a swing that would
@@ -75,10 +85,19 @@ export function spendAttackEconomy(input: {
       }
     }
     const flurryBefore = budget.flurryStrikes ?? 0;
+    const riding = grantedBonusAction ? ridesActivation(budget) : null;
     const spend = multiattack
       ? { ok: true as const, budget: multiattack.budget, note: multiattack.note }
+      : riding
+      ? {
+          ok: true as const,
+          budget: { ...budget, oncePerTurn: [...budget.oncePerTurn, `granted:${riding.toLowerCase()}`] },
+          note: `${riding}: the attack that comes with its activation, no second bonus action`,
+        }
       : grantedBonusAction
       ? spendAction(budget, "bonus", `the ${profile.weapon} attack`, sheet.name)
+      : bonusSwing
+      ? spendAction(budget, "bonus", bonusSwing, sheet.name)
       : options.bonusAttack
         ? spendAction(
             budget,
@@ -118,6 +137,11 @@ export function spendAttackEconomy(input: {
         budget = { ...budget, oncePerTurn: [...budget.oncePerTurn, MARTIAL_ARTS_READY] };
       }
     }
+    // A melee weapon attack this turn opens Pistol and Blade's shot
+    // (src/lib/dm/feature-bonus-attacks.ts).
+    if (weaponAttack && !profile.ranged && holdsPistolAndBlade(sheet) && !budget.oncePerTurn.includes(MELEE_ATTACKED)) {
+      budget = { ...budget, oncePerTurn: [...budget.oncePerTurn, MELEE_ATTACKED] };
+    }
     // Who was attacked this turn, for Horde Breaker's second target (kept
     // only for a ranger who can use it).
     if (hasHordeBreaker(sheet) && !budget.oncePerTurn.includes(`${ATTACKED}${enemyId}`)) {
@@ -147,3 +171,5 @@ export function spendAttackEconomy(input: {
   }
   return { budget, spendNote, notes };
 }
+
+const holdsPistolAndBlade = (sheet: CharacterSheet) => sheet.features.some((feature) => feature.name.trim().toLowerCase() === "pistol and blade");

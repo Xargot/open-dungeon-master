@@ -23,7 +23,7 @@ export const factionTools: ToolDef[] = [
     function: {
       name: "adjust_reputation",
       description:
-        "Move the party's standing with a faction by a step or two after something they did in front of that faction's people: kept a bargain, robbed a caravan, saved a member. The server clamps it to the minus five to five ladder and every member's social checks lean on it from then on. Call it before narrating the faction's reaction.",
+        "Move the party's standing with a faction by a step or two after something they did in front of that faction's people: kept a bargain, robbed a caravan, saved a member. The server clamps it to the minus five to five ladder. Call it before narrating the faction's reaction.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -45,7 +45,7 @@ export const factionTools: ToolDef[] = [
         type: "object",
         additionalProperties: false,
         properties: {
-          faction: { type: "string", description: "The faction's name or id." },
+          faction: { type: "string", description: "The faction's name or id from GAME STATE." },
           note: { type: "string", description: "The fact, in one line." },
           secret: { type: "boolean", description: "True when only the DM should know it yet." },
         },

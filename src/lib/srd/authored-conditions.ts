@@ -232,6 +232,51 @@ export const AUTHORED_CONDITION_ROWS: ConditionEffectRow[] = [
       bonusAction: true,
     },
   },
+  {
+    id: "eldritch_cannon",
+    match: ["eldritch cannon"],
+    summary:
+      "Eldritch Cannon: a bonus action activates it (use_resource \"Activate Cannon\": flamethrower or protector), or fires its Force Ballista (pc_attack weapon \"Force Ballista\", 2d8 force, a push of 5 feet on a hit).",
+    grantedAttack: {
+      name: "Force Ballista",
+      diceByLevel: [[1, "2d8"], [9, "3d8"]],
+      type: "force",
+      abilityToDamage: false,
+      ranged: true,
+      bonusAction: true,
+    },
+  },
+  // The genre classes' marks (authored-effects-genre.ts): the condition names
+  // its creature in its meta (quarry), and every attack on it carries the
+  // bonus (src/lib/dm/attack-marks.ts).
+  {
+    id: "target_lock",
+    match: ["target lock"],
+    summary: "Target Lock: +2 damage on attacks against the marked foe.",
+    onHitDice: { dice: "2", type: "" },
+    marksTarget: true,
+  },
+  {
+    id: "hunters_brand",
+    match: ["hunter's brand", "hunters brand"],
+    summary: "Hunter's Brand: +1d6 radiant on attacks against the branded creature, until it dies or the hunter rests.",
+    onHitDice: { dice: "1d6", type: "radiant" },
+    marksTarget: true,
+  },
+  {
+    id: "quarry",
+    match: ["quarry"],
+    summary: "Quarry: +1d6 damage on attacks against the marked creature, until it dies.",
+    onHitDice: { dice: "1d6", type: "" },
+    marksTarget: true,
+  },
+  summaryOnly("celestial_wings", "celestial revelation: heavenly wings", "Celestial Revelation (Heavenly Wings): a flying speed equal to the walking speed, and once a turn +proficiency bonus radiant damage on one target."),
+  summaryOnly("celestial_radiance", "celestial revelation: inner radiance", "Celestial Revelation (Inner Radiance): bright light; each creature within 10 feet takes radiant damage equal to the proficiency bonus at the end of the aasimar's turns, and once a turn +proficiency bonus radiant damage on one target."),
+  summaryOnly("celestial_shroud", "celestial revelation: necrotic shroud", "Celestial Revelation (Necrotic Shroud): creatures within 10 feet save (Charisma) or are frightened until the end of the aasimar's next turn, and once a turn +proficiency bonus necrotic damage on one target."),
+  summaryOnly("ashen_hymn", "ashen hymn", "Ashen Hymn: enemies within 10 feet have disadvantage on their first save against fear each turn, for a minute."),
+  summaryOnly("candlelight_vigil", "candlelight vigil", "Candlelight Vigil: allies within 10 feet add 1d4 to saves against the supernatural, for a minute."),
+  summaryOnly("head_of_steam", "head of steam", "Head of Steam: the next Piston Strike this turn deals +2d6 instead."),
+  summaryOnly("mantle_of_majesty", "mantle of majesty", "Mantle of Majesty: command is cast as a bonus action with no slot each turn for the minute, and a creature the bard charmed cannot attack them."),
   summaryOnly("soul_trinket", "soul trinket", "A soul trinket: advantage on Constitution saves and resistance to poison while it is held."),
   {
     id: "adjusted_density_lighter",

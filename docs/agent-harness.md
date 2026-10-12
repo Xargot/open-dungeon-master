@@ -89,6 +89,14 @@ with one). **Who may use it** decides whether every campaign on the server
 may, or only campaigns an administrator leads. The admin page shows the
 plan's usage when the program reports it.
 
+Claude Code writes the email address of the account it is signed in with
+into the first message of every turn it sends. To keep it out, sign the
+program in with a token instead: run `claude setup-token` once, then start
+the server with `CLAUDE_CODE_OAUTH_TOKEN` set to that token and
+`CLAUDE_CONFIG_DIR` pointing at an empty folder of its own (the address
+comes from the account details Claude Code keeps in its usual config
+folder). Both are passed to the program.
+
 Environment knobs: `HARNESS_MCP_URL` (when the server listens somewhere
 other than `127.0.0.1:$PORT`), `HARNESS_CONTEXT` (the context window turns
 are packed against; default 128K).

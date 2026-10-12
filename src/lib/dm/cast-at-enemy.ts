@@ -96,7 +96,10 @@ export function handleCastAtEnemy(
   if (!sheet) {
     return { error: "Unknown characterId; use one from GAME STATE." };
   }
-  if (sheet.currentHp <= 0) {
+  // A reaction spell is asked by the cast guard's reaction gate instead,
+  // which judges one answering the hit that dropped the caster as they stood
+  // before it (issue 233).
+  if (sheet.currentHp <= 0 && spellFactsFor(args.spell, spellAuthorsFor(campaign))?.castingTime !== "reaction") {
     return { error: `${sheet.name} is at 0 HP and cannot cast.` };
   }
   if (!sheet.spellcasting) {

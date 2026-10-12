@@ -621,6 +621,9 @@ export type CharacterSheet = {
   companionKind: "party" | "guest" | null;
   // Personality/voice brief the DM roleplays the companion from.
   personality: string;
+  // The cards its player keeps in the visible Hand, in order (issue 231,
+  // src/lib/battlemap/hand-layout.ts). Absent: the automatic split.
+  handLayout?: { fan: string[]; known: string[] };
   createdAt: string;
   updatedAt: string;
 };

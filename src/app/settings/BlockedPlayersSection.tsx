@@ -59,7 +59,18 @@ export function BlockedPlayersSection() {
       {blocked === null ? (
         <div className="skeleton-block h-12 rounded-xl" aria-label="Loading blocked players" />
       ) : blocked.length === 0 ? (
-        (loadError ? <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} /> : loaded ? <EmptyState art="board" size="sm" title="Nobody blocked." /> : null)
+        (loadError ? (
+          <LoadFailed
+            error={loadError}
+            onRetry={() => setReloads((current) => current + 1)}
+          />
+        ) : loaded ? (
+          <EmptyState
+            size="sm"
+            art="board"
+            title="Nobody blocked."
+          />
+        ) : null)
       ) : (
         <ul className="stagger space-y-2">
           {blocked.map((entry) => (

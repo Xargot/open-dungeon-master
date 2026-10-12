@@ -484,11 +484,17 @@ export function campaignLanguage(campaignId: string): TableLanguage {
   return campaign.gameSettings.tableLanguage;
 }
 
+// The stored party order, or nothing when the column is empty or not a list.
+function storedPartyOrder(raw: string | null): string[] {
+  const parsed = parseJson<unknown>(raw || "[]", []);
+  return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
+}
+
 export function listMembers(campaignId: string): CampaignMember[] {
   const rows = getDatabase()
     .prepare(
       `
-        SELECT m.user_id, u.username, u.avatar_json, m.role, m.ready, m.use_real_dice, m.hold_rolls, m.muted, m.active_character_id, m.joined_at
+        SELECT m.user_id, u.username, u.avatar_json, m.role, m.ready, m.use_real_dice, m.hold_rolls, m.muted, m.active_character_id, m.party_order_json, m.joined_at
         FROM campaign_members m
         JOIN users u ON u.id = m.user_id
         WHERE m.campaign_id = ?
@@ -505,6 +511,7 @@ export function listMembers(campaignId: string): CampaignMember[] {
     hold_rolls: number;
     muted: number;
     active_character_id: string | null;
+    party_order_json: string | null;
     joined_at: string;
   }>;
 
@@ -518,6 +525,7 @@ export function listMembers(campaignId: string): CampaignMember[] {
     holdRolls: Boolean(row.hold_rolls),
     muted: Boolean(row.muted),
     activeCharacterId: String(row.active_character_id ?? ""),
+    partyOrder: storedPartyOrder(row.party_order_json),
     joinedAt: row.joined_at,
   }));
 }
@@ -911,6 +919,16 @@ export function setMemberActiveCharacter(campaignId: string, userId: string, cha
   getDatabase()
     .prepare(`UPDATE campaign_members SET active_character_id = ? WHERE campaign_id = ? AND user_id = ?`)
     .run(characterId ?? "", campaignId, userId);
+}
+
+// This member's own order for the Party panel's cards (issue 240); an empty
+// list is the campaign's own order. Validated against the table's sheets by
+// the route (src/lib/party-order.ts normalizePartyOrder).
+export function setMemberPartyOrder(campaignId: string, userId: string, order: readonly string[]) {
+  getDatabase()
+    .prepare(`UPDATE campaign_members SET party_order_json = ? WHERE campaign_id = ? AND user_id = ?`)
+    .run(order.length ? JSON.stringify(order) : "", campaignId, userId);
+  touchCampaign(campaignId);
 }
 
 export function setMemberHoldRolls(campaignId: string, userId: string, holdRolls: boolean) {

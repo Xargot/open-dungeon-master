@@ -8,7 +8,8 @@
 import { getActiveEncounter, orderEntryId, saveEncounter, type Encounter } from "@/lib/db/encounters";
 import { activePublicEncounter } from "@/lib/db/encounter-view";
 import { publishPersisted } from "@/lib/events";
-import { reactionRefusal } from "@/lib/dm/reaction-gate";
+import { reactingSheet, reactionRefusal } from "@/lib/dm/reaction-gate";
+import { reactionTimingOf, type ReactionTiming } from "@/lib/dm/reaction-kinds";
 import {
   budgetApplies,
   freshBudget,
@@ -86,20 +87,26 @@ export function markReactionUsed(encounter: Encounter, characterId: string) {
 
 // A reaction as the cost of a feature, checked first and written last so a
 // refusal costs nothing (the resource-turn.ts pattern). Who may react is
-// asked as use_reaction asks it (src/lib/dm/reaction-gate.ts).
+// asked as use_reaction asks it (src/lib/dm/reaction-gate.ts), with the
+// feature's own timing (src/lib/dm/reaction-kinds.ts). `beforeDrop` says the
+// character was judged as they stood before the hit that dropped them, which
+// is what lets a use at 0 hit points through (issue 233).
 export function prepareReaction(
   encounter: Encounter,
   sheet: CharacterSheet,
   label: string,
-): { error: string } | { commit: () => Record<string, unknown> } {
-  const refused = reactionRefusal(encounter.campaignId, sheet, encounter, label);
+  timing: ReactionTiming = reactionTimingOf(label),
+): { error: string } | { commit: () => Record<string, unknown>; beforeDrop: boolean } {
+  const refused = reactionRefusal(encounter.campaignId, sheet, encounter, label, timing);
   if (refused) {
     return { error: refused };
   }
+  const { beforeDrop } = reactingSheet(encounter.campaignId, sheet, timing);
   if (encounter.reactionsUsed.includes(sheet.id)) {
     return { error: `${sheet.name} has already used their reaction; it comes back at the start of their next turn. ${label} does not happen.` };
   }
   return {
+    beforeDrop,
     commit: () => {
       const live = getActiveEncounter(encounter.campaignId);
       if (live && !live.reactionsUsed.includes(sheet.id)) {

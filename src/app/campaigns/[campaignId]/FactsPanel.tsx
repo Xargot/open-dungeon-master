@@ -67,12 +67,12 @@ function FactCard({
   const pinTitle = fact.pinned ? "Unpin" : "Pin: always kept in front of the DM, never auto-replaced";
   const items: ContextMenuItem[] = steersStory
     ? [
-        { id: "pin", label: pinTitle, glyph: "tab-facts", disabled: busy, onSelect: () => void patch({ pinned: !fact.pinned }) },
-        { id: "edit", label: "Edit", glyph: "tab-notes", onSelect: () => setEditing(true) },
+        { id: "pin", label: pinTitle, glyph: "ui-pin", disabled: busy, onSelect: () => void patch({ pinned: !fact.pinned }) },
+        { id: "edit", label: "Edit", glyph: "ui-edit", onSelect: () => setEditing(true) },
         {
           id: "retire",
           label: "Retire: the DM stops treating this as true",
-          glyph: "quest-failed",
+          glyph: "ui-delete",
           tone: "danger",
           separated: true,
           disabled: busy,
