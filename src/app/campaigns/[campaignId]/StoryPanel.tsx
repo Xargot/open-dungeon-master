@@ -20,6 +20,7 @@ import { ExportMenu } from "./ExportMenu";
 import { NpcReviewPanel } from "./NpcReviewPanel";
 import { DictateField } from "@/components/DictateField";
 import { appendDictation } from "@/lib/dictation";
+import { storyPanelArcForCampaign, visibleStoryChapters } from "@/lib/dm/story-panel-logic";
 
 // Confirmation for a chapter rewind (the server answered 409 with the
 // consequences). Rewinds are destructive: everything after the boundary is
@@ -274,10 +275,18 @@ function NpcReviewCard({ campaignId }: { campaignId: string }) {
 // those edits regardless; the UI just does not offer them.
 function ArcCard({ campaignId }: { campaignId: string }) {
   const [expanded, setExpanded] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loadingRequest, setLoadingRequest] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
-  const [arc, setArc] = useState<StoryArc | null>(null);
-  const [outline, setOutline] = useState("");
+  const [loadedArc, setLoadedArc] = useState<{
+    campaignId: string;
+    arc: StoryArc | null;
+    dmOutline: string;
+  } | null>(null);
+  const [reloadArc, setReloadArc] = useState(0);
+  const currentArc = storyPanelArcForCampaign(loadedArc, campaignId);
+  const arc = currentArc?.arc ?? null;
+  const outline = currentArc?.dmOutline ?? "";
+  const loading = expanded && (loadingRequest || !currentArc);
   // 1-based beat number being renamed, or an act number being added to.
   const [editingBeat, setEditingBeat] = useState<number | null>(null);
   const [addingToAct, setAddingToAct] = useState<number | null>(null);
@@ -287,6 +296,33 @@ function ArcCard({ campaignId }: { campaignId: string }) {
   // Plotting an arc is the story model's work; with none configured the
   // button and the promise that one gets written both go.
   const canPlot = offersStoryModel(useCapabilities());
+
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+
+    let current = true;
+    void fetch(`/api/campaigns/${campaignId}/arc`)
+      .then(async (response) => {
+        if (!response.ok) {
+          if (current) setLoadedArc({ campaignId, arc: null, dmOutline: "" });
+          return;
+        }
+        const data = (await response.json()) as { arc: StoryArc | null; dmOutline: string };
+        if (current) setLoadedArc({ campaignId, arc: data.arc, dmOutline: data.dmOutline });
+      })
+      .catch(() => {
+        if (current) setLoadedArc({ campaignId, arc: null, dmOutline: "" });
+      })
+      .finally(() => {
+        if (current) setLoadingRequest(false);
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [campaignId, expanded, reloadArc]);
 
   async function editBeat(edit: BeatEdit) {
     setBeatBusy(true);
@@ -302,7 +338,7 @@ function ArcCard({ campaignId }: { campaignId: string }) {
         setBeatError(data.error ?? "That edit did not go through.");
         return false;
       }
-      setArc(data.arc);
+      setLoadedArc({ campaignId, arc: data.arc, dmOutline: outline });
       return true;
     } catch {
       setBeatError("That edit did not go through.");
@@ -333,30 +369,16 @@ function ArcCard({ campaignId }: { campaignId: string }) {
     }
   }
 
-  async function load() {
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/campaigns/${campaignId}/arc`);
-      if (response.ok) {
-        const data = (await response.json()) as { arc: StoryArc | null; dmOutline: string };
-        setArc(data.arc);
-        setOutline(data.dmOutline);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
   function toggle() {
     const next = !expanded;
+    if (next) setLoadingRequest(true);
     setExpanded(next);
-    if (next) {
-      void load();
-    }
   }
 
   async function regenerate() {
     setRegenerating(true);
+    setLoadedArc(null);
+    setLoadingRequest(true);
     try {
       await fetch(`/api/campaigns/${campaignId}/arc`, { method: "POST" });
     } finally {
@@ -364,7 +386,7 @@ function ArcCard({ campaignId }: { campaignId: string }) {
       // double-submits, then the view refetches.
       setTimeout(() => {
         setRegenerating(false);
-        void load();
+        setReloadArc((current) => current + 1);
       }, 6_000);
     }
   }
@@ -806,13 +828,13 @@ export function StoryPanel({
   // The acts the table has been told about: names and recaps for the
   // headings between chapters (issue #31). Player-safe by construction.
   const [acts, setActs] = useState<PublicAct[]>([]);
-  // The whole list as /chapters answers it. The table's own list (from the
-  // snapshot and the stream) leaves the older chapters' summaries out
-  // (listChaptersForSnapshot); those are filled from here, while every
-  // chapter the stream has touched since keeps the stream's copy.
+  // The whole list as /chapters answers it. It can also include Chapter 1
+  // when the first campaign snapshot landed before the queued chapter setup.
+  // Snapshot and stream copies win for live state; this list fills in older
+  // summaries omitted from the snapshot.
   const [fullChapters, setFullChapters] = useState<Map<string, Chapter>>(() => new Map());
   const chapters = useMemo(
-    () => tableChapters.map((chapter) => (chapter.abridged ? (fullChapters.get(chapter.id) ?? chapter) : chapter)),
+    () => visibleStoryChapters(tableChapters, [...fullChapters.values()]),
     [tableChapters, fullChapters],
   );
   const closed = chapters.filter((chapter) => chapter.status === "closed");
@@ -886,7 +908,21 @@ export function StoryPanel({
       <div className="space-y-2">
         {steersStory ? <ArcCard campaignId={campaignId} /> : null}
         {steersStory ? <NpcReviewCard campaignId={campaignId} /> : null}
-        (loadError ? <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} /> : loaded ? <EmptyState art="scrolls" size="sm" title="The story has not begun" hint="Chapters appear here as the adventure unfolds." /> : null)
+        {loadError ? (
+          <LoadFailed error={loadError} onRetry={() => setReloads((current) => current + 1)} />
+        ) : loaded ? (
+          <EmptyState
+            art="scrolls"
+            size="sm"
+            title="Still generating, please wait."
+            hint="The opening chapter will appear here when it is ready."
+            action={
+              <KitButton onClick={() => setReloads((current) => current + 1)}>
+                <RefreshCw className="size-3" /> Try again
+              </KitButton>
+            }
+          />
+        ) : null}
       </div>
     );
   }
