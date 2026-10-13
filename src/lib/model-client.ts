@@ -37,6 +37,7 @@ import { noteSpeed } from "@/lib/speed-status";
 import { localModelContextWindow } from "@/lib/text-models";
 import { harnessConfig, harnessContextTokens } from "@/lib/harness/status";
 import { onWindows } from "@/lib/host-platform";
+import { createStreamRepetitionGuard } from "@/lib/stream-repetition";
 
 // Shared chat-completion client for both providers:
 // - custom: any OpenAI-compatible /chat/completions (llama.cpp, LM Studio,
@@ -369,6 +370,30 @@ function createRequestTimeout(ms: number) {
     clear: () => clearTimeout(timeoutId),
     timedOut: () => timedOut,
     abortNow,
+    cancel: () => controller.abort(),
+  };
+}
+
+class StreamRepetitionError extends Error {}
+
+function repeatedStreamError(): UpstreamResult {
+  return {
+    error: Response.json(
+      { error: "The model began repeating the same long passage, so generation was stopped. Retry the turn.", code: "stream_repetition" },
+      { status: 502 },
+    ),
+  };
+}
+
+function guardStreamDelta(onDelta: StreamDeltaHandler | undefined, cancel: () => void) {
+  if (!onDelta) return undefined;
+  const guard = createStreamRepetitionGuard();
+  return (text: string) => {
+    if (guard.push(text)) {
+      cancel();
+      throw new StreamRepetitionError();
+    }
+    onDelta(text);
   };
 }
 
@@ -679,6 +704,7 @@ export async function requestCustomMessage(
     DEFAULT_CUSTOM_TEXT_TIMEOUT_MS,
   );
   const requestTimeout = createRequestTimeout(timeoutMs);
+  const guardedDelta = guardStreamDelta(onDelta, requestTimeout.cancel);
   let upstream: Response;
   try {
     upstream = await fetchBackend(endpoint, {
@@ -840,7 +866,7 @@ export async function requestCustomMessage(
   if (viaResponses) {
     try {
       const reply = await readResponsesReply(upstream, {
-        onDelta,
+        onDelta: guardedDelta,
         idleMs: timeoutMs,
         onIdleAbort: requestTimeout.abortNow,
       });
@@ -861,6 +887,7 @@ export async function requestCustomMessage(
         ...tagged(reply.usage ?? null),
       };
     } catch (error) {
+      if (error instanceof StreamRepetitionError) return repeatedStreamError();
       return readFailure(error);
     }
   }
@@ -913,7 +940,7 @@ export async function requestCustomMessage(
         const delta = record.choices?.[0]?.delta;
         if (typeof delta?.content === "string" && delta.content) {
           contentParts.push(delta.content);
-          onDelta(delta.content);
+          guardedDelta?.(delta.content);
         }
         if (Array.isArray(delta?.tool_calls)) {
           for (const call of delta.tool_calls) {
@@ -940,6 +967,7 @@ export async function requestCustomMessage(
         }
       });
     } catch (error) {
+      if (error instanceof StreamRepetitionError) return repeatedStreamError();
       return readFailure(error);
     }
 
@@ -1033,6 +1061,7 @@ export async function requestLocalMessage(
     DEFAULT_LOCAL_TEXT_TIMEOUT_MS,
   );
   const requestTimeout = createRequestTimeout(timeoutMs);
+  const guardedDelta = guardStreamDelta(onDelta, requestTimeout.cancel);
   let upstream: Response;
   try {
     upstream = await fetchBackend(`${baseUrl}/api/chat`, {
@@ -1118,14 +1147,15 @@ export async function requestLocalMessage(
         }
         if (typeof record.message?.content === "string" && record.message.content) {
           contentParts.push(record.message.content);
-          onDelta(record.message.content);
+          guardedDelta?.(record.message.content);
         }
         if (Array.isArray(record.message?.tool_calls)) {
           toolCalls.push(...record.message.tool_calls);
         }
         localUsage = ollamaUsage(record) ?? localUsage;
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof StreamRepetitionError) return repeatedStreamError();
       return {
         error: Response.json(
           {
