@@ -8,12 +8,14 @@ import {
   LORE_VISIBILITIES,
   WORLD_LORE_CATEGORIES,
   LORE_STYLES,
+  loreBodyOverflow,
   normalizeLoreAudience,
   type LoreStyle,
   type LoreVisibility,
   type WorldLoreCategory,
 } from "@/lib/dm/world-lore-logic";
 import { isUploadedImagePath, isUploadedPdfPath } from "@/lib/uploads";
+import { recordsChanged } from "@/lib/workshop/record-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +50,11 @@ export async function PATCH(
     patch.title = raw.title.trim().slice(0, LORE_TITLE_MAX);
   }
   if (typeof raw.body === "string" && raw.body.trim()) {
+    // Refused with what would be lost, never cut (issue #302).
+    const overflow = loreBodyOverflow(raw.body);
+    if (overflow) {
+      return Response.json({ error: overflow }, { status: 400 });
+    }
     patch.body = raw.body.trim().slice(0, LORE_BODY_MAX);
   }
   if (Array.isArray(raw.tags)) {
@@ -85,6 +92,7 @@ export async function PATCH(
   if (updated && (patch.attachmentPath !== undefined || patch.tags !== undefined || patch.title !== undefined)) {
     void ingestLoreAttachment(updated).catch((error) => console.error("[lore] pdf ingest failed", error));
   }
+  recordsChanged(campaignId, "lore", "world");
   return Response.json({ entry: updated });
 }
 
@@ -99,5 +107,6 @@ export async function DELETE(
   }
   dropLoreAttachment(campaignId, entryId);
   deleteLoreEntry(entryId);
+  recordsChanged(campaignId, "lore", "world");
   return Response.json({ ok: true });
 }

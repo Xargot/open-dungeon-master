@@ -11,9 +11,11 @@ import {
   normalizeLoreAudience,
   normalizeLoreInput,
   normalizeLoreStyle,
+  loreBodyOverflow,
   stripSecretBlocks,
 } from "@/lib/dm/world-lore-logic";
 import { isUploadedImagePath, isUploadedPdfPath } from "@/lib/uploads";
+import { recordsChanged } from "@/lib/workshop/record-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +51,11 @@ export async function POST(
     return context;
   }
   const raw = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  // Over the cap is refused with what would be lost, never cut (issue #302).
+  const overflow = loreBodyOverflow(raw.body);
+  if (overflow) {
+    return Response.json({ error: overflow }, { status: 400 });
+  }
   const input = normalizeLoreInput(raw);
   if (!input) {
     return Response.json({ error: "Invalid lore entry." }, { status: 400 });
@@ -72,5 +79,6 @@ export async function POST(
   if (entry.attachmentPath) {
     void ingestLoreAttachment(entry).catch((error) => console.error("[lore] pdf ingest failed", error));
   }
+  recordsChanged(campaignId, "lore", "world");
   return Response.json({ entry });
 }

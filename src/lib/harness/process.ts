@@ -20,6 +20,9 @@ export function spawnProgram(
     env: Record<string, string>;
     onLine: (line: string) => void;
     onExit: (code: number | null) => void;
+    // A line longer than this stops the program: one that never writes a
+    // newline would otherwise grow the buffer without end. Unset means no cap.
+    maxLineBytes?: number;
   },
 ): SpawnedProgram {
   const { command, prefix } = resolveWindowsShim(binary);
@@ -51,6 +54,11 @@ export function spawnProgram(
         options.onLine(line);
       }
       index = buffer.indexOf("\n");
+    }
+    if (options.maxLineBytes && buffer.length > options.maxLineBytes) {
+      stderr = `${stderr}\n[odm] The program wrote a line longer than ${options.maxLineBytes} bytes and was stopped.`.slice(-4_000);
+      buffer = "";
+      kill();
     }
   });
   child.stderr.setEncoding("utf8");
@@ -115,12 +123,14 @@ export function spawnProgram(
 
 // Runs a program to completion and returns its output, for probes
 // (`--version`, `auth status`). Never throws: a probe that fails is an answer.
+// Only the tail of a long output is kept, unless the caller needs all of it.
 export function runProgram(
   binary: string,
   args: readonly string[],
   env: Record<string, string>,
   timeoutMs = 10_000,
   cwd?: string,
+  maxStdout = 200_000,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const { command, prefix } = resolveWindowsShim(binary);
@@ -155,7 +165,7 @@ export function runProgram(
       finish(null);
     }, timeoutMs);
     child.stdout?.on("data", (chunk) => {
-      stdout = (stdout + String(chunk)).slice(-200_000);
+      stdout = (stdout + String(chunk)).slice(-maxStdout);
     });
     child.stderr?.on("data", (chunk) => {
       stderr = (stderr + String(chunk)).slice(-20_000);

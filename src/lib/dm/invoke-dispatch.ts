@@ -13,6 +13,7 @@ import { handleAddCompanion, handleDismissCompanion } from "@/lib/dm/companion-t
 import { applyEncounterCall, ENCOUNTER_TOOL_NAMES } from "@/lib/dm/encounter-tools";
 import { handleApplyHazard } from "@/lib/dm/hazard-tools";
 import { handleSearchLore } from "@/lib/dm/lore-search";
+import { handleReadCard } from "@/lib/dm/prep-card-tool";
 import { applyDmMutation, MUTATION_TOOL_NAMES } from "@/lib/dm/mutations";
 import { handleWriteCampaignNote } from "@/lib/dm/note-tools";
 import {
@@ -57,6 +58,8 @@ import {
   handleRecordEvent,
   handleRequestPlayerInput,
 } from "@/lib/dm/turn";
+import { imagesAvailable } from "@/lib/capabilities";
+import { imageProducerReady } from "@/lib/image-generate";
 import { handleGenerateImage } from "@/lib/dm/images";
 import { handleRequestRoll } from "@/lib/dm/invoke-roll";
 import { handleSplitDamage } from "@/lib/dm/split-damage";
@@ -67,6 +70,7 @@ import { EXPLORE_TOOL_NAMES, handleExploreCall } from "@/lib/dm/explore-tools";
 import type { Campaign } from "@/lib/db/campaigns";
 import type { DmTurn } from "@/lib/db/dm-turns";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
+import type { ToolResult } from "@/lib/dm/tool-errors";
 
 const MUTATIONS = new Set<string>(MUTATION_TOOL_NAMES);
 const ENCOUNTERS = new Set<string>(ENCOUNTER_TOOL_NAMES);
@@ -83,7 +87,7 @@ export async function dispatchAdjudication(
   name: string,
   sentArguments: string,
   context: DispatchContext,
-): Promise<Record<string, unknown>> {
+): Promise<ToolResult> {
   const { campaign, turn, sheets, sheetsById } = context;
   // "false" sent as a string is false (src/lib/dm/arg-coerce.ts).
   const coerced = strictBooleanArgs(sentArguments);
@@ -128,7 +132,7 @@ export async function dispatchAdjudication(
       );
     case "cast_buff": {
       const unasked = characterCallUnasked(campaign.id, turn, rawArguments, "characterId");
-      return unasked ? { error: unasked } : handleCastBuff(campaign, turn, rawArguments, sheets, sheetsById);
+      return unasked ? unasked : handleCastBuff(campaign, turn, rawArguments, sheets, sheetsById);
     }
     case "take_rest":
       return handleTakeRest(campaign, turn.id, rawArguments, sheets, sheetsById);
@@ -144,7 +148,7 @@ export async function dispatchAdjudication(
       return handleSummonPet(campaign, turn, rawArguments, sheets, sheetsById);
     case "pet_attack": {
       const unasked = characterCallUnasked(campaign.id, turn, rawArguments, "characterId");
-      return unasked ? { error: unasked } : handlePetAttack(campaign, turn, rawArguments, sheets, sheetsById);
+      return unasked ? unasked : handlePetAttack(campaign, turn, rawArguments, sheets, sheetsById);
     }
     case "damage_pet":
       return handleDamagePet(campaign, rawArguments, sheets, sheetsById);
@@ -222,7 +226,11 @@ export async function dispatchAdjudication(
       return handleDismissCompanion(campaign, rawArguments, sheets);
     case "move_party":
     case "update_location": {
-      const result = handleLocationCall(campaign, name, rawArguments);
+      const pictures =
+        campaign.gameSettings.mapsEnabled &&
+        imageProducerReady(campaign.settings) &&
+        (await imagesAvailable(campaign.settings));
+      const result = handleLocationCall(campaign, name, rawArguments, pictures);
       // Bookkeeping the model's turn uses to link its narration to a map;
       // a person's narration is a separate message, so it goes no further.
       delete result.movedToNewLocation;
@@ -260,7 +268,9 @@ export async function dispatchAdjudication(
       return handleRecallStory(campaign, rawArguments);
     case "search_lore":
       return handleSearchLore(campaign.id, rawArguments);
+    case "read_card":
+      return handleReadCard(campaign, rawArguments);
     default:
-      return { error: `The engine has no action called "${name}".` };
+      return { error: `The engine has no action called "${name}".`, retry: true };
   }
 }

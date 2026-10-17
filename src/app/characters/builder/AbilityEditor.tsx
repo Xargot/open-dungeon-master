@@ -1,7 +1,7 @@
 "use client";
 
 import { Dices } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { GameTerm } from "@/components/ui/GameTerm";
 import { CountPop } from "@/components/ui/Reveal";
 import { cn } from "@/lib/cn";
@@ -17,8 +17,10 @@ import {
   assignStandard,
   canRerollPool,
   placeFromPool,
+  poolHighlight,
   poolSum,
   rollTier,
+  rollWord,
   scoresFromSlots,
   type PoolEntry,
   type PoolSlots,
@@ -28,6 +30,8 @@ import { HelpDot, MethodInfoDialog, type HpExplainerInput } from "./AbilityExpla
 import { AbilitySummary } from "./AbilitySummary";
 import { DiceDefs, DiceRow } from "./Dice";
 import { fetchOpenAbilityPool, requestAbilityPool, type AbilityPoolAnswer } from "./useTableRules";
+import { useContentCampaign } from "@/lib/content-scope";
+import { rerollWords } from "@/lib/srd/ability-rerolls";
 
 export const STANDARD_ARRAY = [15, 14, 13, 12, 10, 8];
 export type AbilityMethod = "standard" | "pointbuy" | "roll";
@@ -44,14 +48,10 @@ export const ABILITY_LABELS: Record<Ability, string> = {
 const ABILITY_KEYS = Object.keys(ABILITY_LABELS) as Ability[];
 
 // What each way of getting six numbers actually costs you, for the player who
-// has never been asked this question before.
-// The 4d6 method's reroll rule in words, for the server's threshold (an
-// admin setting, issue #128).
-function rerollRule(below: number): string {
-  return below <= 0
-    ? "The six are yours to keep: this server allows no second throw."
-    : `The six are yours to keep: you may throw again only if they add up to less than ${below}.`;
-}
+// has never been asked this question before. The 4d6 entry carries the
+// server's default rule until the builder learns the rule where it is
+// rolling (rerollWords), which replaces it below.
+const BUNDLED_RULE = rerollWords(REROLL_BELOW, false).rule;
 
 const METHODS: Array<{ id: AbilityMethod; label: string; info: string }> = [
   {
@@ -71,7 +71,7 @@ const METHODS: Array<{ id: AbilityMethod; label: string; info: string }> = [
     id: "roll",
     label: "Roll 4d6",
     info:
-      `Roll four six-sided dice six times, dropping the lowest each time, then place the six totals on the abilities you choose. It can hand you a hero far above the standard array, or well below it. ${rerollRule(REROLL_BELOW)} Some tables love the swing; ask yours before choosing it.`,
+      `Roll four six-sided dice six times, dropping the lowest each time, then place the six totals on the abilities you choose. It can hand you a hero far above the standard array, or well below it. ${BUNDLED_RULE} Some tables love the swing; ask yours before choosing it.`,
   },
 ];
 
@@ -143,8 +143,14 @@ export default function AbilityEditor({
   // are that kept roll (null when thrown before the server kept dates).
   const [openPool, setOpenPool] = useState<AbilityPoolAnswer | null>(null);
   const [keptAt, setKeptAt] = useState<string | null | undefined>(undefined);
-  // The server's reroll rule; the bundled default until it has answered.
+  // Built at a table, the dice are rolled under that table's rule (its own,
+  // or the server's when it set none), and the words say so.
+  const campaignId = useContentCampaign();
+  // The reroll rule where the character is made; the bundled default until
+  // the server has answered.
   const [rerollBelow, setRerollBelow] = useState(REROLL_BELOW);
+  const words = rerollWords(rerollBelow, Boolean(campaignId));
+  const poolNoteId = useId();
   function learnRule(answer: { rerollBelow: number }) {
     setRerollBelow(answer.rerollBelow);
   }
@@ -172,7 +178,7 @@ export default function AbilityEditor({
   const openedWith = useRef({ method, pool });
   useEffect(() => {
     let cancelled = false;
-    fetchOpenAbilityPool().then((answer) => {
+    fetchOpenAbilityPool(campaignId).then((answer) => {
       if (cancelled || !answer) {
         return;
       }
@@ -200,6 +206,7 @@ export default function AbilityEditor({
   const placedCount = ABILITY_KEYS.filter((key) => slots[key] !== null).length;
   const complete = ABILITY_KEYS.every((key) => scores[key] !== null);
   const total = pool ? poolSum(pool) : 0;
+  const highlight = pool ? poolHighlight(pool) : null;
   const rerollOpen = canRerollPool(pool, rerollBelow);
   const keptDate =
     keptAt ? new Date(keptAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
@@ -227,7 +234,7 @@ export default function AbilityEditor({
     }
     setAsking(true);
     setRollError("");
-    const answer = await requestAbilityPool();
+    const answer = await requestAbilityPool(campaignId);
     setAsking(false);
     if ("error" in answer) {
       setRollError(answer.error);
@@ -354,9 +361,9 @@ export default function AbilityEditor({
         {method === "roll" ? (
           <>
             <span className="inline-flex items-center gap-2">
-              <span className="eyebrow text-[10px] tracking-[0.18em] text-amber-500/80">4d6 drop lowest</span>
+              <span className="eyebrow text-[0.6875rem] tracking-[0.18em] text-amber-500/80">4d6 drop lowest</span>
               {pool ? (
-                <span className="font-mono text-[10.5px] text-stone-500" aria-live="polite">
+                <span className="font-mono text-[0.6875rem] text-stone-500" aria-live="polite">
                   {placedCount} / 6 placed
                 </span>
               ) : null}
@@ -365,16 +372,17 @@ export default function AbilityEditor({
               <button
                 type="button"
                 onClick={throwPool}
-                disabled={anyRolling || asking || !rerollOpen}
+                // A closed reroll stays in the tab order (aria-disabled) and
+                // points at the note under the tray that says why it is shut.
+                disabled={anyRolling || asking}
+                aria-disabled={!rerollOpen || undefined}
+                aria-describedby={poolNoteId}
                 aria-busy={asking}
-                title={
-                  rerollOpen
-                    ? `These add up to less than ${rerollBelow}, so you may throw again`
-                    : rerollBelow <= 0
-                      ? "This server allows no second throw"
-                      : `A reroll opens only when the six add up to less than ${rerollBelow}`
-                }
-                className={cn(ui.btnSmall, "ml-auto px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40")}
+                title={rerollOpen ? words.openTitle : words.closedTitle}
+                className={cn(
+                  ui.btnSmall,
+                  "ml-auto px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40",
+                )}
               >
                 <Dices className="size-3.5" /> Reroll
               </button>
@@ -428,7 +436,7 @@ export default function AbilityEditor({
                       draggable={!anyRolling}
                       disabled={anyRolling}
                       aria-pressed={inHand}
-                      aria-label={`Throw of ${entry.total}${owner ? `, on ${ABILITY_LABELS[owner]}` : ", not placed"}`}
+                      aria-label={`Throw of ${entry.total}, ${rollWord(entry.total)}${owner ? `, on ${ABILITY_LABELS[owner]}` : ", not placed"}`}
                       onClick={() => setHeld(inHand ? null : index)}
                       onDragStart={(event) => startDrag(event, index)}
                       onDragEnd={() => {
@@ -452,12 +460,17 @@ export default function AbilityEditor({
                       <span className={cn("dice-total", `roll-tier-${rollTier(entry.total)}`)} data-phase={rolling ? "rolling" : undefined}>
                         {entry.total}
                       </span>
+                      {anyRolling ? null : (
+                        <span className={cn("pool-tier", `roll-tier-${rollTier(entry.total)}`)} aria-hidden="true">
+                          {rollWord(entry.total)}
+                        </span>
+                      )}
                       <span className="pool-tag">{owner ? owner.toUpperCase() : inHand ? "in hand" : "free"}</span>
                     </button>
                   );
                 })}
               </div>
-              <p className="pool-note" aria-live="polite">
+              <p id={poolNoteId} className="pool-note" aria-live="polite">
                 {anyRolling ? (
                   "The dice are in the air…"
                 ) : (
@@ -468,15 +481,12 @@ export default function AbilityEditor({
                         <span className="text-stone-600"> · </span>
                       </>
                     ) : null}
+                    {highlight ? (
+                      <span className="pool-highlight block">{highlight}</span>
+                    ) : null}
                     <span className="font-mono text-amber-200">Total {total}</span>
                     <span className="text-stone-600"> · </span>
-                    {rerollOpen
-                      ? `Under ${rerollBelow}: you may throw all six again.`
-                      : rerollBelow <= 0
-                        ? "This server allows no second throw. These six are yours."
-                        : keptAt !== undefined
-                          ? `It stays until a character uses it; a reroll opens only under ${rerollBelow}.`
-                          : `A reroll opens only under ${rerollBelow}. These six are yours.`}
+                    {rerollOpen ? words.open : keptAt !== undefined ? words.keptClosed : words.closed}
                     <span className="block text-stone-500">
                       {held !== null
                         ? "Now tap the ability that should get it."
@@ -573,7 +583,7 @@ export default function AbilityEditor({
                   <GameTerm id={ability}>{label}</GameTerm>
                 </span>
                 {notes.length ? (
-                  <span className="flex flex-wrap gap-x-1 font-mono text-[10px] leading-snug text-stone-400" data-ability-notes={ability}>
+                  <span className="flex flex-wrap gap-x-1 font-mono text-[0.6875rem] leading-snug text-stone-400" data-ability-notes={ability}>
                     {notes.map((note, index) => (
                       <span key={note.key} className={cn("whitespace-nowrap", note.motion)}>
                         {index ? <span className="text-stone-600">· </span> : null}
@@ -590,7 +600,11 @@ export default function AbilityEditor({
                   className="pool-socket"
                   data-filled={slot !== null || undefined}
                   data-held={slot !== null && held === slot ? true : undefined}
-                  disabled={!pool || anyRolling || (slot === null && held === null)}
+                  // An empty socket with nothing in hand stays reachable
+                  // (aria-disabled) and its name says what to do first.
+                  disabled={!pool || anyRolling}
+                  aria-disabled={(slot === null && held === null) || undefined}
+                  aria-describedby={pool ? poolNoteId : undefined}
                   draggable={slot !== null && !anyRolling}
                   onClick={() => tapSocket(ability)}
                   onDragStart={slot !== null ? (event) => startDrag(event, slot) : undefined}
@@ -603,7 +617,7 @@ export default function AbilityEditor({
                       ? `${label} holds ${assigned}. ${held === slot ? "Tap again to send it back to the tray" : held !== null ? "Tap to swap" : "Tap to pick it up"}`
                       : held !== null
                         ? `Place the held throw on ${label}`
-                        : `${label} is empty`
+                        : `${label} is empty. Pick up a throw from the tray first, then place it here`
                   }
                 >
                   {slot !== null && assigned !== null ? (
@@ -651,7 +665,7 @@ export default function AbilityEditor({
                   </button>
                   <span className="flex flex-1 flex-col items-center leading-none" aria-live="polite">
                     <span className="font-display text-[19px] font-bold text-amber-100">{assigned ?? POINT_BUY_MIN}</span>
-                    <span className="mt-0.5 font-mono text-[9px] text-stone-500">
+                    <span className="mt-0.5 font-mono text-[0.6875rem] text-stone-500">
                       costs {pointBuyCost(assigned ?? POINT_BUY_MIN)}
                     </span>
                   </span>
@@ -692,7 +706,7 @@ export default function AbilityEditor({
         open={methodInfoOpen}
         onOpenChange={setMethodInfoOpen}
         methods={METHODS.map((entry) =>
-          entry.id === "roll" ? { ...entry, info: entry.info.replace(rerollRule(REROLL_BELOW), rerollRule(rerollBelow)) } : entry,
+          entry.id === "roll" ? { ...entry, info: entry.info.replace(BUNDLED_RULE, words.rule) } : entry,
         )}
         current={method}
       />

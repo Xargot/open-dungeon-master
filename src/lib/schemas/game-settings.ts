@@ -142,6 +142,11 @@ export const gameSettingsSchema = z.object({
   // background's gear with the background's coin; "rolled" is wealth the
   // server rolls by class, spent on gear at creation.
   startingWealth: z.enum(STARTING_WEALTH).default("equipment"),
+  // The table's own rule for throwing the 4d6 ability dice again, for the
+  // characters made at it (src/lib/srd/ability-rerolls.ts): a fresh six only
+  // under this total, 0 never, 108 always. Null follows the server's rule
+  // (Admin > Server), which the library uses.
+  abilityRerollBelow: z.number().int().min(0).max(108).nullable().default(null),
   // Lets new players join with the invite code after the adventure started.
   midGameJoinOpen: z.boolean().default(false),
   // The living-world engines: off-screen world arcs advancing on background
@@ -381,7 +386,7 @@ export type LastingCompanionBlock = {
   remedy: string;
 };
 
-const ALLIES_ROW = "Setup tab, Game settings, Allies";
+const ALLIES_ROW = "Settings tab, Table settings, Allies";
 export const MAX_COMPANIONS_CAP = 4;
 
 export function lastingCompanionBlock(

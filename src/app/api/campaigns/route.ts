@@ -5,6 +5,7 @@ import { createCampaign, listCampaignsForUser, publicCampaign, type Campaign } f
 import { playingAsByCampaign } from "@/lib/db/sheets";
 import { homeGlanceFor, partyFacesByCampaign } from "@/lib/db/home-glance";
 import { gameSettingsSchema } from "@/lib/schemas/game-settings";
+import { capabilitiesSnapshot, narrationAvailable } from "@/lib/capabilities";
 import { CAMPAIGN_DIFFICULTIES } from "@/lib/campaign-types";
 
 export const runtime = "nodejs";
@@ -17,14 +18,30 @@ const createCampaignSchema = z.object({
   maxPlayers: z.number().int().min(1).max(8).default(5),
   startingLevel: z.number().int().min(1).max(20).default(1),
   difficulty: z.enum(CAMPAIGN_DIFFICULTIES).default("normal"),
-  gameSettings: gameSettingsSchema.partial().default({}),
+  // Narration is the one switch the route decides when unsaid (POST below),
+  // so it is carved out of the partial: zod fills a field's default through
+  // .partial(), which would say "on" for a caller that said nothing.
+  gameSettings: gameSettingsSchema.partial().extend({ ttsEnabled: z.boolean().optional() }).default({}),
 });
+
+// Whether this server has an AI storyteller, for the shells' Quick start
+// (an AI-run one-evening adventure, offered on the website only where one
+// exists). The capability probes are cached; a cold one gets a short budget
+// and, past it, the field is left out and the shells keep offering the door.
+async function offersStory(): Promise<boolean | undefined> {
+  const budget = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 800));
+  const answer = capabilitiesSnapshot()
+    .then((snapshot) => snapshot.story.configured)
+    .catch(() => undefined);
+  return Promise.race([answer, budget]);
+}
 
 export async function GET() {
   const user = await currentUser();
   if (!user) {
     return unauthorized();
   }
+  const story = offersStory();
   // The desktop and Android shells draw a home screen from this list alone:
   // each tile wants the cover (on the summary) and the name of the character
   // the caller plays there, so both ride here rather than costing a snapshot
@@ -46,6 +63,8 @@ export async function GET() {
     // The shells' home menus offer New campaign and Quick start only where
     // this account may start one (src/lib/shared-host.ts).
     canCreateCampaigns: canCreateCampaigns(user),
+    // And Quick start only where an AI storyteller can run it.
+    offersStory: await story,
   });
 }
 
@@ -67,6 +86,13 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid campaign settings." }, { status: 400 });
   }
 
-  const campaign = createCampaign(user.id, parsed.data);
+  // A create that says nothing about narration (an app shell's, a script's)
+  // starts it on only where the server can read aloud, the rule the
+  // new-campaign dialog applies for itself before it sends (issue 275).
+  const gameSettings = { ...parsed.data.gameSettings };
+  if (gameSettings.ttsEnabled === undefined) {
+    gameSettings.ttsEnabled = await narrationAvailable();
+  }
+  const campaign = createCampaign(user.id, { ...parsed.data, gameSettings });
   return Response.json({ campaign: publicCampaign(campaign) }, { status: 201 });
 }

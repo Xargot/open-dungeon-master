@@ -5,6 +5,7 @@ import { appConfirm } from "@/components/ui/ConfirmDialog";
 import { ArrowLeft } from "lucide-react";
 import { Suspense, lazy, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
+import { transcribesVoice, useCapabilities } from "@/lib/use-capabilities";
 import { roomCodeRefused } from "@/lib/shell-host";
 import { useShellShare } from "@/lib/use-shell-share";
 import { ScheduleSection } from "@/components/ScheduleSection";
@@ -20,6 +21,7 @@ import { VoicePanel } from "@/app/campaigns/[campaignId]/VoicePanel";
 import { useVoiceSpeaking } from "@/app/campaigns/[campaignId]/liveStore";
 import { resolveCompanionMode } from "@/lib/schemas/game-settings";
 import { isPrimaryDm, lobbyBlocker, partySlotCount, viewerCaps } from "@/lib/dm/viewer";
+import { lobbyNext } from "@/lib/dm/lobby-next";
 import {
   ContentImportPicker,
   EMPTY_SELECTION,
@@ -58,6 +60,8 @@ const EMPTY_MESSAGES: never[] = [];
 export function Lobby({ state, refresh }: { state: CampaignState; refresh: () => void }) {
   const { campaign, me, members, sheets } = state;
   const voiceSpeaking = useVoiceSpeaking();
+  // The call records and announces a transcript only where it can be written.
+  const transcribes = transcribesVoice(useCapabilities());
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [buildingCompanion, setBuildingCompanion] = useState(false);
@@ -246,6 +250,23 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
       hasSheet: sheets.some((sheet) => sheet.userId === member.userId),
     })),
   );
+
+  // The one line above the actions that says what happens next for this
+  // viewer, from the same seats the Begin button reads.
+  const others = members.filter((member) => member.userId !== me.id && !isDmSeatOf(member.userId));
+  const next = lobbyNext({
+    solo: isSolo,
+    isDm,
+    hasSheet: Boolean(mySheet),
+    ready: Boolean(myMember?.ready),
+    canStart: isOwner || isPrimaryDm(seats, me.id),
+    blocker: startBlocker,
+    needHero: others.filter((member) => !sheets.some((sheet) => sheet.userId === member.userId)).map((member) => member.username),
+    notReady: others.filter((member) => !member.ready).map((member) => member.username),
+  });
+  function isDmSeatOf(userId: string) {
+    return userId === campaign!.dmUserId || userId === campaign!.assistantDmUserId;
+  }
 
   // Returns whether the server took it, so the solo flow can stop before
   // trying to start a game whose only player is not ready.
@@ -489,6 +510,7 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
               />
             ) : null}
             <LobbyActions
+              next={next}
               campaign={campaign}
               myMember={myMember}
               mySheet={mySheet}
@@ -601,9 +623,9 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
                 meshSignal={state.voiceMeshSignal}
                 adjudicates={adjudicates}
                 steersStory={steersStory}
-                transcribe={campaign.gameSettings.voice.transcribe}
+                transcribe={campaign.gameSettings.voice.transcribe && transcribes}
               />
-              {campaign.gameSettings.voice.transcribe ? (
+              {campaign.gameSettings.voice.transcribe && transcribes ? (
                 <p className="reveal mt-2 text-xs text-amber-300/80">
                   This table is transcribed: while voice is on, what each person says is written down with their name for the story log. Turn it off in campaign settings.
                 </p>
@@ -617,6 +639,7 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
               campaignId={campaign.id}
               settings={campaign.gameSettings}
               steersStory={steersStory}
+              heading={false}
             />
           </div>
         </div>
@@ -631,6 +654,7 @@ export function Lobby({ state, refresh }: { state: CampaignState; refresh: () =>
         <CompanionBuilderDialog
           campaignId={campaign.id}
           genre={campaign.gameSettings.genre}
+          worldPackId={campaign.gameSettings.worldPack}
           level={campaign.startingLevel}
           humanDm={humanDmTable}
           onClose={() => setBuildingCompanion(false)}

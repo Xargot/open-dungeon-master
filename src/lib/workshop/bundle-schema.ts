@@ -2,7 +2,8 @@ import { z } from "zod";
 import { storedSheetSchema } from "@/lib/schemas/sheet";
 import { GENDERS } from "@/lib/gender";
 import { GENRES } from "@/lib/schemas/game-settings";
-import { BEAT_KINDS, ROUTE_KINDS, ROUTE_LABEL_MAX } from "@/lib/workshop/board";
+import { BEAT_KINDS, BODY_MAX, ROUTE_KINDS, ROUTE_LABEL_MAX } from "@/lib/workshop/board";
+import { LORE_BODY_MAX } from "@/lib/dm/world-lore-logic";
 import { worldPackDraftSchema } from "@/lib/worlds/draft";
 
 // The shape of a workshop bundle: every field, its length and its ceiling.
@@ -19,6 +20,12 @@ export const WORKSHOP_BUNDLE_VERSION = 1;
 // portraits, each individually capped below at the same 8 MB the upload
 // route enforces.
 export const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
+
+// A bundle an importer addon made on this server (src/lib/addons/run-importer.ts):
+// it never crosses a request, and its pictures are files the addon wrote
+// rather than uploads, so a whole adventure's art fits. Each picture is
+// still held to MAX_BUNDLE_IMAGE_BYTES.
+export const MAX_ADDON_BUNDLE_BYTES = 256 * 1024 * 1024;
 
 // Per-image binary cap, matching /api/upload's MAX_FILE_SIZE so nothing can
 // arrive by bundle that could not have been uploaded by hand.
@@ -87,7 +94,8 @@ const indexSchema = z.number().int().min(0).max(1_000).nullable().default(null);
 const loreSchema = z.object({
   category: z.string().trim().max(40),
   title: z.string().trim().min(1).max(200),
-  body: z.string().max(20_000).default(""),
+  // The lore editor's own cap (issue #302): what travels can be edited.
+  body: z.string().max(LORE_BODY_MAX).default(""),
   tags: z.array(z.string().trim().max(40)).max(20).default([]),
   // A secret stays a secret on the other side; a handout keeps its picture.
   visibility: z.enum(["party", "dm"]).default("party"),
@@ -212,6 +220,28 @@ const mapSchema = z.object({
   drawings: z.array(z.unknown()).max(400).default([]),
   ambience: z.record(z.string(), z.unknown()).default({}),
   overlay: bundleImageSchema,
+  // What a map addon left for its board view (src/lib/addons/map-view.ts):
+  // its data, and its files (a .glb model, textures) inline as data URLs so
+  // the map arrives whole. Null for a map no addon made, and in bundles from
+  // builds before addons. Checked again, file by file, on import
+  // (src/lib/db/map-addon-view-bundle.ts).
+  addonView: z
+    .object({
+      addonId: z.string().trim().max(60),
+      data: z.unknown().optional(),
+      files: z
+        .array(
+          z.object({
+            name: z.string().trim().min(1).max(120),
+            type: z.string().max(60).default(""),
+            data: z.string().max(Math.ceil((MAX_BUNDLE_BYTES * 4) / 3) + 100),
+          }),
+        )
+        .max(8)
+        .default([]),
+    })
+    .nullable()
+    .default(null),
   ref: refSchema,
   shared: sharedSchema,
 });
@@ -219,7 +249,8 @@ const mapSchema = z.object({
 const beatSchema = z.object({
   kind: z.enum(BEAT_KINDS),
   title: z.string().trim().min(1).max(200),
-  body: z.string().max(4_000).default(""),
+  // The board's own cap (issue #302): a card that arrives can be saved.
+  body: z.string().max(BODY_MAX).default(""),
   // Arrows travel as INDEXES into this array rather than as ids, because
   // ids do not survive a bundle and an arrow that pointed at a stranger's
   // row would land nowhere.
@@ -356,11 +387,14 @@ export const workshopBundleSchema = z.object({
   plugin: worldPackDraftSchema.nullable().default(null),
   // The workshop's WorldForge (src/lib/db/world-forge-bundle.ts): its
   // document with refs as row positions, read through the model's floors on
-  // import, and the atlas's pictures. Null in bundles from earlier builds.
+  // import, the atlas's pictures by map id, and each entry's own picture (a
+  // place's illustration) by its ref. Null in bundles from earlier builds;
+  // entryImages is empty in bundles from before it travelled.
   world: z
     .object({
       doc: z.record(z.string(), z.unknown()),
       images: z.record(z.string().max(80), bundleImageSchema).refine((images) => Object.keys(images).length <= 100).default({}),
+      entryImages: z.record(z.string().max(120), bundleImageSchema).refine((images) => Object.keys(images).length <= 2_000).default({}),
     })
     .nullable()
     .default(null),

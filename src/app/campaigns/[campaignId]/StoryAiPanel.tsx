@@ -37,7 +37,7 @@ const BACKEND_LABELS: Record<ImageBackend, string> = {
   harness: "The server's agent",
 };
 
-// Per-campaign AI settings for the Setup tab. The values render from the
+// Per-campaign AI settings for the Settings tab. The values render from the
 // campaign snapshot (kept live by campaign_updated over SSE); only the
 // key-existence booleans come from the story-settings GET, because the
 // snapshot is scrubbed of keys for everyone.
@@ -62,6 +62,12 @@ export function StoryAiPanel({
   // This campaign's own backend, which for a table on its own OpenAI key is
   // ready even when the server has no image backend of its own.
   const [imagesReady, setImagesReady] = useState(true);
+  // Its backend is there but has no model picked, so it paints nothing
+  // (src/lib/db/settings.ts); the server's own ComfyUI said the same.
+  const [imagesNeedModel, setImagesNeedModel] = useState(false);
+  // The model a blank campaign model falls back to: the server's storyteller.
+  const [serverModel, setServerModel] = useState("");
+  const [serverImagesNeedModel, setServerImagesNeedModel] = useState(false);
   // A world an app hosts: the backend is chosen once for the device and every
   // campaign follows it, so this panel shows it instead of editing it. null
   // until the answer lands, so the editable rows never flash on a device.
@@ -96,6 +102,7 @@ export function StoryAiPanel({
           setHasCustomKey(data.settings.hasCustomApiKey);
           setHasUtilityKey(data.settings.hasUtilityApiKey);
           setImagesReady(data.settings.imagesReady);
+          setImagesNeedModel(data.settings.imagesNeedModel === true);
           setServerManaged(data.settings.serverManaged === true);
         }
         if (!cancelled && data?.harness) {
@@ -113,9 +120,13 @@ export function StoryAiPanel({
       });
     void fetch("/api/capabilities")
       .then((response) => (response.ok ? response.json() : null))
-      .then((data: { images?: { configured?: boolean } } | null) => {
+      .then((data: { images?: { configured?: boolean; needsModel?: boolean }; story?: { model?: string } } | null) => {
         if (!cancelled && data?.images) {
           setImagesConfigured(data.images.configured !== false);
+          setServerImagesNeedModel(data.images.needsModel === true);
+        }
+        if (!cancelled && data?.story?.model) {
+          setServerModel(data.story.model);
         }
       })
       .catch(() => undefined);
@@ -146,6 +157,7 @@ export function StoryAiPanel({
         setHasCustomKey(data.settings.hasCustomApiKey);
         setHasUtilityKey(data.settings.hasUtilityApiKey);
         setImagesReady(data.settings.imagesReady);
+        setImagesNeedModel(data.settings.imagesNeedModel === true);
       }
       if (data.harness) {
         setHarness(data.harness);
@@ -180,9 +192,12 @@ export function StoryAiPanel({
   const harnessName = harness?.label
     ? `The server's ${harness.label}${harness.model ? ` (${harness.model})` : ""}`
     : PROVIDER_LABELS.harness;
+  // A blank model is the server's, said with its name and where it comes
+  // from rather than left for the reader to infer.
+  const inheritedModel = serverModel ? `${serverModel} · the server's model` : "the server's model";
   const storytellerSummary =
     settings.textProvider === "custom"
-      ? settings.customModel || "custom backend"
+      ? settings.customModel || inheritedModel
       : settings.textProvider === "harness"
         ? harnessName
         : PROVIDER_LABELS[settings.textProvider];
@@ -193,7 +208,8 @@ export function StoryAiPanel({
   if (!steersStory) {
     return (
       <section className="rounded-lg border border-stone-800 bg-stone-950/60 p-4">
-        <h2 className="mb-2 text-sm font-medium text-stone-300">Story AI</h2>
+        <h2 className="mb-1 text-sm font-medium text-stone-300">Story AI</h2>
+        <p className="mb-2 text-xs text-stone-500">The AI services this campaign plays with, chosen by whoever runs the story.</p>
         <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-stone-400">
           <span className="flex items-center gap-1.5">
             <Bot className="size-3.5 text-amber-200" />
@@ -244,7 +260,11 @@ export function StoryAiPanel({
 
   return (
     <section className="rounded-lg border border-stone-800 bg-stone-950/60 p-4">
-      <h2 className="mb-3 text-sm font-medium text-stone-300">Story AI</h2>
+      <h2 className="mb-1 text-sm font-medium text-stone-300">Story AI</h2>
+      <p className="mb-3 text-xs text-stone-500">
+        Which AI services this campaign uses: who tells the story, the helper model, and pictures. It changes this campaign
+        only, as soon as you pick; {deviceManaged ? "the device's own choice is set from the app's home screen." : "the server's defaults live in the admin panel."}
+      </p>
       {error ? <p className="motion-shake mb-2 text-xs text-red-400">{error}</p> : null}
       <div className={cn("space-y-3 text-xs", busy && "opacity-70")}>
         {deviceManaged === null ? null : deviceManaged ? (
@@ -312,7 +332,10 @@ export function StoryAiPanel({
                 </div>
                 <ModelNote role="story" baseUrl="" model={settings.customModel} />
                 <p className="text-stone-500">
-                  Runs on this server&apos;s backend. Only an admin can change where it points.
+                  {settings.customModel
+                    ? "Runs on this server's backend. Clear the model to use the server's own again."
+                    : `In use: ${inheritedModel}. Type a model name to choose another for this campaign.`}{" "}
+                  Only an admin can change where it points.
                 </p>
               </>
             ) : settings.textProvider === "custom" ? (
@@ -497,7 +520,17 @@ export function StoryAiPanel({
             </>
           ) : null}
         </div>
-        {settings.imageGenerationEnabled && settings.imageBackend === "openai" && !imagesReady ? (
+        {settings.imageGenerationEnabled &&
+        imagesNeedModel &&
+        (settings.imageBackend === "openai" || (settings.imageBackend === "comfyui" && serverImagesNeedModel)) ? (
+          <p className="reveal text-amber-400/90">
+            {deviceManaged && settings.imageBackend === "openai"
+              ? "No picture model is saved on this device, so nothing is painted. Save your key again from Story AI on the app's home screen, which picks one from the key's list, or pick one in Admin > Image generation."
+              : serverManaged
+                ? "No picture model is picked on this server, so nothing is painted. An admin picks one in Admin > Image generation."
+                : "No picture model is picked, so nothing is painted until one is. Pick it in Admin > Image generation."}
+          </p>
+        ) : settings.imageGenerationEnabled && settings.imageBackend === "openai" && !imagesReady ? (
           <p className="reveal text-amber-400/90">
             {deviceManaged
               ? "No OpenAI API key is saved on this device. Add one from Story AI on the app's home screen and it covers narration and pictures in every campaign."

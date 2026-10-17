@@ -12,6 +12,7 @@ import type { AttackProfile } from "@/lib/dm/attack-logic";
 import { matchResource } from "@/lib/srd/class-resources";
 import { matchWeapon } from "@/lib/srd/weapons";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
+import type { ToolError } from "@/lib/dm/tool-errors";
 
 type Carried = { name: string; qty?: number; equipped?: boolean };
 type XY = { x: number; y: number };
@@ -34,7 +35,9 @@ export function dualWields(feats: string[] | undefined, campaignId?: string): bo
 
 // What a shield on the arm does to the swing. A two-handed weapon cannot be
 // used at all; a versatile weapon is swung in one hand whatever was asked
-// for; a lance needs both hands unless its wielder is mounted.
+// for; a lance needs both hands unless its wielder is mounted. The off-hand
+// swing of two-weapon fighting is made with a weapon in each hand (SRD 5.1),
+// so a versatile weapon there is swung in one hand too.
 export function handsRuling(input: {
   who: string;
   weapon: string;
@@ -43,7 +46,8 @@ export function handsRuling(input: {
   mounted: boolean;
   twoHandedAsked: boolean;
   shieldName: string | null;
-}): { error: string } | { twoHanded: boolean; note: string | null } {
+  offHand?: boolean;
+}): ToolError | { twoHanded: boolean; note: string | null } {
   const needsBoth =
     input.properties.includes("two-handed") || (input.lance && !input.mounted);
   if (needsBoth && input.shieldName) {
@@ -51,15 +55,30 @@ export function handsRuling(input: {
       error: `${input.weapon} needs both hands${
         input.lance ? " on foot" : ""
       }, and ${input.who} has ${input.shieldName} on one arm. They put the shield away first (unequip it on the sheet) or attack with a one-handed weapon.`,
+      refused: "rules",
     };
   }
-  if (input.twoHandedAsked && input.properties.includes("versatile") && input.shieldName) {
+  const versatileAsked = input.twoHandedAsked && input.properties.includes("versatile");
+  if (versatileAsked && input.shieldName) {
     return {
       twoHanded: false,
       note: `${input.shieldName} on the arm: ${input.weapon} is swung in one hand`,
     };
   }
+  if (versatileAsked && input.offHand) {
+    return { twoHanded: false, note: `${input.weapon} is in the off hand: swung in one hand` };
+  }
   return { twoHanded: input.twoHandedAsked, note: null };
+}
+
+// A thrown weapon is a ranged attack once it leaves the hand, and a melee
+// one inside its reach (SRD 5.1, Thrown). `apart` is how many tiles lie
+// between attacker and target, null when the board does not know.
+export function thrownAtRange(
+  profile: Pick<AttackProfile, "thrown" | "reachTiles">,
+  apart: number | null,
+): boolean {
+  return profile.thrown && apart !== null && apart > profile.reachTiles;
 }
 
 // ---- two-weapon fighting ----
@@ -94,40 +113,40 @@ export function offHandProblem(input: {
   feats?: string[];
   campaignId?: string;
   shieldName: string | null;
-}): string | null {
+}): ToolError | null {
   const dualWielder = hasFeat(input.feats, "dual wielder", input.campaignId);
   const twoHanded = (input.profile.properties ?? []).includes("two-handed");
   if (dualWielder && (input.profile.ranged || twoHanded)) {
-    return `The off-hand attack of two-weapon fighting is made with a melee weapon held in one hand, and ${input.profile.weapon} is not one. Dual Wielder lifts the need for a light weapon, not for a one-handed one.`;
+    return { error: `The off-hand attack of two-weapon fighting is made with a melee weapon held in one hand, and ${input.profile.weapon} is not one. Dual Wielder lifts the need for a light weapon, not for a one-handed one.`, refused: "rules" };
   }
   if (input.profile.ranged || (!isLightMelee(input.profile) && !dualWielder)) {
-    return `The off-hand attack of two-weapon fighting is made with a light melee weapon, and ${input.profile.weapon} is not one. ${input.who} can make it with a dagger, shortsword, handaxe or another light weapon.`;
+    return { error: `The off-hand attack of two-weapon fighting is made with a light melee weapon, and ${input.profile.weapon} is not one. ${input.who} can make it with a dagger, shortsword, handaxe or another light weapon.`, refused: "rules" };
   }
   if (input.shieldName) {
-    return `${input.who} has ${input.shieldName} in their other hand, so there is no second weapon to strike with. Two-weapon fighting needs a ${dualWielder ? "weapon" : "light weapon"} in each hand.`;
+    return { error: `${input.who} has ${input.shieldName} in their other hand, so there is no second weapon to strike with. Two-weapon fighting needs a ${dualWielder ? "weapon" : "light weapon"} in each hand.`, refused: "rules" };
   }
   if (offHandWeaponsCarried(input.equipment, dualWielder) < 2) {
-    return dualWielder
+    return { error: dualWielder
       ? `Two-weapon fighting needs a one-handed melee weapon in each hand, and ${input.who} carries only one.`
-      : `Two-weapon fighting needs a light melee weapon in each hand, and ${input.who} carries only one.`;
+      : `Two-weapon fighting needs a light melee weapon in each hand, and ${input.who} carries only one.`, refused: "rules" };
   }
   if (!input.inFight) {
     return null;
   }
   if (!input.budget) {
-    return `The off-hand attack is a bonus action on ${input.who}'s own turn; it is not their turn.`;
+    return { error: `The off-hand attack is a bonus action on ${input.who}'s own turn; it is not their turn. What they declared waits for their turn.`, refused: "rules" };
   }
   if (input.budget.attacksMade < 1 || input.budget.castThisAction) {
-    return `The off-hand attack follows the Attack action: ${input.who} attacks with the weapon in their main hand first, then makes the off-hand attack as a bonus action.`;
+    return { error: `The off-hand attack follows the Attack action: ${input.who} attacks with the weapon in their main hand first, then makes the off-hand attack as a bonus action.`, retry: true };
   }
   // A budget saved before the one-handed flag existed reads the light one.
   const earned = dualWielder
     ? (input.budget.oneHandMeleeAttack ?? input.budget.lightMeleeAttack)
     : input.budget.lightMeleeAttack;
   if (!earned) {
-    return dualWielder
+    return { error: dualWielder
       ? `The off-hand attack is earned by attacking with a melee weapon held in one hand, and ${input.who}'s Attack action this turn was made with something else.`
-      : `The off-hand attack is earned by attacking with a light melee weapon, and ${input.who}'s Attack action this turn was made with something else.`;
+      : `The off-hand attack is earned by attacking with a light melee weapon, and ${input.who}'s Attack action this turn was made with something else.`, refused: "rules" };
   }
   return null;
 }
@@ -168,7 +187,7 @@ export function loadingProblem(input: {
   budget: TurnBudget | null;
   feats?: string[];
   campaignId?: string;
-}): string | null {
+}): ToolError | null {
   if (!(input.profile.properties ?? []).includes("loading") || !input.budget) {
     return null;
   }
@@ -179,7 +198,7 @@ export function loadingProblem(input: {
   if (!fired) {
     return null;
   }
-  return `${input.profile.weapon} has the loading property: it fires once per action, however many attacks ${input.who} has. They attack with another weapon or end their turn.`;
+  return { error: `${input.profile.weapon} has the loading property: it fires once per action, however many attacks ${input.who} has. They attack with another weapon or end their turn.`, refused: "rules" };
 }
 
 export function withLoadingFired(

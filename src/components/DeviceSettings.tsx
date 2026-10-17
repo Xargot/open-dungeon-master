@@ -26,6 +26,7 @@ import {
 import { AUDIO_PREF_FIELDS, writeAudioPref, type AudioPrefField } from "@/lib/audio-prefs";
 import { cn } from "@/lib/cn";
 import { DiceLookButton } from "@/components/DiceLookEditor";
+import { DictationShortcutField } from "@/components/DictationShortcutField";
 import {
   requestMotionAccess,
   supportsShake,
@@ -347,6 +348,7 @@ function MicrophoneSection({ devices }: { devices: ReturnType<typeof useDevices>
   return (
     <section>
       <SectionHead title="Microphone" glyph="ui-voice" />
+      <p className="-mt-1 mb-2 text-xs text-stone-500">Only on this device. Live voice chat and dictation both listen through it.</p>
       <div className="space-y-3">
         <div>
           <span className={cn(LABEL, "mb-1 block")}>Recording device</span>
@@ -393,6 +395,10 @@ function MicrophoneSection({ devices }: { devices: ReturnType<typeof useDevices>
             align="end"
           />
         </div>
+        <div>
+          <span className={cn(LABEL, "mb-1 block")}>Dictation key</span>
+          <DictationShortcutField />
+        </div>
       </div>
     </section>
   );
@@ -411,6 +417,10 @@ function PlaybackSection({ devices }: { devices: ReturnType<typeof useDevices> }
   return (
     <section>
       <SectionHead title="Playback" glyph="tab-ambience" />
+      <p className="-mt-1 mb-2 text-xs text-stone-500">
+        Only on this device: how loud each part of the table plays for you. Whether the story is read aloud at all is the
+        table&apos;s own Narration setting.
+      </p>
       <div className="space-y-3">
         <div>
           <span className={cn(LABEL, "mb-1 block")}>Playback device</span>

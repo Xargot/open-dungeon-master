@@ -1,7 +1,10 @@
 "use client";
 
 import { BookOpenText, Download, Hourglass, Lock, Map as MapIcon, MessageCircleQuestion, Network, PenLine, Shapes, Sparkles, Upload } from "lucide-react";
-import { useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { workshopHref } from "@/lib/workshop/links";
+import { mayLeaveDrafts } from "@/app/workshop/unsaved";
 import { IconRail, type IconRailItem } from "@/components/ui/IconRail";
 import { KitButton, Listed, PanelError } from "@/app/campaigns/[campaignId]/PanelKit";
 import { useTourPrepare } from "@/lib/tours/prepare";
@@ -49,50 +52,105 @@ type ImportReport = {
   linksUpdated?: number;
   linksRemoved?: number;
   conflicts?: string[];
+  matched?: string[];
   events: number;
   secrets: number;
   maps: number;
   beats: number;
   skipped: string[];
+  losses?: string[];
+  notes?: string[];
 };
 
-export function WorldForgePanel({ campaignId, onOpenSystem }: { campaignId: string; onOpenSystem: (system: string) => void }) {
+// A file that would not come in whole, waiting for the author's yes.
+type Held = { text: string; losses: string[]; notes: string[] };
+
+// The tool a record lives in, and optionally the record itself with the
+// World entry to come back to (src/lib/workshop/links.ts).
+export type OpenSystem = (system: string, record?: { id: string; from: string }) => void;
+
+export function WorldForgePanel({
+  campaignId,
+  onOpenSystem,
+  onCreate,
+  refreshKey = 0,
+}: {
+  campaignId: string;
+  onOpenSystem: OpenSystem;
+  // The workshop's Create chooser, offered while the world is empty.
+  onCreate?: () => void;
+  // Bumped when any record changed elsewhere (useWorkshopVersions).
+  refreshKey?: number;
+}) {
   const api = useWorld(campaignId);
   const capabilities = useCapabilities();
   const canWrite = offersStoryModel(capabilities);
   const canPaint = offersImages(capabilities);
-  const [chosenView, setView] = useState<View>("wiki");
+  // The view and the open entry live in the URL, so refresh and Back land
+  // where the author was and an entry can be linked to (audit WF-11).
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const askedView = params.get("view");
+  const chosenView: View = VIEWS.some((entry) => entry.value === askedView) ? (askedView as View) : "wiki";
   const view: View = !canWrite && AI_VIEWS.has(chosenView) ? "wiki" : chosenView;
-  const [focus, setFocus] = useState<string | null>(null);
+  const focus = params.get("entry");
+  // A move to another entry or view closes an open editor, so it asks first
+  // when the editor has changes (src/app/workshop/unsaved.ts); a tour's
+  // moves do not ask.
+  async function go(next: { view?: View; entry?: string | null }, how: "push" | "replace" = "push") {
+    if (how === "push" && !(await mayLeaveDrafts())) return;
+    const href = workshopHref(pathname, {
+      system: "world",
+      view: next.view ?? chosenView,
+      entry: next.entry === undefined ? focus : next.entry,
+    });
+    if (how === "replace") router.replace(href, { scroll: false });
+    else router.push(href, { scroll: false });
+  }
+  const setView = (next: View) => void go({ view: next });
+  const setFocus = (ref: string | null) => void go({ entry: ref });
   const [report, setReport] = useState<ImportReport | null>(null);
   const [reading, setReading] = useState(false);
+  const [held, setHeld] = useState<Held | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const world = api.world;
 
+  // Records changed here or in another tab: the world is read again. An
+  // open entry editor keeps its draft (WF-02 handles a clash on save).
+  const { refresh } = api;
+  useEffect(() => {
+    if (refreshKey) refresh();
+  }, [refreshKey, refresh]);
+
   // The tour and the palette ask for a view, or for a new entry, by name
   // (src/lib/tours/prepare.ts).
+  // A tour's steps replace the place rather than adding to history.
   useTourPrepare((name) => {
-    if (name === "open-world-entry") setView("wiki");
+    if (name.split(":")[0] === "open-world-entry") void go({ view: "wiki" }, "replace");
     const asked = name.startsWith("world-view-") ? (name.slice("world-view-".length) as View) : null;
     // A tour step for a view this server does not offer has nothing to show.
-    if (asked && VIEWS.some((entry) => entry.value === asked)) setView(asked);
+    if (asked && VIEWS.some((entry) => entry.value === asked)) void go({ view: asked }, "replace");
   });
 
-  const open = (ref: string | null) => {
-    setFocus(ref);
-    if (ref) setView("wiki");
-  };
+  const open = (ref: string | null) => void go(ref ? { view: "wiki", entry: ref } : { entry: null });
 
-  async function importFile(file: File) {
+  async function bringIn(text: string, accept: boolean) {
     setReading(true);
     setReport(null);
+    setHeld(null);
     try {
-      const result = await api.importFile(await file.text());
-      if (result) setReport(result as unknown as ImportReport);
+      const result = await api.importFile(text, accept);
+      if (result?.preview) setHeld({ text, losses: (result.losses as string[]) ?? [], notes: (result.notes as string[]) ?? [] });
+      else if (result) setReport(result as unknown as ImportReport);
     } finally {
       setReading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  }
+
+  async function importFile(file: File) {
+    await bringIn(await file.text(), false);
   }
 
   const counts: Partial<Record<View, number>> = world
@@ -122,6 +180,27 @@ export function WorldForgePanel({ campaignId, onOpenSystem }: { campaignId: stri
           </a>
         </span>
       </div>
+      {held ? (
+        <div className="motion-pop flex flex-col gap-2 rounded-lg border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-100" role="alert" data-testid="world-import-losses">
+          <span>This file would not come in whole. Nothing has been brought in yet.</span>
+          <ul className="list-disc pl-4">
+            {held.losses.map((loss) => (
+              <li key={loss}>{loss}</li>
+            ))}
+          </ul>
+          {held.notes.map((note) => (
+            <span key={note} className="text-stone-300">{note}</span>
+          ))}
+          <span className="flex flex-wrap gap-2">
+            <KitButton tone="small" busy={reading} disabled={reading} onClick={() => bringIn(held.text, true)}>
+              Bring it in anyway
+            </KitButton>
+            <KitButton tone="small" onClick={() => setHeld(null)}>
+              Cancel
+            </KitButton>
+          </span>
+        </div>
+      ) : null}
       {report ? (
         <div className="motion-pop rounded-lg border border-emerald-700/40 bg-emerald-900/15 px-3 py-2 text-xs text-stone-200" role="status">
           Brought in {report.created} new {report.created === 1 ? "entry" : "entries"}
@@ -133,9 +212,14 @@ export function WorldForgePanel({ campaignId, onOpenSystem }: { campaignId: stri
             </span>
           ) : null}
           {report.conflicts?.length ? (
-            <span className="block text-amber-300">Changed here and in the file, kept as you had them: {report.conflicts.join(" ")}</span>
+            <span className="block text-amber-300">{report.conflicts.join(" ")}</span>
+          ) : null}
+          {report.matched?.length ? (
+            <span className="block text-amber-300">Matched by name to entries already here, so check they are the same: {report.matched.join(", ")}.</span>
           ) : null}
           {report.skipped.length ? <span className="block text-ember-300">Left out: {report.skipped.join("; ")}</span> : null}
+          {report.losses?.length ? <span className="block text-amber-300">Not in whole: {report.losses.join(" ")}</span> : null}
+          {report.notes?.length ? <span className="block text-stone-300">{report.notes.join(" ")}</span> : null}
         </div>
       ) : null}
       {api.error && !world ? <PanelError>{api.error}</PanelError> : null}
@@ -161,7 +245,7 @@ export function WorldForgePanel({ campaignId, onOpenSystem }: { campaignId: stri
         {world ? (
           // Keyed by view so the incoming one rises in instead of cutting.
           <div key={view} className="motion-tab">
-            {view === "wiki" ? <WikiView api={api} world={world} focus={focus} onFocus={setFocus} onOpenSystem={onOpenSystem} canWrite={canWrite} canPaint={canPaint} /> : null}
+            {view === "wiki" ? <WikiView campaignId={campaignId} api={api} world={world} focus={focus} onFocus={setFocus} onOpenSystem={onOpenSystem} onCreate={onCreate} canWrite={canWrite} canPaint={canPaint} /> : null}
             {view === "forge" ? <ForgeView api={api} world={world} onOpen={open} /> : null}
             {view === "ask" ? <AskView api={api} world={world} onOpen={open} /> : null}
             {view === "web" ? <WebView world={world} focus={focus} onOpen={open} /> : null}

@@ -142,7 +142,8 @@ OpenAI-compatible provider), or a CLI agent you already pay for (Claude Code,
 Codex, opencode, Grok Build). Pictures and voice are optional.
 
 ```bash
-git clone <this repo> && cd open-dungeon-master
+git clone --depth 1 https://github.com/Lebbitheplow/open-dungeon-master.git
+cd open-dungeon-master
 npm install
 npm run setup        # database key, content pack, memory model, production build
 npm run start:lan    # 0.0.0.0:3005 so your party can reach it on the LAN
@@ -183,6 +184,10 @@ docker compose up -d        # http://localhost:3005
   - [Campaign plugins (world packs)](docs/worlds.md): renaming the rules into a setting, the registry, building a pack in the workshop
   - [Workshop portability](docs/workshop-portability.md): bundles, imports and shared workshops
   - [The content pack](docs/content.md) and [licenses](docs/LICENSES.md)
+- **Addons**
+  - [Addons](docs/addons.md): installing from the audited list, permissions, where addons run
+  - [Writing an addon](docs/addons/authoring.md), [the extension points](docs/addons/extension-points.md) and [the catalog guidelines](docs/addons/guidelines.md)
+  - [Working on the addon framework](docs/addons/framework.md): the code map, the rules it keeps, how to add a field, a message or an extension point
 - **How it works**
   - [The engines](docs/engines.md): combat, sheets, world simulation, narrative, memory, AI integration, the human DM and the workshop
   - [Rules coverage](docs/rules-coverage.md): what is enforced, what is guidance, what is out of scope

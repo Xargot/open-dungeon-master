@@ -14,6 +14,9 @@ export const IMPORT_KINDS = [
   "encounters",
   "tables",
   "npcs",
+  // The factions, a choice of their own (audit finding WF-07). An NPC still
+  // brings the faction it belongs to; this brings every faction.
+  "factions",
   // Shops with their place, keeper, policy and shelf (#171).
   "shops",
   "maps",
@@ -33,6 +36,7 @@ export const IMPORT_KIND_LABELS: Record<ImportKind, string> = {
   encounters: "Prepared encounters",
   tables: "Roll tables",
   npcs: "NPCs",
+  factions: "Factions",
   shops: "Market",
   maps: "Battle maps",
   storyboard: "The storyboard",
@@ -104,6 +108,14 @@ export type BoardFacts = {
   moments: number;
   // Why the board cannot make an arc of its own, or "" when it can.
   arcProblem: string;
+  // The cards behind `beats` and the moments, by title and in the same
+  // order, so a preflight can NAME what the arc's caps would leave out
+  // (issue #301). Older callers leave them off.
+  beatTitles?: string[];
+  momentTitles?: string[];
+  // Cards whose prose reads as compressed (src/lib/workshop/prose-check.ts),
+  // said as a note the author can review (issue #302).
+  proseNotes?: Array<{ title: string; message: string }>;
 };
 
 // The arc a campaign already has, for a board joining it as a new act.
@@ -114,6 +126,9 @@ export type TargetArc = {
   // (src/lib/dm/arc-logic.ts).
   room: number;
   actRoom: boolean;
+  // How many more planned events fit: a pending event is never evicted, so
+  // moments past this stay on the prep cards and off the arc (issue #301).
+  eventRoom?: number;
 };
 
 // What happens to a board's beats when the campaign already has an arc:
@@ -174,3 +189,23 @@ export function emptyExisting(): ImportExisting {
     IMPORT_KINDS.map((kind) => [kind, [] as string[]]),
   ) as ImportExisting;
 }
+
+// What WorldForge needs beside it (audit finding WF-07): every World entry
+// is one of these records, and a link, a secret or a pin points at them. A
+// world brings them unless the DM leaves one out on purpose.
+export const WORLD_RECORD_KINDS = ["npcs", "locations", "lore", "factions"] as const satisfies readonly ImportKind[];
+export type WorldRecordKind = (typeof WORLD_RECORD_KINDS)[number];
+
+// The selection with what it needs: WorldForge's records, except the ones
+// the DM chose to leave behind.
+export function withRequired(selection: readonly ImportKind[], exclude: readonly ImportKind[] = []): ImportKind[] {
+  const out = new Set(selection);
+  if (out.has("world")) {
+    for (const kind of WORLD_RECORD_KINDS) if (!exclude.includes(kind)) out.add(kind);
+  }
+  return IMPORT_KINDS.filter((kind) => out.has(kind));
+}
+
+// What WorldForge says about one kind of record, for an honest exclusion:
+// how many entries, links, pins, secrets and event mentions go with it.
+export type WorldRecordFacts = { entries: number; links: number; pins: number; secrets: number; events: number };

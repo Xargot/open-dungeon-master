@@ -3,6 +3,7 @@ import { isErrorResponse, requireMember, steersStory } from "@/lib/campaign-api"
 import { getImportSourceForUser } from "@/lib/db/import-sources";
 import { planContentImport, runContentImport } from "@/lib/db/content-import";
 import { IMPORT_KINDS } from "@/lib/workshop/import";
+import { publishEphemeral } from "@/lib/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,10 @@ export const dynamic = "force-dynamic";
 // before anything is copied. POST does the same planning again server-side
 // and then executes it, because a plan the client hands back is a plan a
 // client could have edited.
+//
+// Prep keeps arriving after session one: the lobby offers this, and so does
+// the table's Setup tab once play has begun. An ended campaign takes nothing
+// more, the same line the campaign route draws for its details.
 
 const importSchema = z.object({
   sourceId: z.string().trim().min(1).max(80),
@@ -28,9 +33,13 @@ const importSchema = z.object({
   // A board meeting an arc the table is playing: leave the arc alone, or
   // add the board's beats as its next act (#157).
   arc: z.enum(["leave", "append"]).default("leave"),
+  // Kinds WorldForge needs that the DM chose to leave behind (audit finding
+  // WF-07): without them a ticked WorldForge brings its people, places,
+  // factions and lore with it.
+  exclude: z.array(z.enum(IMPORT_KINDS)).max(IMPORT_KINDS.length).default([]),
 });
 
-const previewSchema = importSchema.partial({ select: true, houseRules: true, again: true, arc: true });
+const previewSchema = importSchema.partial({ select: true, houseRules: true, again: true, arc: true, exclude: true });
 
 export async function GET(
   request: Request,
@@ -47,6 +56,7 @@ export async function GET(
     select: url.searchParams.getAll("select"),
     again: url.searchParams.get("again") ?? undefined,
     arc: url.searchParams.get("arc") ?? undefined,
+    exclude: url.searchParams.getAll("exclude"),
   });
   if (!parsed.success) {
     return Response.json({ error: "Invalid preview." }, { status: 400 });
@@ -63,6 +73,7 @@ export async function GET(
     plan: planContentImport(source.id, campaignId, selection, {
       again: parsed.data.again,
       arcMode: parsed.data.arc,
+      exclude: parsed.data.exclude,
     }),
   });
 }
@@ -85,6 +96,9 @@ export async function POST(
       { status: 403 },
     );
   }
+  if (context.campaign.status === "ended") {
+    return Response.json({ error: "The campaign has ended." }, { status: 400 });
+  }
   const parsed = importSchema.safeParse(await request.json().catch(() => ({})));
   if (!parsed.success) {
     return Response.json({ error: "Invalid import." }, { status: 400 });
@@ -101,15 +115,29 @@ export async function POST(
     houseRulesMode: parsed.data.houseRules,
     again: parsed.data.again,
     arcMode: parsed.data.arc,
+    exclude: parsed.data.exclude,
   });
   if ("error" in result) {
     return Response.json({ error: result.error }, { status: 400 });
   }
+  // An import touches a dozen tables at once (lore, places, quests, the arc,
+  // house rules), which no one incremental event expresses. At a table in
+  // play every open seat reloads its snapshot instead, so what was brought in
+  // shows without a refresh. Contentless: each seat reads back only what it
+  // may.
+  publishEphemeral(campaignId, "prep_imported", {});
   return Response.json({
     plan: result.plan,
     copied: result.copied,
     kept: result.kept,
     unbound: result.unbound,
     beatsAdded: result.beatsAdded,
+    // What the picker reports after an import: a reimport's kept edits,
+    // monsters nothing here answers to, and the hand-built monsters brought
+    // into this table's bestiary. These were computed and then dropped here.
+    ...(result.worldConflicts?.length ? { worldConflicts: result.worldConflicts } : {}),
+    ...(result.unresolved?.length ? { unresolved: result.unresolved } : {}),
+    ...(result.monstersBrought?.length ? { monstersBrought: result.monstersBrought } : {}),
+    ...(result.monstersReused?.length ? { monstersReused: result.monstersReused } : {}),
   });
 }

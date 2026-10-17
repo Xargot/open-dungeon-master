@@ -307,7 +307,9 @@ function EdgeChips({ edge }: { edge: TargetEdge }) {
 }
 
 // The board's hover plate: what the native tooltip used to say, as a plate.
-// Name, health word, conditions. Shown on hover, and on a tap for a phone.
+// The figure's painting large (a token shows it at a few dozen pixels, so
+// this is the one place on the board the art is actually seen), then name,
+// health word, conditions. Shown on hover, and on a tap for a phone.
 export function TokenPlate({
   token,
   boardWidth,
@@ -317,6 +319,7 @@ export function TokenPlate({
   health,
   conditions,
   edge,
+  anchor,
 }: {
   token: StageToken;
   boardWidth: number;
@@ -326,35 +329,39 @@ export function TokenPlate({
   health?: HealthWord;
   conditions?: Array<{ id: string; label: string; rounds?: number; note?: string }>;
   edge?: TargetEdge;
+  // Where an addon's board view drew the figure (TokenHud.tsx says how).
+  anchor?: [number, number, number];
 }) {
-  const cx = ((token.x + footprint / 2) / boardWidth) * 100;
-  // Below the figure near the top edge, above it everywhere else.
-  const below = token.y < boardHeight / 3;
-  const cy = ((below ? token.y + footprint : token.y) / boardHeight) * 100;
+  const cx = anchor ? anchor[0] * 100 : ((token.x + footprint / 2) / boardWidth) * 100;
+  // Below the figure in the top half, above it in the bottom half: the plate
+  // is tall now, and either way it clears the figure rather than covering it.
+  const below = anchor ? (anchor[1] + anchor[2]) / 2 < 0.5 : token.y + footprint / 2 < boardHeight / 2;
+  const cy = anchor ? (below ? anchor[2] : anchor[1]) * 100 : ((below ? token.y + footprint : token.y) / boardHeight) * 100;
   return (
     <div
       role="tooltip"
-      className="pointer-events-none absolute z-20 w-max max-w-[220px] animate-fade-up rounded-lg border border-[rgba(107,99,148,0.4)] bg-[rgba(8,6,18,0.94)] p-1.5 text-[#e9e6f4] shadow-elev-2"
+      className="pointer-events-none absolute z-20 flex w-[136px] animate-fade-up flex-col items-center rounded-lg border border-[rgba(107,99,148,0.4)] bg-[rgba(8,6,18,0.94)] p-1.5 text-[#e9e6f4] shadow-elev-2 sm:w-[172px]"
       style={{
-        left: `${Math.min(88, Math.max(12, cx))}%`,
+        // Half the plate's width in from either edge, so it never runs off
+        // the board; a plate near a corner slides along rather than hanging.
+        left: `clamp(88px, ${cx}%, calc(100% - 88px))`,
         top: `${cy}%`,
         // `translate`, not `transform`: the fade-up animates transform and
         // holds its last frame, which would drop the plate's own offset.
         translate: below ? "-50% 6px" : "-50% calc(-100% - 6px)",
       }}
     >
-      <div className="flex items-center gap-1.5">
-        <TokenFace
-          candidates={face}
-          name={token.name}
-          enemy={token.kind === "enemy"}
-          className="size-7 rounded-full border border-[rgba(227,193,92,0.35)]"
-        />
-        <span className="min-w-0">
-          <span className="block truncate font-display text-xs font-semibold">{token.name}</span>
-          {health ? <HealthWordChip word={health} /> : null}
-        </span>
-      </div>
+      {/* The plates are square paintings; a square frame shows all of one. */}
+      <TokenFace
+        candidates={face}
+        name={token.name}
+        enemy={token.kind === "enemy"}
+        className="size-[124px] rounded-md border border-[rgba(227,193,92,0.35)] text-3xl sm:size-[160px]"
+      />
+      <span className="mt-1 flex w-full min-w-0 flex-col items-center text-center">
+        <span className="block max-w-full truncate font-display text-xs font-semibold">{token.name}</span>
+        {health ? <HealthWordChip word={health} /> : null}
+      </span>
       {conditions?.length ? (
         <div className="mt-1 flex flex-wrap gap-1">
           {conditions.map((condition, index) => (

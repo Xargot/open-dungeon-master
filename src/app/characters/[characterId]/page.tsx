@@ -17,7 +17,7 @@ import type { CreateSheetInput } from "@/lib/schemas/sheet";
 import { CharacterPortrait, ui } from "@/lib/ui";
 import { offersImages, useCapabilities } from "@/lib/use-capabilities";
 import { SheetSections, StorySoFar, type CharacterEvent } from "./SheetSections";
-import { navigateTo } from "@/lib/navigation";
+import { currentQuery, navigateTo, workshopReturnPath } from "@/lib/navigation";
 import { UseInCampaignDialog } from "./UseInCampaignDialog";
 
 // Where this character is playing; see src/lib/db/characters.ts.
@@ -325,13 +325,15 @@ export default function CharacterDetailPage({
       : []),
   ];
   const working = pdfBusy || exporting || cloning || painting;
+  // Opened from a workshop's Party tool, back leads there (workshopReturnPath).
+  const backTo = workshopReturnPath(currentQuery().get("from"));
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 p-4 sm:p-6">
       <AppHeader />
       <ContextMenu items={actions} label={character.name} className={cn(ui.card, "ornate texture-noise mb-4 p-4 sm:p-5")}>
-        <Link href="/characters" className="-my-1 inline-flex min-h-10 items-center gap-1.5 text-sm text-stone-400 hover:text-amber-200">
-          <ArrowLeft className="size-4" /> Back to your characters
+        <Link href={backTo ?? "/characters"} className="-my-1 inline-flex min-h-10 items-center gap-1.5 text-sm text-stone-400 hover:text-amber-200">
+          <ArrowLeft className="size-4" /> {backTo ? "Back to the workshop" : "Back to your characters"}
         </Link>
         <div className="mt-2 flex items-start gap-4">
           <span className="relative shrink-0">
@@ -413,8 +415,20 @@ export default function CharacterDetailPage({
             <GameIcon icon={{ kind: "glyph", key: "tab-campaigns" }} size="size-6" />{" "}
             {character.role === "companion" ? "Bring to a campaign" : "Use in a campaign"}
           </button>
+          {/* Levelling is the change made most often; it opens the build one
+              level up instead of making the player find the level field.
+              A multiclass split levels at a table, where the class is
+              chosen. */}
+          {character.level < 20 && (character.sheet?.classes ?? []).length <= 1 ? (
+            <Link
+              href={`/characters/${characterId}/edit?levelUp=1`}
+              className={cn(ui.btnSecondary, "min-w-0 flex-1 sm:flex-none")}
+            >
+              <GameIcon icon={{ kind: "glyph", key: "rest-level-up" }} size="size-6" /> Level up to {character.level + 1}
+            </Link>
+          ) : null}
           <Link href={`/characters/${characterId}/edit`} className={cn(ui.btnSecondary, "min-w-0 flex-1 sm:flex-none")}>
-            <GameIcon icon={{ kind: "glyph", key: "rest-level-up" }} size="size-6" /> Edit build
+            <GameIcon icon={{ kind: "glyph", key: "ui-edit" }} size="size-6" /> Edit build
           </Link>
           <KebabMenu
             items={actions}

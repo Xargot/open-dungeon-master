@@ -2,12 +2,18 @@
 
 import { ScrollText } from "lucide-react";
 import { appConfirm } from "@/components/ui/ConfirmDialog";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ui } from "@/lib/ui";
 import type { SessionUser } from "@/lib/campaign-types";
 import { offersStoryModel, useCapabilities, type ClientCapabilities } from "@/lib/use-capabilities";
-import { CreateCampaignDialog } from "@/app/CreateCampaignDialog";
 import { StarterDialog } from "@/app/home/StarterDialog";
+
+// The campaign creator (every step, its field groups and the defaults
+// manager) loads when it is first opened, not with the title screen; once
+// open it stays mounted, so a draft closed half-done is there on reopening.
+const CreateCampaignDialog = lazy(() =>
+  import("@/app/CreateCampaignDialog").then((module) => ({ default: module.CreateCampaignDialog })),
+);
 import { AccountMenu, AppBrand, AppHomeButton } from "@/components/AccountMenu";
 import { DeletionBanner } from "@/components/DeletionBanner";
 import { NotificationBell } from "@/components/NotificationBell";
@@ -55,6 +61,15 @@ export function Dashboard({ user, onLogout }: { user: SessionUser; onLogout: () 
   const [cloningId, setCloningId] = useState("");
   const [createOpen, setCreateOpen] = useState(() => requestedWizard() === "campaign");
   const [soloOpen, setSoloOpen] = useState(() => requestedWizard() === "solo");
+  // Whether each creator has been opened yet (it loads on first open).
+  const [createSeen, setCreateSeen] = useState(createOpen);
+  const [soloSeen, setSoloSeen] = useState(soloOpen);
+  if (createOpen && !createSeen) {
+    setCreateSeen(true);
+  }
+  if (soloOpen && !soloSeen) {
+    setSoloSeen(true);
+  }
   const [starterOpen, setStarterOpen] = useState(() => requestedWizard() === "starter");
   const [howToOpen, setHowToOpen] = useState(false);
   const joinInputRef = useRef<HTMLInputElement | null>(null);
@@ -185,78 +200,84 @@ export function Dashboard({ user, onLogout }: { user: SessionUser; onLogout: () 
       <ScreenBackdrop campaign={continueCampaign} />
       <span className="ts-corner ts-corner-tl" aria-hidden="true" />
       <span className="ts-corner ts-corner-tr" aria-hidden="true" />
-      <span className="ts-corner ts-corner-bl" aria-hidden="true" />
-      <span className="ts-corner ts-corner-br" aria-hidden="true" />
 
       <div className="ts-page">
-        {/* The wordmark may shrink and wrap; the action cluster never does,
-            so on a narrow phone (or a large system font) the account menu
-            stays on screen instead of being pushed past the right edge. */}
-        <header className="ts-header animate-fade-up">
-          <AppBrand className="ts-brand">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/assets/ui/book-closed.webp" alt="" className="ts-brand-book" />
-            <span className="ts-wordmark">Open Dungeon Master</span>
-          </AppBrand>
-          <div className="ts-cluster">
-            <AppHomeButton />
-            <NotificationBell />
-            <Tooltip content="What this app is and how a table works" side="bottom">
-              <button type="button" onClick={() => setHowToOpen(true)} className={ui.btnSmall} aria-label="How to play">
-                <ScrollText className="size-4" />
-                <span className="hidden sm:inline">How to play</span>
-              </button>
-            </Tooltip>
-            <span className="ts-username" aria-hidden="true">{user.username}</span>
-            <AccountMenu user={user} onLogout={onLogout} />
-          </div>
-        </header>
-        {user.deletionDueAt ? <DeletionBanner dueAt={user.deletionDueAt} className="ts-deletion" /> : null}
-        {user.isAdmin ? <SetupNudge className="ts-deletion" /> : null}
+        {/* The first screen: the header, any notice and the stage fill the
+            window and grow past it rather than spill out of the frame; the
+            lower brackets ride its foot. */}
+        <div className="ts-first">
+          <span className="ts-corner ts-corner-bl" aria-hidden="true" />
+          <span className="ts-corner ts-corner-br" aria-hidden="true" />
+          {/* The wordmark may shrink and wrap; the action cluster never does,
+              so on a narrow phone (or a large system font) the account menu
+              stays on screen instead of being pushed past the right edge. */}
+          <header className="ts-header animate-fade-up">
+            <AppBrand className="ts-brand">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/assets/ui/book-closed.webp" alt="" className="ts-brand-book" />
+              <span className="ts-wordmark">Open Dungeon Master</span>
+            </AppBrand>
+            <div className="ts-cluster">
+              <AppHomeButton />
+              <NotificationBell />
+              <Tooltip content="What this app is and how a table works" side="bottom">
+                <button type="button" onClick={() => setHowToOpen(true)} className={ui.btnSmall} aria-label="How to play">
+                  <ScrollText className="size-4" />
+                  <span className="hidden sm:inline">How to play</span>
+                </button>
+              </Tooltip>
+              <span className="ts-username" aria-hidden="true">{user.username}</span>
+              <AccountMenu user={user} onLogout={onLogout} />
+            </div>
+          </header>
+          {user.deletionDueAt ? <DeletionBanner dueAt={user.deletionDueAt} className="ts-deletion" /> : null}
+          {user.isAdmin ? <SetupNudge className="ts-deletion" /> : null}
 
-        <section className="ts-stage" aria-label="Title screen">
-          <div className="ts-stage-left">
-            {/* The title block waits for the list: showing "empty table"
-                before the answer arrives would flash a lie at every account
-                with tables, and a failed fetch is not an empty account either. */}
-            {loading ? (
-              <LoadingHero />
-            ) : loadFailed && campaigns.length === 0 ? (
-              <FailedHero
-                onRetry={() => {
-                  setLoading(true);
-                  void refresh();
-                }}
+          <section className="ts-stage" aria-label="Title screen">
+            <div className="ts-stage-left">
+              {/* The title block waits for the list: showing "empty table"
+                  before the answer arrives would flash a lie at every account
+                  with tables, and a failed fetch is not an empty account either. */}
+              {loading ? (
+                <LoadingHero />
+              ) : loadFailed && campaigns.length === 0 ? (
+                <FailedHero
+                  onRetry={() => {
+                    setLoading(true);
+                    void refresh();
+                  }}
+                />
+              ) : continueCampaign ? (
+                <ContinueHero campaign={continueCampaign} userId={user.id} />
+              ) : (
+                <EmptyHero onNewCampaign={() => setCreateOpen(true)} canCreate={user.canCreateCampaigns !== false} />
+              )}
+              <HomeMenu
+                onNewCampaign={() => setCreateOpen(true)}
+                onStarter={() => setStarterOpen(true)}
+                showNew={user.canCreateCampaigns !== false}
+                onSolo={() => setSoloOpen(true)}
+                showSolo={offersStoryModel(capabilities)}
+                onJoin={focusJoin}
+                firstTime={!loading && !loadFailed && campaigns.length === 0}
               />
-            ) : continueCampaign ? (
-              <ContinueHero campaign={continueCampaign} userId={user.id} />
-            ) : (
-              <EmptyHero onNewCampaign={() => setCreateOpen(true)} canCreate={user.canCreateCampaigns !== false} />
-            )}
-            <HomeMenu
-              onNewCampaign={() => setCreateOpen(true)}
-              onStarter={() => setStarterOpen(true)}
-              showNew={user.canCreateCampaigns !== false}
-              onSolo={() => setSoloOpen(true)}
-              showSolo={offersStoryModel(capabilities)}
-              onJoin={focusJoin}
-            />
-            <DmStatusLine capabilities={capabilities} />
-          </div>
-          <div className="ts-stage-right">
-            {continueCampaign ? <RecapPanel campaign={continueCampaign} /> : null}
-            <YourTables
-              campaigns={campaigns}
-              loading={loading}
-              userId={user.id}
-              cloningId={cloningId}
-              actionError={actionError}
-              onClone={clone}
-              onDelete={deleteCampaign}
-              onNewCampaign={() => setCreateOpen(true)}
-            />
-          </div>
-        </section>
+              <DmStatusLine capabilities={capabilities} />
+            </div>
+            <div className="ts-stage-right">
+              {continueCampaign ? <RecapPanel campaign={continueCampaign} /> : null}
+              <YourTables
+                campaigns={campaigns}
+                loading={loading}
+                userId={user.id}
+                cloningId={cloningId}
+                actionError={actionError}
+                onClone={clone}
+                onDelete={deleteCampaign}
+                onNewCampaign={() => setCreateOpen(true)}
+              />
+            </div>
+          </section>
+        </div>
 
         <section className="ts-below">
           <WorkshopSection workshops={workshops} cloningId={cloningId} onClone={clone} />
@@ -264,8 +285,10 @@ export function Dashboard({ user, onLogout }: { user: SessionUser; onLogout: () 
           <HomeFooter />
         </section>
 
-        <CreateCampaignDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
-        <CreateCampaignDialog solo open={soloOpen} onOpenChange={setSoloOpen} onCreated={onCreated} />
+        <Suspense fallback={null}>
+          {createSeen ? <CreateCampaignDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} /> : null}
+          {soloSeen ? <CreateCampaignDialog solo open={soloOpen} onOpenChange={setSoloOpen} onCreated={onCreated} /> : null}
+        </Suspense>
         <StarterDialog open={starterOpen} onOpenChange={setStarterOpen} onCreated={onCreated} />
         <HowToPlayDialog open={howToOpen} onOpenChange={setHowToOpen} />
       </div>

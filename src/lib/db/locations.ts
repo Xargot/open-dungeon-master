@@ -14,6 +14,12 @@ export type CampaignLocation = {
   visited: boolean;
   isCurrent: boolean;
   mapImage: GeneratedImage | null;
+  // Why the last map render failed, while the place has no map. Kept so a
+  // reload shows the failure instead of a placeholder that never ends.
+  mapFailed: string | null;
+  // A render is queued or running for a place with no map, so the narration
+  // that introduced it is still charting it.
+  mapPending: boolean;
   // The prepared map this place stands on, when the DM linked one, and the
   // sound it makes (docs/vtt-parity-implementation-plan.md section 3.5).
   preparedMapId: string | null;
@@ -37,6 +43,24 @@ type LocationRow = {
   updated_at: string;
 };
 
+// map_image_json holds the map, or, while there is none, why the last render
+// failed ({ failed }) or when the one on its way was queued ({ pending }):
+// both need to outlive their ephemeral media_status without a column of
+// their own.
+type StoredMap = GeneratedImage | { failed: string } | { pending: string };
+
+function storedMap(raw: string | null): Pick<CampaignLocation, "mapImage" | "mapFailed" | "mapPending"> {
+  const stored = parseJson<StoredMap | null>(raw, null);
+  if (stored && "url" in stored) {
+    return { mapImage: stored, mapFailed: null, mapPending: false };
+  }
+  return {
+    mapImage: null,
+    mapFailed: stored && "failed" in stored && typeof stored.failed === "string" ? stored.failed : null,
+    mapPending: Boolean(stored && "pending" in stored),
+  };
+}
+
 function mapLocation(row: LocationRow): CampaignLocation {
   return {
     id: row.id,
@@ -46,7 +70,7 @@ function mapLocation(row: LocationRow): CampaignLocation {
     connections: parseJson<string[]>(row.connections_json, []),
     visited: Boolean(row.visited),
     isCurrent: Boolean(row.is_current),
-    mapImage: parseJson<GeneratedImage | null>(row.map_image_json, null),
+    ...storedMap(row.map_image_json),
     preparedMapId: row.prepared_map_id ?? null,
     ambience: parseJson<{ bed: string; music: string } | null>(row.ambience_json ?? "", null),
     createdAt: row.created_at,
@@ -82,6 +106,24 @@ export function getCurrentLocation(campaignId: string): CampaignLocation | null 
   return row ? mapLocation(row) : null;
 }
 
+// Moving to a place already on record (usually a return) adds routes rather
+// than replacing them: away from a place the model never sees its recorded
+// exits, so what it passes on the way back is a fresh guess that would drop
+// the routes already known. update_location remains the way to revise them.
+// Names are compared folded, as places are (getLocationByName).
+export function withNewNames(known: string[], added: string[]): string[] {
+  const seen = new Set(known.map(foldName));
+  const merged = [...known];
+  for (const name of added) {
+    const folded = foldName(name);
+    if (!seen.has(folded)) {
+      seen.add(folded);
+      merged.push(name);
+    }
+  }
+  return merged;
+}
+
 // Create-or-update by name, mark it current + visited, clear other currents.
 export function upsertCurrentLocation(input: {
   campaignId: string;
@@ -105,7 +147,9 @@ export function upsertCurrentLocation(input: {
         `,
       ).run(
         input.layoutDescription?.trim() || existing.layoutDescription,
-        JSON.stringify(input.connections ?? existing.connections),
+        JSON.stringify(
+          input.connections ? withNewNames(existing.connections, input.connections) : existing.connections,
+        ),
         now,
         existing.id,
       );
@@ -256,6 +300,45 @@ export function setLocationMap(locationId: string, image: GeneratedImage | null)
     .prepare(`UPDATE locations SET map_image_json = ?, updated_at = ? WHERE id = ?`)
     .run(image ? JSON.stringify(image) : null, nowIso(), locationId);
   return result.changes > 0;
+}
+
+// A map render failed. Recorded only while the place has no map: a failed
+// redraw leaves the map it already had. Not a change to the place itself, so
+// updated_at (the panel's order) is left alone.
+export function setLocationMapFailed(locationId: string, reason: string): boolean {
+  const location = getLocation(locationId);
+  if (!location || location.mapImage) {
+    return false;
+  }
+  getDatabase()
+    .prepare(`UPDATE locations SET map_image_json = ? WHERE id = ?`)
+    .run(JSON.stringify({ failed: reason } satisfies StoredMap), locationId);
+  return true;
+}
+
+// A new render is on its way to a place with no map: an old failure no
+// longer describes the place, and until the render lands or fails, a reload
+// still shows the narration charting it. A place with a map keeps it while
+// a redraw waits. True when what is stored changed.
+export function setLocationMapPending(locationId: string): boolean {
+  const location = getLocation(locationId);
+  if (!location || location.mapImage || location.mapPending) {
+    return false;
+  }
+  getDatabase()
+    .prepare(`UPDATE locations SET map_image_json = ? WHERE id = ?`)
+    .run(JSON.stringify({ pending: nowIso() } satisfies StoredMap), locationId);
+  return true;
+}
+
+// Renders a stopped process had queued or running. The queue lived in its
+// memory, so none of them is coming: each place gets the failure, which
+// shows the reason and leaves the redraw to the Map panel, instead of a
+// placeholder that charts forever. How many places that was.
+export function failPendingLocationMaps(reason: string): number {
+  return getDatabase()
+    .prepare(`UPDATE locations SET map_image_json = ? WHERE map_image_json LIKE '{"pending":%'`)
+    .run(JSON.stringify({ failed: reason } satisfies StoredMap)).changes;
 }
 
 // Link a place to a prepared map and a sound, or clear either with null.

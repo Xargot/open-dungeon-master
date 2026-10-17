@@ -1,4 +1,5 @@
 import { generateStoryImage, imageProducerReady } from "@/lib/image-generate";
+import { imagesAvailable } from "@/lib/capabilities";
 import {
   getCampaignMessage,
   getLatestDmMessage,
@@ -12,6 +13,7 @@ import { publishEphemeral, publishPersisted } from "@/lib/events";
 import { enqueueMediaJob } from "@/lib/media-queue";
 import { toEnglishForImage } from "@/lib/image-english";
 import type { AspectPreset, GeneratedImage, ImageRequest, StorySettings } from "@/lib/types";
+import type { ToolResult } from "@/lib/dm/tool-errors";
 
 // Ephemeral progress refinements for the pending-media placeholders. The
 // durable truth stays derivable (a message with imageRequest and no
@@ -80,10 +82,54 @@ export function fulfillMessageImage(
       }
       publishPersisted(campaignId, "image_ready", { messageId, image });
     } catch (error) {
-      publishMediaStatus(campaignId, "image", messageId, "failed", pictureFailureReason(error));
+      const reason = pictureFailureReason(error);
+      publishMediaStatus(campaignId, "image", messageId, "failed", reason);
+      recordImageFailure(campaignId, messageId, reason);
       throw error;
     }
   });
+}
+
+// The failure above is an ephemeral event, and the placeholder reads the
+// request: left needed, a reload or a player who joins later would watch it
+// spin forever. So the request is closed with the reason, which the passage
+// shows in the placeholder's place. Asking again writes a fresh request.
+function recordImageFailure(campaignId: string, messageId: string, reason: string) {
+  const message = getCampaignMessage(messageId);
+  if (!message?.imageRequest || message.generatedImage) {
+    return;
+  }
+  if (!setMessageImageRequest(messageId, { ...message.imageRequest, needed: false, failed: reason })) {
+    return;
+  }
+  const updated = getCampaignMessage(messageId);
+  if (updated) {
+    publishPersisted(campaignId, "message_updated", { message: updated });
+  }
+}
+
+// The picture the AI DM attaches to its own narration. Nobody at the table
+// asked for it, so on a server with no image backend running (setup's "no
+// pictures", which still falls back to ComfyUI) it is dropped rather than
+// failed: the request is marked not needed, which is what the placeholder
+// reads, so it goes away now and stays away on a reload. A ComfyUI started
+// later is picked up once the capability probe sees it.
+export async function fulfillAutoImage(
+  campaignId: string,
+  messageId: string,
+  request: ImageRequest,
+  settings: StorySettings,
+) {
+  if (await imagesAvailable(settings)) {
+    return fulfillMessageImage(campaignId, messageId, request, settings);
+  }
+  if (!setMessageImageRequest(messageId, { ...request, needed: false })) {
+    return;
+  }
+  const updated = getCampaignMessage(messageId);
+  if (updated) {
+    publishPersisted(campaignId, "message_updated", { message: updated });
+  }
 }
 
 // generate_image, as an adjudication a person can invoke.
@@ -96,19 +142,19 @@ export function fulfillMessageImage(
 export function handleGenerateImage(
   campaign: Campaign,
   rawArguments: string,
-): Record<string, unknown> {
+): ToolResult {
   if (!campaign.settings.imageGenerationEnabled) {
-    return { error: "Image generation is off for this campaign." };
+    return { error: "Image generation is off for this campaign.", retry: true };
   }
   let args: ImageToolArgs;
   try {
     args = imageToolArgsSchema.parse(JSON.parse(rawArguments || "{}"));
   } catch {
-    return { error: "Invalid arguments: illustrating needs a prompt." };
+    return { error: "Invalid arguments: illustrating needs a prompt.", retry: true };
   }
   const message = getLatestDmMessage(campaign.id);
   if (!message) {
-    return { error: "Narrate something first; the picture hangs under the passage it draws." };
+    return { error: "Narrate something first; the picture hangs under the passage it draws.", retry: true };
   }
   const request: ImageRequest = {
     needed: true,
@@ -120,7 +166,7 @@ export function handleGenerateImage(
     characterIds: [],
   };
   if (!setMessageImageRequest(message.id, request)) {
-    return { error: "That passage is no longer there." };
+    return { error: "That passage is no longer there.", retry: true };
   }
   const updated = getCampaignMessage(message.id);
   if (updated) {

@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { PregenPicker } from "@/app/campaigns/[campaignId]/PregenPicker";
+import { HeroRoutes } from "@/app/campaigns/[campaignId]/HeroRoutes";
 import { Check, Loader2, Pencil, Play, Trash2, UserRound } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ui } from "@/lib/ui";
 import type { CampaignMember } from "@/lib/campaign-types";
+import type { LobbyNext } from "@/lib/dm/lobby-next";
+import { GameIcon } from "@/components/ui/GameIcon";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 
 // Edit, switch or remove your character. Shown under the ready button once
@@ -92,6 +94,7 @@ function StartBlock({
 // seat too. Delete is the owner's alone and sits last, quiet, because it is
 // irreversible.
 export function LobbyActions({
+  next,
   campaign,
   myMember,
   mySheet,
@@ -108,6 +111,8 @@ export function LobbyActions({
   onRemoveCharacter,
   onDelete,
 }: {
+  // What happens next for this viewer (src/lib/dm/lobby-next.ts).
+  next?: LobbyNext;
   campaign: { id: string; gameSettings?: { multiCharacter?: string } };
   myMember: CampaignMember | undefined;
   mySheet: CharacterSheet | undefined;
@@ -127,6 +132,16 @@ export function LobbyActions({
 }) {
   return (
     <section className="space-y-3">
+      {next ? (
+        <p data-lobby-next={next.tone} aria-live="polite" className="lobby-next">
+          <GameIcon
+            icon={{ kind: "glyph", key: next.tone === "go" ? "quest-done" : next.tone === "wait" ? "pace-slow" : "quest-active" }}
+            size="size-6"
+            className="shrink-0"
+          />
+          <span key={next.text} className="live-in min-w-0">{next.text}</span>
+        </p>
+      ) : null}
       {isDm ? (
         <div className={cn(ui.card, "ornate flex flex-col items-center gap-2 px-6 py-6 text-center")}>
           <p className="font-display text-lg tracking-wide text-amber-50">
@@ -146,10 +161,7 @@ export function LobbyActions({
             <p className="max-w-sm text-balance font-display text-xl tracking-wide text-amber-50">
               Your adventure needs a hero.
             </p>
-            <Link href={`/campaigns/${campaign.id}/character`} className={cn(ui.btnPrimary, "px-6")}>
-              Create your character
-            </Link>
-            <PregenPicker campaignId={campaign.id} />
+            <HeroRoutes campaignId={campaign.id} className="w-full" />
           </div>
         ) : (
           <>
@@ -176,12 +188,10 @@ export function LobbyActions({
           </>
         )
       ) : !mySheet ? (
-        <>
-          <Link href={`/campaigns/${campaign.id}/character`} className={cn(ui.btnPrimary, "w-full")}>
-            Create your character
-          </Link>
-          <PregenPicker campaignId={campaign.id} />
-        </>
+        <div className={cn(ui.card, "ornate space-y-3 px-4 py-4")}>
+          <p className="text-center font-display text-lg tracking-wide text-amber-50">Choose your hero</p>
+          <HeroRoutes campaignId={campaign.id} />
+        </div>
       ) : (
         <>
           <button

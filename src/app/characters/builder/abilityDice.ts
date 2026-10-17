@@ -3,6 +3,7 @@
 // rule: which die is set aside, how long a toss lasts, which tier a total
 // lands in (docs/visual-overhaul-plan.md 7.2).
 
+import { REROLL_LOW_DEFAULT } from "@/lib/srd/ability-rerolls";
 import { hpBonusPerLevel } from "@/lib/srd/race-id";
 
 export type Rng = () => number;
@@ -70,6 +71,29 @@ export function rollTier(total: number): 1 | 2 | 3 | 4 | 5 {
   return 5;
 }
 
+// The tier in words, shown beside the colour so a reader who cannot tell red
+// from green, or hears the tray read aloud, gets the same grade.
+const TIER_WORDS = { 1: "grim", 2: "poor", 3: "fair", 4: "good", 5: "heroic" } as const;
+export function rollWord(total: number): string {
+  return TIER_WORDS[rollTier(total)];
+}
+
+// The line a remarkable throw earns, or null: an 18, four sixes in one
+// throw, a pool that sums to 80 or more. The story players retell, noticed
+// in words first, so it reads the same with the effects turned down.
+export function poolHighlight(pool: PoolEntry[]): string | null {
+  if (pool.some((entry) => entry.roll?.dice.every((die) => die === 6))) {
+    return "Four sixes in one throw. The dice favour you.";
+  }
+  if (pool.some((entry) => entry.total === 18)) {
+    return "An 18. The dice favour you.";
+  }
+  if (poolSum(pool) >= 80) {
+    return "A heroic pool. Your table will hear about this.";
+  }
+  return null;
+}
+
 // Standard d6 pip layouts on a 42-unit face: a 3x3 grid inset to 12/21/30.
 const PIP_GRID = {
   tl: [12, 12], tc: [21, 12], tr: [30, 12],
@@ -117,8 +141,10 @@ export function assignStandard<K extends string>(
 
 // Rolling hands the player six totals up front; they are then placed on the
 // abilities like the standard array. A fresh six is only allowed when the
-// whole pool adds up to less than this.
-export const REROLL_BELOW = 70;
+// whole pool adds up to less than this: the server's default rule, which the
+// builder shows until the server has said what the rule is where the
+// character is being made.
+export const REROLL_BELOW = REROLL_LOW_DEFAULT;
 export const POOL_SIZE = 6;
 
 export type PoolRoll = FourDice & { rest: DieRest[] };
@@ -138,8 +164,9 @@ export function poolSum(pool: PoolEntry[]): number {
   return pool.reduce((sum, entry) => sum + entry.total, 0);
 }
 
-// `below` is the server's threshold (an admin setting, issue #128); the
-// constant above is the default a builder shows before it has heard it.
+// `below` is the threshold where the character is made: the server's (an
+// admin setting, issue #128) or a table's own; the constant above is the
+// default a builder shows before it has heard it.
 export function canRerollPool(pool: PoolEntry[] | null, below: number = REROLL_BELOW): boolean {
   return !pool || poolSum(pool) < below;
 }
@@ -215,26 +242,38 @@ export type HpBreakdown = {
   perLevel: number;
   laterLevels: number;
   bonusPerLevel: number;
+  // What a later level counts the die as: its fixed value under "average",
+  // its highest face under "max".
+  face: number;
+  // Hit points a feature adds on top: Draconic Resilience's one per
+  // sorcerer level (src/lib/srd/trait-rules.ts featureHitPoints).
+  featureHp: number;
   total: number;
 };
 
-// Mirrors suggestedStartingHp in src/lib/srd/index.ts term by term, so the
-// explainer can show its working; the test holds the two together.
+// derivedMaxHp in src/lib/srd/hit-points.ts term by term, for one class, so
+// the explainer can show its working; scripts/test-builder-hp.mjs holds the
+// two together.
 export function hpBreakdown({
   hitDie,
   con,
   level,
   bonusPerLevel = 0,
+  method = "average",
+  featureHp = 0,
 }: {
   hitDie: number;
   con: number;
   level: number;
   bonusPerLevel?: number;
+  method?: "average" | "max";
+  featureHp?: number;
 }): HpBreakdown {
   const conMod = Math.floor((con - 10) / 2);
+  const face = method === "max" ? hitDie : Math.floor(hitDie / 2) + 1;
   // Every level adds at least 1, so the floor sits on each level.
   const firstLevel = Math.max(1, hitDie + conMod + bonusPerLevel);
-  const perLevel = Math.max(1, Math.floor(hitDie / 2) + 1 + conMod + bonusPerLevel);
+  const perLevel = Math.max(1, face + conMod + bonusPerLevel);
   const laterLevels = Math.max(0, level - 1) * perLevel;
   return {
     hitDie,
@@ -243,7 +282,9 @@ export function hpBreakdown({
     perLevel,
     laterLevels,
     bonusPerLevel,
-    total: firstLevel + laterLevels,
+    face,
+    featureHp,
+    total: firstLevel + laterLevels + featureHp,
   };
 }
 

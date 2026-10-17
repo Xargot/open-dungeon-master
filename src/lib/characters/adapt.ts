@@ -1,7 +1,7 @@
 import { spellSlotsFor } from "@/lib/srd";
 import { slotTableFor } from "@/lib/srd/multiclass";
 import { earnedAsiCountFor, removeAsiChoices } from "@/lib/srd/asi";
-import { readAsiLedger, withAsiLedger } from "@/lib/srd/asi-ledger";
+import { legacyAsiTaken, readAsiLedger, withAsiLedger } from "@/lib/srd/asi-ledger";
 import { derivedMaxHp, hpBonusPerLevelFor } from "@/lib/srd/hit-points";
 import { hpBonusPerLevel } from "@/lib/srd/race-id";
 import { isThirdCaster } from "@/lib/srd/third-caster";
@@ -45,11 +45,11 @@ import {
 //
 // It is deliberately lossy in one place, and always was: reversing an
 // ability score improvement cannot restore a score that hit the 20 cap on
-// the way up. Up-scaling grants no automatic extra improvements either; the
-// player edits the sheet in play instead. Both of those are the old
-// behaviour, written down rather than changed. Primal Champion is not an
-// improvement but a fixed +4 at barbarian 20, so it is given and taken back
-// here.
+// the way up. Up-scaling grants no automatic extra improvements either: the
+// ones between the stored level and the table's are owed instead (issue
+// 293), so the sheet lists them and the next level-up offers them. Primal
+// Champion is not an improvement but a fixed +4 at barbarian 20, so it is
+// given and taken back here.
 
 export function adaptSheetToLevel(
   input: CreateSheetInput,
@@ -122,9 +122,15 @@ export function adaptSheetToLevel(
   }
   // The count of improvements taken never passes what the level has earned,
   // so the ones given back here are offered again when the level returns.
-  const taken = readAsiLedger(sheet.features ?? []);
-  if (taken !== null && taken > keptChoiceCount) {
-    sheet.features = withAsiLedger(sheet.features ?? [], keptChoiceCount);
+  // Going up it stays what the stored character took (issue 293): nobody
+  // offered the improvements between its level and the table's, so they are
+  // owed, as a character built at the table's level is offered them. Written
+  // whenever the level changes, because the table's check reads a sheet with
+  // no count as having taken what the table's level gives.
+  const held = readAsiLedger(sheet.features ?? []);
+  const taken = takenWhereBuilt(sheet, fromLevel, keptChoiceCount);
+  if (held !== null ? held !== taken : level !== fromLevel && (level >= 4 || taken > 0)) {
+    sheet.features = withAsiLedger(sheet.features ?? [], taken);
   }
 
   // Primal Champion (barbarian 20): +4 Strength and Constitution, to 24. A
@@ -201,6 +207,46 @@ export function adaptSheetToLevel(
   }
 
   return sheet;
+}
+
+// The improvements a sheet built at fromLevel took, never more than the
+// level it now plays has earned: its own count, or the old table's at the
+// level it was built.
+function takenWhereBuilt(built: CreateSheetInput, fromLevel: number, earned: number): number {
+  return Math.min(
+    earned,
+    readAsiLedger(built.features ?? []) ?? Math.max(built.asiChoices?.length ?? 0, legacyAsiTaken(fromLevel)),
+  );
+}
+
+// A sheet built at one level and admitted at a higher one by the table door,
+// which judges it as made there: a ready-made hero (src/lib/starter/pregens.ts)
+// is a level 1 build seated at the table's starting level. That door counts a
+// made character as having taken every improvement its level earned, but
+// nobody offered this one any (backlog B6). Its count goes back to what it
+// took where it was built, the rule above for a library hero joining above
+// its level (issue 293), so the sheet lists the rest as owed and the next
+// level-up offers them. Its blank subclass is owed the same way already
+// (subclassOwed, src/lib/srd/owed-choices.ts).
+export function oweSkippedImprovements(
+  admitted: CreateSheetInput,
+  built: CreateSheetInput,
+  fromLevel: number,
+  toLevel: number,
+): CreateSheetInput {
+  const level = Math.max(1, Math.min(20, toLevel));
+  if (level <= fromLevel) {
+    return admitted;
+  }
+  const classList =
+    (admitted.classes ?? []).length > 1
+      ? (admitted.classes ?? [])
+      : [{ id: admitted.class, subclass: admitted.subclass ?? "", level }];
+  const taken = takenWhereBuilt(built, fromLevel, earnedAsiCountFor(classList));
+  if (level < 4 && taken === 0 && readAsiLedger(admitted.features ?? []) === null) {
+    return admitted;
+  }
+  return { ...admitted, features: withAsiLedger(admitted.features ?? [], taken) };
 }
 
 function trimToLevel(view: CasterView, abilities: CreateSheetInput["abilities"]): CasterView {

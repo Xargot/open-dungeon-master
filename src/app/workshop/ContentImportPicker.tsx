@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ui } from "@/lib/ui";
 import {
   IMPORT_KINDS,
+  WORLD_RECORD_KINDS,
   IMPORT_KIND_LABELS,
   SINGULAR_KINDS,
   type ImportKind,
@@ -22,7 +23,8 @@ import type { ImportSourceSummary } from "@/app/workshop/types";
 // decides which ones this person may copy out of
 // (src/lib/db/import-sources.ts).
 //
-// Used in two places with one difference. In the lobby a campaign already
+// Used in two places with one difference. In the lobby (and the table's
+// Setup tab, once play has begun) a campaign already
 // exists, so the picker asks the server what the import WOULD do and shows
 // the collisions and overwrites. At campaign creation there is no campaign
 // yet, so there is nothing to collide with: a fresh table is empty, and the
@@ -40,6 +42,13 @@ export type ImportSelection = {
   arc?: "leave" | "append";
 };
 
+// With WorldForge ticked, a record kind it needs that is not ticked is one
+// the DM leaves out on purpose (audit finding WF-07): said to the server so
+// the plan names what goes, rather than bringing it anyway.
+export function exclusionsOf(selection: Pick<ImportSelection, "select">): ImportKind[] {
+  return selection.select.includes("world") ? WORLD_RECORD_KINDS.filter((kind) => !selection.select.includes(kind)) : [];
+}
+
 export const EMPTY_SELECTION: ImportSelection = {
   sourceId: "",
   select: [],
@@ -54,6 +63,7 @@ export function ContentImportPicker({
   onChange,
   onImported,
   storyboardNote,
+  onChosen,
 }: {
   // Omitted at campaign creation, where the target does not exist yet.
   campaignId?: string;
@@ -64,6 +74,10 @@ export function ContentImportPicker({
   // Drawn under the choices when the board being brought in will write the
   // table's story arc (the AI Story Setup warning, issue 249).
   storyboardNote?: (arcComing: boolean) => ReactNode;
+  // Told which source is chosen and whether its board will write the arc,
+  // so a summary elsewhere (the creator's review) can name it and repeat the
+  // warning.
+  onChosen?: (chosen: { title: string; arcComing: boolean } | null) => void;
 }) {
   const [sources, setSources] = useState<ImportSourceSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -112,6 +126,11 @@ export function ContentImportPicker({
   const arcComing =
     Boolean(chosen?.boardArc) && selection.select.includes("storyboard") && !plan?.board?.targetHasArc;
 
+  const chosenTitle = chosen?.title ?? null;
+  useEffect(() => {
+    onChosen?.(chosenTitle === null ? null : { title: chosenTitle, arcComing });
+  }, [onChosen, chosenTitle, arcComing]);
+
   // The state lands in a .then callback rather than after an await, so the
   // refetch reads as "subscribe to an external system" to React and to the
   // effect linter, which is what it is. Same shape as DmMapStudioPanel.
@@ -126,6 +145,9 @@ export function ContentImportPicker({
     });
     for (const kind of selection.select) {
       params.append("select", kind);
+    }
+    for (const kind of exclusionsOf({ select: selection.select })) {
+      params.append("exclude", kind);
     }
     return fetch(`/api/campaigns/${campaignId}/import?${params}`)
       .then((response) => (response.ok ? response.json() : null))
@@ -153,13 +175,14 @@ export function ContentImportPicker({
     });
   }
 
+  // Ticking WorldForge ticks what it describes too (WF-07): its links,
+  // secrets and pins point at those records. Unticking one afterwards is a
+  // deliberate exclusion, and the plan says what it loses.
   function toggle(kind: ImportKind) {
-    onChange({
-      ...selection,
-      select: selection.select.includes(kind)
-        ? selection.select.filter((entry) => entry !== kind)
-        : [...selection.select, kind],
-    });
+    const on = !selection.select.includes(kind);
+    const brought = on && kind === "world" ? WORLD_RECORD_KINDS.filter((other) => available.includes(other)) : [];
+    const select = on ? [...new Set([...selection.select, kind, ...brought])] : selection.select.filter((entry) => entry !== kind);
+    onChange({ ...selection, select: IMPORT_KINDS.filter((entry) => select.includes(entry)) });
   }
 
   async function importNow() {
@@ -172,7 +195,7 @@ export function ContentImportPicker({
       const response = await fetch(`/api/campaigns/${campaignId}/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(selection),
+        body: JSON.stringify({ ...selection, exclude: exclusionsOf(selection) }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -190,7 +213,15 @@ export function ContentImportPicker({
           Array.isArray(data.unresolved) && data.unresolved.length
             ? `No monster here answers to ${data.unresolved.join(", ")}: add them to your bestiary, or point those NPCs and fights at another.`
             : "",
-          Array.isArray(data.worldConflicts) && data.worldConflicts.length ? `Kept as you had them: ${data.worldConflicts.join(" ")}` : "",
+          Array.isArray(data.worldConflicts) && data.worldConflicts.length ? data.worldConflicts.join(" ") : "",
+          // Hand-built monsters this table's authors did not have, copied in
+          // so the NPCs and fights that name them still fight (WF-07).
+          Array.isArray(data.monstersBrought) && data.monstersBrought.length
+            ? `Copied into this table's bestiary: ${data.monstersBrought.join(", ")}.`
+            : "",
+          Array.isArray(data.monstersReused) && data.monstersReused.length
+            ? `Already in this table's bestiary: ${data.monstersReused.join(", ")}.`
+            : "",
         ]
           .filter(Boolean)
           .join(" "),
@@ -255,6 +286,11 @@ export function ContentImportPicker({
                   {SINGULAR_KINDS.has(kind) ? null : (
                     <span className="text-xs text-stone-500">({chosen.contents[kind]})</span>
                   )}
+                  {selection.select.includes("world") && (WORLD_RECORD_KINDS as readonly string[]).includes(kind) ? (
+                    <span className="text-xs text-stone-500" data-testid={`import-world-needs-${kind}`}>
+                      {selection.select.includes(kind) ? "WorldForge needs these" : "Left out on purpose"}
+                    </span>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -382,6 +418,6 @@ export async function submitContentImport(campaignId: string, selection: ImportS
   await fetch(`/api/campaigns/${campaignId}/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(selection),
+    body: JSON.stringify({ ...selection, exclude: exclusionsOf(selection) }),
   }).catch(() => undefined);
 }

@@ -9,6 +9,8 @@ import { PageSection } from "@/components/PageShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { GameIcon } from "@/components/ui/GameIcon";
 import { NumberStepper } from "@/components/ui/NumberStepper";
+import { Select } from "@/components/ui/Select";
+import { REROLL_LOW_DEFAULT, rerollBelowFor, rerollChoiceOf } from "@/lib/srd/ability-rerolls";
 import { AdminInvitesSection } from "@/app/admin/AdminInvitesSection";
 import { SpeedField } from "@/app/admin/SpeedField";
 import { apiSpeedEligibility } from "@/lib/speed-tier";
@@ -20,11 +22,14 @@ import { AdminBackupSection } from "@/app/admin/AdminBackupSection";
 import { AdminStorageSection } from "@/app/admin/AdminStorageSection";
 import { BackendProbe } from "@/app/admin/BackendProbe";
 import { ModelChoiceField } from "@/app/admin/ModelChoice";
+import { BLANK, fromEnv } from "@/app/admin/model-blanks";
 import { AdminImagesSection } from "@/app/admin/AdminImagesSection";
 import { AdminSpeechSection } from "@/app/admin/AdminSpeechSection";
 import { AmbienceLibraryCard } from "@/app/admin/AmbienceLibraryCard";
 import { AdminHarnessSection } from "@/app/admin/AdminHarnessSection";
 import { mergeAdminConfigDraft } from "@/app/admin/merge-config-draft";
+import { Lamp, type Tone } from "@/app/setup/SetupParts";
+import { useCapabilities } from "@/lib/use-capabilities";
 import {
   Field,
   SECRET_KEPT,
@@ -32,6 +37,7 @@ import {
   SelectField,
   type EnvDefaults,
   type MaskedConfig,
+  inheritedHint,
 } from "@/app/admin/AdminSettingsFields";
 
 // The sticky contents rail: one stop per section, left out where a device
@@ -59,8 +65,13 @@ function jumpTo(id: string) {
 
 // Global server settings. Each string setting overrides its env var; a blank
 // field falls back to the env value shown as the placeholder/hint.
+
 export function AdminSettingsPanel() {
   const [config, setConfig] = useState<MaskedConfig | null>(null);
+  // The config as the server last saved it, so the panel can say whether
+  // anything here is waiting for Save settings.
+  const [savedConfig, setSavedConfig] = useState<MaskedConfig | null>(null);
+  const capabilities = useCapabilities();
   const [env, setEnv] = useState<EnvDefaults | null>(null);
   const [apiKey, setApiKey] = useState(SECRET_KEPT);
   const [utilityApiKey, setUtilityApiKey] = useState(SECRET_KEPT);
@@ -92,6 +103,7 @@ export function AdminSettingsPanel() {
       .then((data) => {
         if (data) {
           setConfig(data.config);
+          setSavedConfig(data.config);
           setEnv(data.envDefaults);
           setVoiceUnroutable(Boolean(data.voiceAnnounceUnroutable));
           setDeviceWorld(Boolean(data.deviceWorld));
@@ -122,9 +134,52 @@ export function AdminSettingsPanel() {
     };
   }, [drawn, section]);
 
+  const secretsTouched = [apiKey, utilityApiKey, openaiImageKey, ttsApiKey, discordSecret].some((value) => value !== SECRET_KEPT);
+  const dirty = Boolean(config && savedConfig) && (secretsTouched || JSON.stringify(config) !== JSON.stringify(savedConfig));
+
+  // Leaving with changes unsaved asks first: the form saves only with its
+  // button, and nothing else on the page says a change is waiting.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
   if (!config || !env) {
     return <PageSkeleton kind="flat" className="px-0 py-2" />;
   }
+
+  function discard() {
+    if (!savedConfig) return;
+    setConfig(savedConfig);
+    setApiKey(SECRET_KEPT);
+    setUtilityApiKey(SECRET_KEPT);
+    setOpenaiImageKey(SECRET_KEPT);
+    setTtsApiKey(SECRET_KEPT);
+    setDiscordSecret(SECRET_KEPT);
+    setError("");
+  }
+
+  // What the rail says beside the AI sections, in four states a person can
+  // tell apart: working, set up but not answering, not set up yet, switched
+  // off on purpose; and "checking" until the server has said. Read from the
+  // live capabilities and the saved settings, so it reflects what is saved
+  // rather than what is typed.
+  const lampFor = (id: string): { tone: Tone; words: string } | null => {
+    const part = id === "admin-text" ? "story" : id === "admin-images" ? "images" : id === "admin-speech" ? "tts" : null;
+    if (!part) return null;
+    if (!capabilities) return { tone: "wait", words: "Checking" };
+    const switchedOff =
+      (part === "story" && savedConfig?.text.provider === "none") ||
+      (part === "tts" && (savedConfig?.speech.ttsProvider === "off" || capabilities.tts?.provider === "off"));
+    if (switchedOff) return { tone: "off", words: "Switched off" };
+    const state = capabilities[part];
+    if (!state.configured) return { tone: "warn", words: "Not set up yet" };
+    return state.reachable ? { tone: "ok", words: "Working" } : { tone: "bad", words: "Set up, but not answering" };
+  };
 
   async function save() {
     if (!config) return;
@@ -185,6 +240,8 @@ export function AdminSettingsPanel() {
             ttsModel: config.speech.ttsModel,
             ttsVoice: config.speech.ttsVoice,
             sttUrl: config.speech.sttUrl,
+            sttModel: config.speech.sttModel,
+            sttOpenaiModel: config.speech.sttOpenaiModel,
             ...(ttsApiKey === SECRET_KEPT ? {} : { ttsApiKey }),
           },
         }),
@@ -195,6 +252,7 @@ export function AdminSettingsPanel() {
         return;
       }
       setConfig(data.config);
+      setSavedConfig(data.config);
       setVoiceUnroutable(Boolean(data.voiceAnnounceUnroutable));
       setApiKey(SECRET_KEPT);
       setUtilityApiKey(SECRET_KEPT);
@@ -212,12 +270,44 @@ export function AdminSettingsPanel() {
   return (
     <div className="space-y-4">
       <nav aria-label="Settings sections" className="contents-rail panel">
-        {STOPS.filter((stop) => !(deviceWorld && stop.server)).map((stop) => (
-          <button key={stop.id} type="button" onClick={() => jumpTo(stop.id)} className="motion-press">
-            <GameIcon icon={{ kind: "glyph", key: stop.glyph }} size="size-7" /> {stop.label}
-          </button>
-        ))}
+        {STOPS.filter((stop) => !(deviceWorld && stop.server)).map((stop) => {
+          const lamp = lampFor(stop.id);
+          return (
+            <button key={stop.id} type="button" onClick={() => jumpTo(stop.id)} className="motion-press">
+              <GameIcon icon={{ kind: "glyph", key: stop.glyph }} size="size-7" /> {stop.label}
+              {lamp ? (
+                <span title={lamp.words}>
+                  <Lamp tone={lamp.tone} className="ml-0.5" />
+                  <span className="sr-only">: {lamp.words}</span>
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
       </nav>
+      <p className="text-xs text-stone-500">
+        Changes on this page wait for <span className="text-stone-300">Save settings</span>, which follows you down the
+        page. Invites, backups, storage and player agents act at once.
+      </p>
+      {/* The lamps in words, so the four states are read rather than told
+          apart by colour alone. */}
+      <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-400" data-admin-status>
+        {(
+          [
+            ["admin-text", "Text model"],
+            ["admin-images", "Images"],
+            ["admin-speech", "Speech"],
+          ] as const
+        ).map(([id, label]) => {
+          const lamp = lampFor(id);
+          return lamp ? (
+            <span key={`${id}-${lamp.words}`} className="reveal inline-flex items-center gap-1.5">
+              <Lamp tone={lamp.tone} />
+              {label}: {lamp.words.toLowerCase()}
+            </span>
+          ) : null;
+        })}
+      </p>
       {deviceWorld ? (
         <p className="reveal text-xs text-stone-500">
           This world runs inside the app, which manages its address, sharing
@@ -246,7 +336,7 @@ export function AdminSettingsPanel() {
             label="Public URL"
             hint={
               env.publicUrl
-                ? `Env: ${env.publicUrl}`
+                ? inheritedHint(config.publicUrl, env.publicUrl)
                 : "The address players actually use (needed for Discord sign-in behind a reverse proxy). Blank = auto-detect."
             }
           >
@@ -325,24 +415,38 @@ export function AdminSettingsPanel() {
               />
             </Field>
             <Field
-              label="Reroll the 4d6 ability dice under a total of"
-              hint="The server throws and keeps a player's six 4d6 totals; they may throw again only while the six add up to less than this. 0 allows no reroll; 108 lets anything be rethrown. The book names no rule; 70 is the default."
+              label="Rolled 4d6 stats"
+              hint="The server throws and keeps a player's six 4d6 totals. Choose whether they may throw again: never, only when the six add up to less than a total you set (70 is the default; the book names no rule), or as often as they like. This is the rule in the library and at every table that follows the server, where a player has one six for all of them. A table can set its own rule in its settings and then keeps a separate six for each player; a character made there still joins its player's library like any other, and a library character or a file brought to a table is only checked against what the dice could give."
             >
-              <NumberStepper
-                label="Reroll the 4d6 ability dice under a total of"
-                min={0}
-                max={108}
-                step={1}
-                suffix={config.abilityRerollBelow === 0 ? "no rerolls" : "total"}
-                value={config.abilityRerollBelow}
-                onChange={(next) => {
-                  const below = Math.round(Number(next));
-                  setConfig({
-                    ...config,
-                    abilityRerollBelow: Number.isFinite(below) ? Math.min(108, Math.max(0, below)) : 70,
-                  });
-                }}
+              <Select
+                label="Rolled 4d6 stats"
+                value={rerollChoiceOf(config.abilityRerollBelow)}
+                onChange={(choice) =>
+                  setConfig({ ...config, abilityRerollBelow: rerollBelowFor(choice, config.abilityRerollBelow) })
+                }
+                options={[
+                  { value: "keep", label: "The first roll stands" },
+                  { value: "low", label: "Reroll a low roll" },
+                  { value: "free", label: "Reroll as often as they like" },
+                ]}
               />
+              {rerollChoiceOf(config.abilityRerollBelow) === "low" ? (
+                <NumberStepper
+                  label="Reroll when the six add up to less than"
+                  min={1}
+                  max={107}
+                  step={1}
+                  suffix="total"
+                  value={config.abilityRerollBelow}
+                  onChange={(next) => {
+                    const below = Math.round(Number(next));
+                    setConfig({
+                      ...config,
+                      abilityRerollBelow: Number.isFinite(below) ? Math.min(107, Math.max(1, below)) : REROLL_LOW_DEFAULT,
+                    });
+                  }}
+                />
+              ) : null}
             </Field>
           </div>
         </PageSection>
@@ -374,10 +478,10 @@ export function AdminSettingsPanel() {
               provider="local"
               value={config.text.localTextModel}
               onChange={(localTextModel) => setConfig({ ...config, text: { ...config.text, localTextModel } })}
-              placeholder="gemma4:31b-it-qat"
+              blankLabel={env.localTextModel ? fromEnv(env.localTextModel, "LOCAL_TEXT_MODEL") : BLANK.story}
             />
           )}
-          <Field label="Backend base URL" hint={env.customBaseUrl ? `Env: ${env.customBaseUrl}` : undefined}>
+          <Field label="Backend base URL" hint={inheritedHint(config.text.customBaseUrl, env.customBaseUrl)}>
             <input
               className={ui.input}
               value={config.text.customBaseUrl}
@@ -389,14 +493,13 @@ export function AdminSettingsPanel() {
           </Field>
           <ModelChoiceField
             label="Model name"
-            hint={env.customModel ? `Env: ${env.customModel}` : undefined}
             role="story"
             provider="custom"
             baseUrl={config.text.customBaseUrl || env.customBaseUrl}
             apiKey={apiKey === SECRET_KEPT ? "" : apiKey}
             value={config.text.customModel}
             onChange={(customModel) => setConfig({ ...config, text: { ...config.text, customModel } })}
-            placeholder={env.customModel || "qwen3.6-dm"}
+            blankLabel={env.customModel ? fromEnv(env.customModel, "OPENAI_COMPAT_MODEL") : BLANK.story}
           />
         </div>
         <div className="mt-3">
@@ -442,9 +545,12 @@ export function AdminSettingsPanel() {
         <AdminHarnessSection
           textProvider={config.text.provider}
           imagesBackend={config.images.defaultBackend}
-          onConfig={(patch) =>
-            setConfig((current) => (current ? mergeAdminConfigDraft(current, patch) : current))
-          }
+          onConfig={(patch) => {
+            // The agent section saves its own fields: they are saved, so the
+            // snapshot takes them too and they never read as unsaved.
+            setConfig((current) => (current ? mergeAdminConfigDraft(current, patch) : current));
+            setSavedConfig((current) => (current ? mergeAdminConfigDraft(current, patch) : current));
+          }}
           speedNotes={speedNotes}
         />
       )}
@@ -471,15 +577,14 @@ export function AdminSettingsPanel() {
           />
           <ModelChoiceField
             label="Model name"
-            hint="Blank = off. Anything in the 4B-8B class is plenty; e.g. gemma4:e4b-it-qat."
+            hint="Anything in the 4B-8B class is plenty."
             role="utility"
             provider={config.text.utilityProvider === "custom" ? "custom" : "local"}
             baseUrl={config.text.utilityProvider === "custom" ? config.text.utilityBaseUrl : ""}
             apiKey={utilityApiKey === SECRET_KEPT ? "" : utilityApiKey}
             value={config.text.utilityModel}
             onChange={(utilityModel) => setConfig({ ...config, text: { ...config.text, utilityModel } })}
-            placeholder="Off"
-            blankLabel="Off (everything runs on the story model)"
+            blankLabel={BLANK.utility}
           />
           <Field
             label="Backend base URL"
@@ -539,6 +644,7 @@ export function AdminSettingsPanel() {
         speech={config.speech}
         env={env}
         apiKey={ttsApiKey}
+        openaiSpeechBaseUrl={config.images.openaiBaseUrl || env.openaiImageBaseUrl || "https://api.openai.com/v1"}
         onSpeech={(speech) => setConfig({ ...config, speech })}
         onApiKey={setTtsApiKey}
       />
@@ -572,10 +678,20 @@ export function AdminSettingsPanel() {
         <AdminStorageSection />
       </PageSection>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="admin-savebar flex flex-wrap items-center gap-3" data-dirty={dirty || undefined}>
         <button type="button" onClick={save} disabled={saving} aria-busy={saving} className={ui.btnPrimary}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null} Save settings
         </button>
+        {dirty && !saving ? (
+          <>
+            <span role="status" className="live-in inline-flex items-center gap-1.5 text-sm text-amber-200">
+              <Lamp tone="wait" /> Unsaved changes
+            </span>
+            <button type="button" onClick={discard} className={ui.btnSmall}>
+              Undo changes
+            </button>
+          </>
+        ) : null}
         {saved ? (
           <span role="status" className="live-in inline-flex items-center gap-1 text-sm text-emerald-400">
             <Check className="size-4" /> Saved

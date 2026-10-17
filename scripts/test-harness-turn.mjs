@@ -238,6 +238,36 @@ await test("several takes around refused calls leave the last one alone", async 
   assert.ok(!content.includes("First take.") && !content.includes("Second take."), content);
 });
 
+// Grok Build reports each tool call it starts, its own or ODM's
+// (tool_round). Played as the storyteller, it wrote a note on the scene
+// before calling a tool, and the note reached the table; text before one of
+// its own tools ran into the text after it ("the village.Mother Hesk").
+await test("a note written before a tool call is not the narration: the table reads what came after", async () => {
+  script([[{ text: "Mother Hesk is already on the green, and Kara has asked her outright." }, { round: true }, roll, { text: "\"Three nights ago,\" Mother Hesk says. \"The bell stayed still.\"" }]]);
+  say("Mother Hesk? What happened to the bell?");
+  await startDmTurn(campaign.id);
+  const content = getLatestDmMessage(campaign.id).content;
+  assert.ok(content.includes("Three nights ago"), content);
+  assert.ok(!content.includes("already on the green"), "the note before the tool call reached the players");
+});
+
+await test("text before and after one of the program's own tools does not run together", async () => {
+  script([[{ text: "Kara is calling for whoever runs the village." }, { round: true }, { text: "Mother Hesk turns from the green and lifts a hand." }]]);
+  say("Hello? Who's in charge here?");
+  await startDmTurn(campaign.id);
+  const content = getLatestDmMessage(campaign.id).content;
+  assert.ok(!content.includes("village.Mother"), content);
+  assert.ok(content.includes("Mother Hesk turns from the green"), content);
+  assert.ok(!content.includes("Kara is calling"), content);
+});
+
+await test("a program that writes nothing after its tool call keeps what it wrote before", async () => {
+  script([[{ text: "The fog lifts off the river, and the chapel hill stands silent." }, { round: true }]]);
+  say("I look around.");
+  await startDmTurn(campaign.id);
+  assert.ok(getLatestDmMessage(campaign.id).content.includes("The fog lifts off the river"));
+});
+
 await test("a signed-out program halts the turn with a message the table can act on", async () => {
   script([[{ fail: "signed-out", message: "Not logged in" }]]);
   say("I look around.");
@@ -248,6 +278,52 @@ await test("a signed-out program halts the turn with a message the table can act
   assert.ok(system && /signed out/i.test(system.content), `expected a signed-out halt, got ${system?.content}`);
   assert.ok(!latest.content.includes("I look around"), "no narration was invented");
   assert.equal(activeBridgeSessions(), 0);
+});
+
+// The program's text goes through the same loop guard as a model's stream
+// (src/lib/stream-repetition.ts).
+const PASSAGE =
+  "Avery braces against the door as the hinges shriek, and somewhere beyond it a bell begins to toll, slow and heavy, counting out the hours left before the tide comes in.";
+const LOOP = (PASSAGE + "\n\n").repeat(6);
+const appearances = (text) => text.split(PASSAGE).length - 1;
+
+await test("a program that starts repeating itself while it may still call tools is stopped, and the turn halts with the notice", async () => {
+  script([[{ text: LOOP }, roll]]);
+  say("I listen at the door.");
+  const before = getLatestDmMessage(campaign.id)?.id;
+  await startDmTurn(campaign.id);
+  const { listRecentMessages } = await import("../src/lib/db/messages.ts");
+  const system = listRecentMessages(campaign.id, 5).filter((message) => message.authorType === "system").pop();
+  assert.ok(system && /repeating the same long passage/.test(system.content), `expected the repetition halt, got ${system?.content}`);
+  assert.equal(getLatestDmMessage(campaign.id)?.id, before, "the loop was posted as narration");
+  assert.ok(!fakeLog().some((entry) => entry.kind === "call"), "the program went on to call a tool");
+  assert.ok(fakeLog().some((entry) => entry.kind === "close"), "the program was not stopped");
+  assert.equal(activeBridgeSessions(), 0);
+});
+
+await test("a program that loops in the narration-only last call keeps the first copy as the narration", async () => {
+  script([[roll, roll, roll, roll, { text: LOOP }]]);
+  say("I try the door until it gives.");
+  await startDmTurn(campaign.id);
+  const content = getLatestDmMessage(campaign.id).content;
+  assert.equal(appearances(content), 1, content);
+  assert.equal(activeBridgeSessions(), 0);
+});
+
+await test("a completion that loops is settled with its first copy and the program stopped", async () => {
+  script([[{ text: LOOP }]]);
+  let shown = "";
+  const messages = [{ role: "system", content: "s" }, { role: "user", content: "Continue the scene." }];
+  const streamed = await requestHarnessMessage(messages, { toolChoice: "none", onDelta: (text) => (shown += text) }, { role: "story" });
+  assert.equal(streamed.message.content, PASSAGE);
+  assert.equal(streamed.finishReason, "repetition");
+  assert.equal(shown, "", "the looping delta reached the table");
+  assert.ok(fakeLog().some((entry) => entry.kind === "close"));
+
+  // Bookkeeping, which streams nothing and is not narration, is left as it came.
+  script([[{ text: LOOP }]]);
+  const summary = await requestHarnessMessage(messages, {}, { role: "utility" });
+  assert.equal(summary.message.content, LOOP.trim());
 });
 
 await test("an admins-only server refuses the agent to a campaign a player leads", async () => {

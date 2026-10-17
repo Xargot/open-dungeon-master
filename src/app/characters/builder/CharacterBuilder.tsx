@@ -2,15 +2,18 @@
 
 import { ContentScopeProvider } from "@/lib/content-scope";
 import { Loader2 } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { AvatarCropDialog } from "@/app/settings/AvatarCropDialog";
 import { Wizard, type WizardNotice, type WizardStep } from "@/components/ui/Wizard";
 import { cn } from "@/lib/cn";
+import { ui } from "@/lib/ui";
+import { useEffectsRoot } from "@/lib/effects-mode";
 import type { Genre } from "@/lib/schemas/game-settings";
 import type { Ability, CreateSheetInput } from "@/lib/schemas/sheet";
 import { SRD_SKILLS } from "@/lib/srd";
 import { FIGHTING_STYLES } from "@/lib/srd/feature-effects";
 import { offersImages, useCapabilities } from "@/lib/use-capabilities";
+import { classRoles } from "@/lib/srd/class-roles";
 import { applyClassReskins, applyIdReskins } from "@/lib/worlds/reskin-logic";
 import { ABILITY_LABELS } from "./AbilityEditor";
 import type { DroppedPick } from "./reconcile";
@@ -20,19 +23,23 @@ import { CallingStep } from "./steps/CallingStep";
 import { FinishStep } from "./steps/FinishStep";
 import { IdentityStep, type BuilderRole } from "./steps/IdentityStep";
 import { SpellsGearStep } from "./steps/SpellsGearStep";
+import { OwedLine } from "./steps/shared";
+import { owedPicks } from "./owed";
+import { playstyleBackgrounds, type PlaystyleId } from "./playstyles";
 import {
-  abilitiesBlocker,
-  ancestryBlocker,
+  abilitiesBlocks,
+  ancestryBlocks,
   buildBuilderResult,
-  callingBlocker,
+  callingBlocks,
   gearBlocker,
-  identityBlocker,
-  spellsBlocker,
+  identityBlocks,
+  spellsBlocks,
   validateBuilder,
   type BlockerTarget,
   type BuilderResult,
   type StepBlock,
 } from "./submit";
+import { clearBuilderDraft, readBuilderDraft, writeBuilderDraft, type BuilderDraft } from "./builderDraft";
 import { builderActions, useBuilderDerived } from "./useBuilderDerived";
 import { useArchetypes, useBuilderOptions, useWorldPack } from "./useBuilderOptions";
 import { listWords, unofferedPicks } from "./unoffered";
@@ -47,6 +54,7 @@ export type { BuilderResult } from "./submit";
 // about a dropped pick can take the player to where it is made again.
 const STEP_OF_TARGET: Record<BlockerTarget, string> = {
   name: "identity",
+  background: "identity",
   backgroundSkills: "identity",
   race: "ancestry",
   languages: "ancestry",
@@ -133,11 +141,14 @@ function CharacterBuilderForm({
   worldPackId,
   initial,
   initialLevel,
+  startLevel,
   submitLabel,
   onSubmit,
   busy,
   error,
   role,
+  draftKey,
+  onCancel,
   className,
 }: {
   // The table the character is made for: its hit point method and starting
@@ -159,6 +170,8 @@ function CharacterBuilderForm({
   // it earned up to there with no recorded pick were taken in play and are
   // already in its scores.
   initialLevel?: number;
+  // Open a stored character this many levels up ("Level up" in the library).
+  startLevel?: number;
   submitLabel: string;
   onSubmit: (result: BuilderResult) => void;
   busy: boolean;
@@ -166,8 +179,19 @@ function CharacterBuilderForm({
   // Player character or DM-played ally; only the library page asks, since a
   // campaign already knows which door the character comes through.
   role?: { value: BuilderRole; onChange: (role: BuilderRole) => void };
+  // Where a new character's progress is kept on this device
+  // (builderDraftKey); the caller clears it once the save succeeds. Ignored
+  // for an edit.
+  draftKey?: string;
+  // Where the first step's back arrow leads (the page or dialog it opened
+  // from), as every other wizard's does; later steps step back as before.
+  onCancel?: () => void;
   className?: string;
 }) {
+  // creator.css stills its loops under <html data-effects="low">, which only
+  // the table's session view set; the library and join pages build
+  // characters outside it.
+  useEffectsRoot();
   const {
     races: rawRaces,
     classes: rawClasses,
@@ -192,9 +216,13 @@ function CharacterBuilderForm({
     ...(initial?.feats ?? []),
     ...(initial?.asiChoices ?? []).flatMap((choice) => (choice.mode === "feat" ? [choice.feat] : [])),
   ]);
-  const state = useBuilderState({ initial, initialFeatDescs, initialLevel, fixedLevel, races, classes, backgrounds });
-  const race = findRace(races, state.raceId) ?? races[0];
-  const klass = classes.find((entry) => entry.id === state.classId) ?? classes[0];
+  const state = useBuilderState({ initial, initialFeatDescs, initialLevel, fixedLevel, startLevel, races, classes, backgrounds });
+  // No stand-in for a race or class the player has not chosen: the first
+  // row used to be shown as if picked ("Continue as Aarakocra"), so the
+  // step's own "Pick a race." could never hold. The background keeps its
+  // stand-in; its select on the first step shows it plainly.
+  const race = findRace(races, state.raceId);
+  const klass = classes.find((entry) => entry.id === state.classId);
   const background =
     backgrounds.find((entry) => entry.id === state.backgroundId) ?? backgrounds[0];
   const archetypes = useArchetypes(klass?.id ?? "");
@@ -227,6 +255,54 @@ function CharacterBuilderForm({
   // This builder's own root, so the footer's "Show me" looks inside it and
   // not in another builder on the page.
   const rootId = useId();
+  // What the last save found missing, until the player goes to it.
+  const [saveProblem, setSaveProblem] = useState<{ message: string; target: BlockerTarget } | null>(null);
+  // "How do you want to play?", asked on the first step of a new character
+  // and carried to the class step.
+  const [playstyle, setPlaystyle] = useState<PlaystyleId | null>(null);
+
+  // An unfinished new character is kept on this device as it is built
+  // (builderDraft.ts), and offered back the next time this door opens. The
+  // step is the builder's so a resumed draft can land where it was left.
+  const draftAt = !initial && draftKey ? draftKey : null;
+  const [step, setStep] = useState(0);
+  const [draftOffer, setDraftOffer] = useState<BuilderDraft | null>(null);
+  const [draftChecked, setDraftChecked] = useState(false);
+  useEffect(() => {
+    if (!draftAt) {
+      return;
+    }
+    // Read after mount: the server render has no storage to read.
+    void Promise.resolve().then(() => {
+      setDraftOffer(readBuilderDraft(draftAt));
+      setDraftChecked(true);
+    });
+  }, [draftAt]);
+  const draftJson = draftAt ? JSON.stringify(state.draftFields) : "";
+  const begun = Boolean(state.name.trim() || state.raceId || state.classId);
+  useEffect(() => {
+    // Nothing is written over a draft still on offer, or for a builder
+    // opened and left untouched.
+    if (!draftAt || !draftChecked || draftOffer || !begun) {
+      return;
+    }
+    const id = window.setTimeout(() => writeBuilderDraft(draftAt, step, JSON.parse(draftJson)), 400);
+    return () => window.clearTimeout(id);
+  }, [draftAt, draftChecked, draftOffer, begun, draftJson, step]);
+  function resumeDraft() {
+    if (!draftOffer) {
+      return;
+    }
+    state.restoreDraft(draftOffer.fields);
+    setStep(draftOffer.step);
+    setDraftOffer(null);
+  }
+  function discardDraft() {
+    if (draftAt) {
+      clearBuilderDraft(draftAt);
+    }
+    setDraftOffer(null);
+  }
 
   // Takes the player to the block that holds the missing pick: scrolls the
   // active step to it, lights it for a moment and puts focus on its first
@@ -259,12 +335,18 @@ function CharacterBuilderForm({
     onBlocked: blocked ? () => locate(blocked.target) : undefined,
   });
 
-  // A stored race, class or background these lists do not hold would be
-  // replaced by the list's first row on save; the save waits until the
-  // player picks on purpose (issue 229).
+  // A stored race, class or background these lists do not hold: the race
+  // or class shows as not chosen, the background would be replaced by the
+  // list's first row on save. The save waits until the player picks on
+  // purpose (issue 229).
   const unoffered = initial && loaded ? unofferedPicks(initial, state, races, classes, backgrounds) : [];
+  const standIns = unoffered.flatMap((entry) => (entry.standIn ? [entry.standIn] : []));
   const unofferedText = unoffered.length
-    ? `This builder does not offer ${initial?.name || "this character"}'s ${listWords(unoffered.map((entry) => entry.what))}: a table's own content, or a row this server no longer has. Saving here would put ${listWords(unoffered.map((entry) => entry.standIn))} in ${unoffered.length === 1 ? "its" : "their"} place, so the save waits until you pick on purpose. Leave without saving to keep ${initial?.name || "them"} as stored.`
+    ? `This builder does not offer ${initial?.name || "this character"}'s ${listWords(unoffered.map((entry) => entry.what))}: a table's own content, or a row this server no longer has. ${
+        standIns.length
+          ? `Saving here would put ${listWords(standIns)} in ${standIns.length === 1 ? "its" : "their"} place, so the save`
+          : "The save"
+      } waits until you pick on purpose. Leave without saving to keep ${initial?.name || "them"} as stored.`
     : "";
 
   function submit() {
@@ -278,9 +360,19 @@ function CharacterBuilderForm({
       if (problem.kind === "spellWarning") {
         state.setSpellWarningAck(true);
       }
-      state.setLocalError(problem.message);
+      // A pick that is missing says so above the steps with "Show me", which
+      // goes to its step and its field, the way the footer's blocker does;
+      // the warning and the unplaceable ones stay by the save button.
+      if (problem.target) {
+        state.setLocalError("");
+        setSaveProblem({ message: problem.message, target: problem.target });
+      } else {
+        setSaveProblem(null);
+        state.setLocalError(problem.message);
+      }
       return;
     }
+    setSaveProblem(null);
     state.setLocalError("");
     onSubmit(buildBuilderResult(input));
   }
@@ -294,16 +386,35 @@ function CharacterBuilderForm({
   }
 
   // Each gate mirrors a rule the final check enforces, so a player learns
-  // about a missing pick on the step where they can fix it.
-  const blockers = {
-    identity: identityBlocker(state, background),
-    ancestry: ancestryBlocker(state, race, background, derived),
-    calling: callingBlocker(klass, state, derived),
-    abilities: abilitiesBlocker(derived, state),
-    spells: spellsBlocker(state, derived, klass) ?? gearBlocker(derived),
+  // about a missing pick on the step where they can fix it. The gate is the
+  // first pick owed; the step's "choices left" line names them all.
+  const gear = gearBlocker(derived);
+  const owed = {
+    identity: identityBlocks(state, background),
+    ancestry: ancestryBlocks(state, race, background, derived),
+    calling: callingBlocks(klass, state, derived),
+    abilities: abilitiesBlocks(derived, state),
+    spells: [...spellsBlocks(state, derived, klass), ...(gear ? [gear] : [])],
   };
+  const blockers = {
+    identity: owed.identity[0] ?? null,
+    ancestry: owed.ancestry[0] ?? null,
+    calling: owed.calling[0] ?? null,
+    abilities: owed.abilities[0] ?? null,
+    spells: owed.spells[0] ?? null,
+  };
+  const owedLine = (blocks: typeof owed.identity) => <OwedLine picks={owedPicks(blocks)} onShow={locate} />;
   const casts = derived.casts;
+  // The classes this table offers, as the playstyle answer reads them.
+  const playstyleOffered = pickers.classGroups.flatMap((group) =>
+    group.options.map((option) => {
+      const reading = classRoles(classes.find((candidate) => candidate.id === option.id) ?? { id: option.id });
+      return { id: option.id, name: option.name, roles: reading.roles, playsLike: reading.playsLike };
+    }),
+  );
 
+  // The steps' keys in order, for the finishing step's Edit links.
+  const STEP_ORDER = ["identity", "ancestry", "calling", "abilities", "spells-gear", "finish"];
   const steps: WizardStep[] = [
     {
       key: "identity",
@@ -312,14 +423,25 @@ function CharacterBuilderForm({
       ...gate(blockers.identity),
       content: (
         <>
+          {owedLine(owed.identity)}
           <IdentityStep
             state={state}
             pack={pack}
             packInstalled={packInstalled}
             fixedLevel={fixedLevel}
             role={role}
-            alignmentGroups={pickers.alignmentGroups}
-            alignmentInfo={pickers.alignmentInfo}
+            playstyle={
+              initial
+                ? undefined
+                : {
+                    value: playstyle,
+                    onChange: setPlaystyle,
+                    offered: playstyleOffered,
+                    chosenClass: klass?.id ?? "",
+                    onChooseClass: state.changeClass,
+                    backgrounds: playstyle ? playstyleBackgrounds(playstyle, backgrounds) : [],
+                  }
+            }
             backgroundGroups={pickers.backgroundGroups}
             background={background}
           />
@@ -335,6 +457,7 @@ function CharacterBuilderForm({
       continueLabel: race ? `Continue as ${race.name}` : undefined,
       content: (
         <>
+          {owedLine(owed.ancestry)}
           <AncestryStep
             state={state}
             derived={derived}
@@ -354,6 +477,7 @@ function CharacterBuilderForm({
       ...gate(blockers.calling),
       content: (
         <>
+          {owedLine(owed.calling)}
           <CallingStep
             state={state}
             derived={derived}
@@ -368,6 +492,7 @@ function CharacterBuilderForm({
             offersSubclass={pickers.offersSubclass}
             subclassLockedAt={pickers.subclassLockedAt}
             chosenArchetype={pickers.chosenArchetype}
+            playstyle={initial ? undefined : { value: playstyle, onChange: setPlaystyle }}
           />
         </>
       ),
@@ -380,6 +505,7 @@ function CharacterBuilderForm({
       ...gate(blockers.abilities),
       content: (
         <>
+          {owedLine(owed.abilities)}
           <AbilitiesStep state={state} derived={derived} race={race} klass={klass} />
         </>
       ),
@@ -392,6 +518,7 @@ function CharacterBuilderForm({
       ...gate(blockers.spells),
       content: (
         <>
+          {owedLine(owed.spells)}
           <SpellsGearStep
             state={state}
             derived={derived}
@@ -422,6 +549,9 @@ function CharacterBuilderForm({
           paintsPortraits={paintsPortraits}
           onUploadPortrait={() => setCropping(true)}
           error={state.localError || error}
+          onEdit={(key) => setStep(STEP_ORDER.indexOf(key))}
+          alignmentGroups={pickers.alignmentGroups}
+          alignmentInfo={pickers.alignmentInfo}
         />
       ),
     },
@@ -431,7 +561,15 @@ function CharacterBuilderForm({
   // step it belongs to (issue #124: the list was computed and thrown away).
   const dropped = state.dropped;
   const droppedStep = dropped ? steps.findIndex((entry) => entry.key === STEP_OF_TARGET[dropped.drops[0].target]) : -1;
-  const notice: WizardNotice | undefined = dropped
+  const problemStep = saveProblem ? steps.findIndex((entry) => entry.key === STEP_OF_TARGET[saveProblem.target]) : -1;
+  const notice: WizardNotice | undefined = saveProblem
+    ? {
+        message: saveProblem.message,
+        step: problemStep >= 0 ? problemStep : undefined,
+        onShow: () => locate(saveProblem.target),
+        onDismiss: () => setSaveProblem(null),
+      }
+    : dropped
     ? {
         message: droppedMessage(dropped, droppedStep >= 0 ? steps[droppedStep].label : undefined),
         step: droppedStep >= 0 ? droppedStep : undefined,
@@ -449,18 +587,46 @@ function CharacterBuilderForm({
           {unofferedText}
         </p>
       ) : null}
+      {draftOffer ? (
+        <div role="status" className="reveal mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
+          <span className="min-w-0 flex-1">
+            You have an unfinished character here
+            {draftOffer.fields.name.trim() ? <>: <span className="font-medium">{draftOffer.fields.name.trim()}</span></> : null}
+            , left on step {Math.min(draftOffer.step, steps.length - 1) + 1} of {steps.length}.
+          </span>
+          <button type="button" onClick={resumeDraft} className={ui.btnSmall}>
+            Resume
+          </button>
+          <button type="button" onClick={discardDraft} className={cn(ui.btnSmall, "text-stone-400")}>
+            Start fresh
+          </button>
+        </div>
+      ) : null}
       <Wizard
+        step={step}
+        onStepChange={setStep}
         title={state.name.trim() || "New character"}
         variant="diamonds"
-        wipe
+        // The wipe paces a first build; an edit of a stored character moves
+        // between steps at once.
+        wipe={!initial}
         goldTitles
+        // A player who went back to fix one pick returns by its diamond, and
+        // an edit of a stored character saves from whichever step it is on.
+        jumpAhead
+        finishFromAnyStep={Boolean(initial)}
         notice={notice}
         aside={
-          race && klass
-            ? `${race.name} ${klass.name} · level ${derived.effectiveLevel} · d${klass.hitDie}`
+          race || klass
+            ? [
+                [race?.name, klass?.name].filter(Boolean).join(" "),
+                `level ${derived.effectiveLevel}`,
+                ...(klass ? [`d${klass.hitDie}`] : []),
+              ].join(" · ")
             : undefined
         }
         steps={steps}
+        onCancel={onCancel}
         onDone={submit}
         doneLabel={
           busy ? (

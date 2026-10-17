@@ -55,6 +55,7 @@ export const EVENT_AUDIENCE: Readonly<Record<string, Audience>> = {
   message_added: TABLE,
   message_updated: TABLE,
   dm_delta: TABLE,
+  dm_draft_reset: TABLE,
   dm_draft_seq: TABLE,
   dm_status: TABLE,
   dm_intent_queued: TABLE,
@@ -68,6 +69,9 @@ export const EVENT_AUDIENCE: Readonly<Record<string, Audience>> = {
   chapter_closed: TABLE,
   campaign_rewound: TABLE,
   campaign_updated: TABLE,
+  // Prep brought in from a workshop: a contentless ping; each seat reloads
+  // its own snapshot.
+  prep_imported: TABLE,
   // The fight: the public encounter projection, the floor, the board ping
   // (the board itself is fetched per seat), rolls that wait on someone.
   encounter_updated: TABLE,
@@ -114,6 +118,10 @@ export const EVENT_AUDIENCE: Readonly<Record<string, Audience>> = {
   // The table's WorldForge changed (src/lib/worldforge/model.ts). The ping
   // carries nothing, but the document is the DM's, so only DM seats refetch.
   world_updated: { kind: "dm", right: "secretStory" },
+  // Which kinds of record changed (src/lib/workshop/record-events.ts), for
+  // the workshop's tools to refetch. Only the kinds travel, and only to DM
+  // seats, like world_updated.
+  records_changed: { kind: "dm", right: "secretStory" },
   pins_updated: TABLE,
   npc_updated: TABLE,
   location_updated: TABLE,
