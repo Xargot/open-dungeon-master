@@ -24,10 +24,8 @@ players and the DM. **The narrator never owns the numbers**: dice, hit points, s
 clamped by the backend, and the model changes game state only through tools the
 server validates.
 
-It began as a fork of [Open Dungeon](https://github.com/newideas99/open-dungeon)
-to add multiplayer, and grew into a different app: the AI drives the session,
-requesting rolls, starting encounters, and playing NPCs and companions, following
-a secret story arc it regenerates as the campaign moves.
+The AI drives the session, requesting rolls, starting encounters, and playing NPCs
+and companions, following a secret story arc it regenerates as the campaign moves.
 
 <div align="center">
 
@@ -141,8 +139,14 @@ model server such as llama.cpp or Ollama, an API key (OpenAI, OpenRouter or any
 OpenAI-compatible provider), or a CLI agent you already pay for (Claude Code,
 Codex, opencode, Grok Build). Pictures and voice are optional.
 
+A local model needs a **context window of at least 16K tokens to narrate and
+24K to run fights; 32K or more is recommended**. The default storyteller runs
+at 64K, and the guided setup's **Test backend** reads the window a server runs
+([what each size plays](docs/text-backends.md#context-window)). Hosted models
+and agent programs have far more.
+
 ```bash
-git clone --depth 1 https://github.com/Lebbitheplow/open-dungeon-master.git
+git clone --depth 1 -b stable https://github.com/Lebbitheplow/open-dungeon-master.git
 cd open-dungeon-master
 npm install
 npm run setup        # database key, content pack, memory model, production build
@@ -157,9 +161,12 @@ players and your own agent, one question at a time.
 With Docker instead:
 
 ```bash
-curl -O https://raw.githubusercontent.com/Lebbitheplow/open-dungeon-master/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/Lebbitheplow/open-dungeon-master/stable/docker-compose.yml
 docker compose up -d        # http://localhost:3005
 ```
+
+Both follow the stable releases. Nightly betas, and how a beta becomes stable:
+[docs/releases.md](docs/releases.md).
 
 ## Documentation
 
@@ -167,6 +174,7 @@ docker compose up -d        # http://localhost:3005
   - [Install and first run](docs/install.md): requirements, the guided setup, setup by hand, the first admin account, the content pack, tests
   - [Run with Docker](docs/docker.md): the image, reaching AI services on the host, volumes and maintenance, publishing
   - [Backups and moving to another server](docs/backup-restore.md)
+  - [Releases and update channels](docs/releases.md): stable, the nightly betas, and how a beta is promoted
 - **The storyteller**
   - [Text backends](docs/text-backends.md): the recommended DM model and its settings, Ollama, choosing a model (the models.dev catalog, no model named in code), OpenAI and other APIs, long-story memory
   - [Agent programs as the DM](docs/agent-harness.md): Claude Code, Codex, opencode and Grok Build on their own sign-in
@@ -195,8 +203,8 @@ docker compose up -d        # http://localhost:3005
 
 ## Credits and licenses
 
-**The application is MIT licensed. Third-party and unofficial campaign content is
-not included with this repository and is not covered by the MIT license.**
+**The application is [MIT licensed](LICENSE). Third-party and unofficial campaign
+content is not included with this repository and is not covered by the MIT license.**
 Community world packs are installed at runtime into the gitignored `data/worlds/`
 directory. They are the work of their own authors, distributed by whoever
 publishes them, and are neither shipped nor vetted by this project. A pack that
@@ -204,13 +212,6 @@ references an existing setting is an unofficial fan work with no affiliation wit
 or endorsement from that setting's rights holders, and the app labels it as such
 wherever it appears. Only original works are bundled in this repository.
 
-- Forked from [Open Dungeon](https://github.com/newideas99/open-dungeon) by Jacob
-  Ferrari, MIT licensed. See [LICENSE](LICENSE).
-- Design ideas were borrowed from [Foundry VTT](https://github.com/foundryvtt)
-  (its MIT `dnd5e` and Simple Worldbuilding systems) and from
-  [NarrativeEngine-P](https://github.com/Sagesheep/NarrativeEngine-P). No code
-  from either is in this repository; what each one shaped is listed in
-  [docs/LICENSES.md](docs/LICENSES.md).
 - The workshop's WorldForge tool is ported from WorldForge, Smoebo's
   world-building app, with their permission. What came from it is listed in
   [docs/LICENSES.md](docs/LICENSES.md).
