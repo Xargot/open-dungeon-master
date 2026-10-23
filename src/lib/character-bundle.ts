@@ -10,6 +10,7 @@
 // thing without a filesystem or a database.
 import { z } from "zod";
 import { storedSheetSchema, type CreateSheetInput, type SheetAttachment } from "@/lib/schemas/sheet";
+import { homebrewSchema } from "@/lib/workshop/bundle-schema";
 import { isUploadedImagePath } from "@/lib/uploads";
 import { slugOf } from "@/lib/language/text-logic";
 
@@ -68,6 +69,10 @@ export const characterBundleSchema = z.object({
   kind: z.literal(CHARACTER_BUNDLE_KIND),
   version: z.literal(CHARACTER_BUNDLE_VERSION),
   exportedAt: z.string().max(40),
+  // The server release that wrote the file (issue #430), so a later rule
+  // change can tell an old file from a hand-edited one. Optional: files
+  // written before it carry none.
+  appVersion: z.string().trim().max(40).optional(),
   name: z.string().trim().min(1).max(60),
   level: z.number().int().min(1).max(20),
   // The experience behind the level. Optional: a file written before the
@@ -75,6 +80,14 @@ export const characterBundleSchema = z.object({
   xp: z.number().int().min(0).max(1_000_000).optional(),
   sheet: storedSheetSchema,
   portrait: bundlePortraitSchema.optional(),
+  // The Homebrew the sheet depends on (its subclass, species, background,
+  // workshop class, spells, feats and items, and what those name in turn),
+  // in a Workshop bundle's shape, with the sheet's own references written
+  // by kind and name ("homebrew:@archetype:Marsh Knight") rather than by
+  // this server's ids (src/lib/db/character-file.ts). Optional: a file
+  // written before it carries none, and one whose sheet holds no homebrew
+  // needs none. A server that predates the field reads the file without it.
+  homebrew: z.array(homebrewSchema).max(120).optional(),
 });
 export type CharacterBundle = z.infer<typeof characterBundleSchema>;
 
@@ -106,16 +119,22 @@ export async function buildCharacterBundle(
   character: { name: string; level: number; xp?: number; sheet: CreateSheetInput },
   readPortrait: PortraitReader,
   now: Date = new Date(),
+  appVersion?: string,
+  // The sheet as another server can read it and the Homebrew it depends on
+  // (src/lib/db/character-file.ts), when the caller looked them up.
+  shelf?: { sheet: CreateSheetInput; homebrew: CharacterBundle["homebrew"] },
 ): Promise<CharacterBundle> {
-  const sheet: CreateSheetInput = { ...character.sheet, portrait: null };
+  const sheet: CreateSheetInput = { ...(shelf?.sheet ?? character.sheet), portrait: null };
   const bundle: CharacterBundle = {
     kind: CHARACTER_BUNDLE_KIND,
     version: CHARACTER_BUNDLE_VERSION,
     exportedAt: now.toISOString(),
+    ...(appVersion ? { appVersion } : {}),
     name: character.name,
     level: character.level,
     ...(character.xp !== undefined ? { xp: character.xp } : {}),
     sheet,
+    ...(shelf?.homebrew?.length ? { homebrew: shelf.homebrew } : {}),
   };
   const stored = character.sheet.portrait;
   if (stored && isUploadedImagePath(stored.url)) {

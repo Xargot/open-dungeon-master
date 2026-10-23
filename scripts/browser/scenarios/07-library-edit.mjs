@@ -41,7 +41,12 @@ export default {
       const edit = visible(page, root, /^\s*Edit build\s*$/);
       return (await edit.count()) ? edit.first() : null;
     }, { label: "the Edit build button" }));
-    const name = page.locator(`${root}input[aria-label="Name"]`).locator("visible=true").first();
+    // The editor opens on its summary (backlog F3); the name row goes to
+    // the first step.
+    const nameRow = page.locator(`${root}section[data-active] [data-summary-edit="identity"]`).locator("visible=true");
+    await eventually(() => nameRow.count(), { timeoutMs: 30_000, label: "the summary's name row" });
+    await t.tap(nameRow.first());
+    const name = page.locator(`${root}section[data-active] input[aria-label="Name"]`).locator("visible=true").first();
     await name.waitFor({ state: "visible", timeout: 30_000 });
     // The stored name, as an earlier viewport may have renamed it.
     const stored = await name.inputValue();
@@ -59,7 +64,15 @@ export default {
     await t.shot("saved");
 
     // Duplicate and edit: the copy opens in the editor and says it is one.
+    // The saved name shows in the editor's own heading before the save has
+    // navigated, so wait for the character page's actions themselves: in
+    // the app the page arrived a beat after the heading matched, and the
+    // menu was looked for on the editor, found absent, and never opened.
     const menu = page.locator(`${root}button[aria-label^="More actions"]`).locator("visible=true");
+    await eventually(
+      async () => (await menu.count()) || (await visible(page, root, /^\s*Duplicate and edit/).count()),
+      { timeoutMs: 30_000, label: "the character page's actions after the save" },
+    );
     if (await menu.count()) {
       await t.tap(menu.first());
       await sleep(400);

@@ -15,6 +15,7 @@ import {
 import { ensureOpenChapter, listChaptersForSnapshot } from "@/lib/db/chapters";
 import { publicCast } from "@/lib/dm/cast";
 import { currentCoordination } from "@/lib/dm/coordination";
+import { currentTableWait } from "@/lib/dm/table-wait";
 import { getAmbience } from "@/lib/db/ambience";
 import { captureBoundarySnapshot } from "@/lib/db/snapshots";
 import { listRecentCampaignEvents } from "@/lib/db/character-events";
@@ -45,9 +46,11 @@ import { getDmStatus } from "@/lib/dm/status";
 import { listUtilityCalls } from "@/lib/dm/call-tracker";
 import { listBlockedUserIds } from "@/lib/db/moderation";
 import { xCardRaised } from "@/lib/dm/safety";
+import { tableBreakOn } from "@/lib/dm/table-break";
 import { latestEventOfType, publishPersisted, publishWithSeq } from "@/lib/events";
 import type { HandoutShown, TitleCard } from "@/lib/scene/state";
 import { narrationAudioFor } from "@/lib/tts";
+import { tableAuthors, workshopClassesFor } from "@/lib/db/homebrew";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -114,6 +117,9 @@ export async function GET(
     me: { id: user.id, username: user.username, avatar: user.avatar },
     // The plan the party is coordinating, when it is (issue 254).
     coordination: currentCoordination(campaignId),
+    // Who the DM is waiting on before its next turn, at a table that waits
+    // for everyone (src/lib/dm/table-wait.ts); null when it is not waiting.
+    tableWait: currentTableWait(campaignId),
     members: listMembers(campaignId),
     // Names and faces of the cast, for the transcript's speech lines.
     cast: publicCast(campaignId),
@@ -131,6 +137,9 @@ export async function GET(
     // The workshop and pack subclasses its sheets hold: their feature text
     // and always-prepared spells, read in the browser as on the server.
     subclasses: subclassExtrasAtTable(campaignId, sheets),
+    // The table's workshop classes, read in the browser as on the server: a
+    // sheet holding one, and the level-up dialog's multiclass list.
+    classes: workshopClassesFor(tableAuthors(campaignId)),
     // The table's workshop feats: what each runs as, and its text.
     feats: Object.fromEntries(tableFeatsFrom(getDatabase(), campaignId)),
     // The character this user is playing when they have several (11.3).
@@ -170,6 +179,8 @@ export async function GET(
     // carries its own stamp and the overlay skips one older than a minute.
     handout: handoutOnTable(campaignId),
     safetyPause: safetyPauseOnTable(campaignId),
+    // A table break: who paused and since when (src/lib/dm/table-break.ts).
+    tableBreak: tableBreakOn(campaignId),
     titleCard: (latestEventOfType(campaignId, ["title_card"])?.payload as TitleCard | null) ?? null,
     // What this seat may see and do, so the client never re-derives it from
     // ids and never shows a control the server would refuse.

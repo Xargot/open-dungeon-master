@@ -18,6 +18,8 @@ import { countMessages, insertCampaignMessage, listRecentMessages } from "@/lib/
 import { getSheetForUser, listSheets } from "@/lib/db/sheets";
 import { floorAfterRelease } from "@/lib/dm/encounter-tools";
 import { requestDmTurn } from "@/lib/dm/loop";
+import { settleTableWait, waitsForTable } from "@/lib/dm/table-wait";
+import { holdsPostForTable } from "@/lib/dm/table-wait-logic";
 import { coverInEffect } from "@/lib/dm/delegation";
 import { hasHumanDm } from "@/lib/dm/viewer";
 import { claimNarrationSeq } from "@/lib/dm/narration-slot";
@@ -32,6 +34,8 @@ import { concentrationSwapFor } from "@/lib/dm/concentration-confirm";
 import { inCoordination } from "@/lib/dm/coordination";
 import { confirmsSwap, swapQuestion } from "@/lib/dm/concentration-confirm-logic";
 import { tableAuthors } from "@/lib/db/homebrew";
+import { tableBreakOn } from "@/lib/dm/table-break";
+import { breakRefusal } from "@/lib/dm/table-break-logic";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,6 +96,13 @@ export async function POST(
   }
 
   const { kind } = parsed.data;
+  // A table break (src/lib/dm/table-break.ts) stops play where it stands:
+  // table talk goes on, nothing in character does, and the floor underneath
+  // is left alone so Resume picks up exactly there.
+  const tableBreak = kind === "ooc" ? null : tableBreakOn(campaignId);
+  if (tableBreak) {
+    return Response.json({ error: breakRefusal(tableBreak), tableBreak }, { status: 409 });
+  }
   const intent = kind === "do" ? parseMessageIntent(parsed.data.intent) : null;
   // Floor control: during a spotlight only the named players may act (ooc is
   // always allowed); the floor releases once ALL of them have answered.
@@ -289,6 +300,15 @@ export async function POST(
         characterId: sheet.id,
         seq,
       });
+    } else if (holdsPostForTable({ floorBefore: floor.mode, kind, isFirstAction, waits: waitsForTable(campaign) })) {
+      // Wait for the table (src/lib/dm/table-wait.ts): an open-floor post
+      // joins the gathering beat, and the one turn that answers it runs when
+      // the last present player has acted or passed, or the time runs out.
+      // A spotlight answer never lands here: floor is the floor before this
+      // post, so the answer that releases a spotlight wakes the DM below.
+      if (settleTableWait(campaignId)) {
+        requestDmTurn(campaignId);
+      }
     } else {
       // Under a running cover, requestDmTurn itself spends one of the DM's
       // handed-over answers per enqueued turn (and none on a coalesced one),

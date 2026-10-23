@@ -24,6 +24,7 @@ import { isKnockedOut } from "@/lib/dm/knockout";
 import { conditionEffectsFor } from "@/lib/srd/condition-effects";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { textKey } from "@/lib/language/text-logic";
+import { isNamed } from "@/lib/srd/feature-names";
 
 export type MarkPlan = {
   // Mark conditions whose die rides this attack.
@@ -81,6 +82,12 @@ export function planMarks(input: {
   return plan;
 }
 
+// The critical range a mark this attack rides gives against its creature
+// (Hexblade's Curse: 19), or 20.
+export function markCritRange(applies: Set<string>): number {
+  return Math.min(20, ...[...applies].map((condition) => conditionEffectsFor(condition)?.critRangeVsMarked ?? 20));
+}
+
 // Writes the marks an attack placed or moved.
 export function writeMarks(campaignId: string, sheetId: string, assign: MarkPlan["assign"]) {
   if (!assign.length) {
@@ -113,7 +120,7 @@ export function withoutActionInvisibility(
   if (!held) {
     return { conditions, meta, removed: 0 };
   }
-  return removeConditionInstances(conditions, meta, held, (entry) => !/greater invisibility/i.test(`${entry.spell ?? ""} ${entry.source ?? ""}`));
+  return removeConditionInstances(conditions, meta, held, (entry) => ![entry.spell, entry.source].some((name) => isNamed(name ?? "", "greater invisibility")));
 }
 
 // Ends a character's invisibility because they cast a spell or attacked (the

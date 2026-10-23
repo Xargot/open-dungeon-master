@@ -26,6 +26,7 @@ import { AUTHORED_DATA_A } from "@/lib/srd/authored-effects-data";
 import { AUTHORED_DATA_A2 } from "@/lib/srd/authored-effects-data-b";
 import { AUTHORED_DATA_B } from "@/lib/srd/authored-effects-data2";
 import { AUTHORED_DATA_B2 } from "@/lib/srd/authored-effects-data3";
+import { AUTHORED_DATA_C } from "@/lib/srd/authored-effects-data4";
 import { GENRE_AUTHORED } from "@/lib/srd/authored-effects-genre";
 import type {
   Ability,
@@ -48,15 +49,14 @@ export const AUTHORED_TABLE: Record<string, AuthoredEntry> = {
   ...AUTHORED_DATA_A2,
   ...AUTHORED_DATA_B,
   ...AUTHORED_DATA_B2,
+  ...AUTHORED_DATA_C,
 };
-
-const lower = (value: string | undefined | null) => (value ?? "").trim().toLowerCase();
 
 type Row = { key: string; classId: string; feature: string; entry: AuthoredEntry };
 const BY_KEY = new Map<string, Row>(
   Object.entries(AUTHORED_TABLE).map(([key, entry]) => {
     const [classId, feature] = key.split("::");
-    return [`${lower(classId)}::${textKey(feature)}`, { key, classId, feature, entry }];
+    return [`${textKey(classId)}::${textKey(feature)}`, { key, classId, feature, entry }];
   }),
 );
 
@@ -81,7 +81,7 @@ export type AuthoredSheet = {
 export type HeldAuthored = Row & { choice: string | null; level: number; name: string };
 
 function classLevel(sheet: AuthoredSheet, classId: string): number {
-  const entry = (sheet.classes ?? []).find((item) => lower(item.id) === classId);
+  const entry = (sheet.classes ?? []).find((item) => textKey(item.id) === classId);
   if (entry) {
     return entry.level;
   }
@@ -113,11 +113,11 @@ function choiceOf(exact: Row | undefined, chosen: RegExpExecArray | null): strin
 // ("Totem Spirit (Bear)") and the level of the class that granted it.
 export function heldAuthored(sheet: AuthoredSheet): HeldAuthored[] {
   const out: HeldAuthored[] = [];
-  const classIds = [lower(sheet.class), ...(sheet.classes ?? []).map((entry) => lower(entry.id))].filter(Boolean);
+  const classIds = [textKey(sheet.class ?? ""), ...(sheet.classes ?? []).map((entry) => textKey(entry.id))].filter(Boolean);
   for (const feature of sheet.features ?? []) {
     const full = textKey(feature.name);
     const chosen = /^(.*?)\s*\(([^)]+)\)\s*$/.exec(feature.name.trim());
-    const candidates = feature.classId ? [lower(feature.classId)] : classIds;
+    const candidates = feature.classId ? [textKey(feature.classId)] : classIds;
     let found = false;
     for (const classId of candidates) {
       const exact = BY_KEY.get(`${classId}::${full}`);
@@ -145,14 +145,14 @@ export function heldAuthored(sheet: AuthoredSheet): HeldAuthored[] {
           ...row,
           name: feature.name,
           choice: choiceOf(exact, chosen),
-          level: classLevel(sheet, lower(feature.classId)),
+          level: classLevel(sheet, textKey(feature.classId)),
         });
         found = true;
       }
     }
     // A genre class's feature, found by its name (authored-effects-genre.ts).
     const genre = found ? undefined : GENRE_BY_NAME.get(full);
-    if (genre && (!genre.classes || genre.classes.some((id) => candidates.includes(lower(id))))) {
+    if (genre && (!genre.classes || genre.classes.some((id) => candidates.includes(textKey(id))))) {
       const classId = candidates[0] ?? "";
       out.push({ key: `genre::${full}`, classId, feature: genre.feature, entry: genre.entry, name: feature.name, choice: null, level: classLevel(sheet, classId) });
     }
@@ -163,9 +163,9 @@ export function heldAuthored(sheet: AuthoredSheet): HeldAuthored[] {
 const GENRE_BY_NAME = new Map(GENRE_AUTHORED.map((row) => [textKey(row.feature), row]));
 
 export function hasCondition(sheet: AuthoredSheet, name: string): boolean {
-  const wanted = lower(name);
+  const wanted = textKey(name);
   return (sheet.conditions ?? []).some((entry) => {
-    const held = lower(entry);
+    const held = textKey(entry);
     return held === wanted || held.startsWith(`${wanted} (`) || held.startsWith(`${wanted}:`);
   });
 }
@@ -177,7 +177,7 @@ export function hasCondition(sheet: AuthoredSheet, name: string): boolean {
 export function wearsHeavy(sheet: AuthoredSheet): boolean {
   const items = sheet.equipment ?? [];
   return items.some(
-    (item) => isWorn(item, items) && (item.gear?.armor?.category ?? matchArmor(item.name)?.category) === "heavy",
+    (item) => isWorn(item, items) && (item.gear?.armor?.category ?? matchArmor(item)?.category) === "heavy",
   );
 }
 
@@ -201,6 +201,9 @@ export function gateHolds(gate: Gate | undefined, sheet: AuthoredSheet, held: He
     return false;
   }
   if (gate.choice && textKey(held.choice ?? "") !== textKey(gate.choice)) {
+    return false;
+  }
+  if (gate.level && held.level < gate.level) {
     return false;
   }
   if (gate.choiceOf) {
@@ -258,9 +261,14 @@ export function activeAuthored<K extends AuthoredEffectKind>(
 
 // ---- defenses ----
 
-export function authoredResistances(sheet: AuthoredSheet, options: { magical?: boolean; spell?: boolean } = {}): string[] {
+// `except`: features set aside for this blow (Emissary of Redemption against
+// a creature the paladin attacked).
+export function authoredResistances(sheet: AuthoredSheet, options: { magical?: boolean; spell?: boolean; except?: string[] } = {}): string[] {
   const out: string[] = [];
-  for (const { effect } of activeAuthored(sheet, "resist")) {
+  for (const { effect, held } of activeAuthored(sheet, "resist")) {
+    if (options.except?.includes(held.feature)) {
+      continue;
+    }
     if (effect.spells && !options.spell) {
       continue;
     }
@@ -382,12 +390,12 @@ export function authoredRollRiders(
 ): { advantage: string[]; spent: string[] } {
   const advantage: string[] = [];
   const spent: string[] = [];
-  const skill = lower(input.skill);
+  const skill = textKey(input.skill ?? "");
   for (const carrier of ONE_SHOT_ROLLS) {
     if (carrier.kind !== input.kind || (carrier.skills && !carrier.skills.includes(skill))) {
       continue;
     }
-    const condition = (sheet.conditions ?? []).find((entry) => lower(entry) === carrier.condition);
+    const condition = (sheet.conditions ?? []).find((entry) => textKey(entry) === textKey(carrier.condition));
     if (condition) {
       advantage.push(`${carrier.label}: advantage, spent by this roll`);
       spent.push(condition);

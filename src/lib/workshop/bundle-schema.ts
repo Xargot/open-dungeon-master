@@ -283,6 +283,10 @@ const beatSchema = z.object({
     .default({}),
   x: z.number().default(0),
   y: z.number().default(0),
+  // The card's portable key (audit WF-19), like a linkable row's: the
+  // importer records it as where the card came from, and its next export
+  // writes it again. A bundle written before cards had one reads as "".
+  ref: refSchema,
 });
 
 // The region map (it never travelled before). Terrain is one character per
@@ -313,6 +317,7 @@ const stockLineSchema = z.object({
   qty: z.number().int().min(0).max(999),
   priceCp: z.number().int().min(1).max(100_000_000),
   note: z.string().max(120).default(""),
+  srdName: z.string().trim().max(80).optional(),
 });
 
 // A Market shop (#171): its place and keeper as indexes into `locations`
@@ -344,9 +349,10 @@ const monsterSchema = z.object({
 // Items, spells and character options travel as the same loose blob the
 // homebrew table stores, and are normalized per kind on the way in
 // (src/lib/homebrew/gear.ts), so a bundle written by an older build cannot
-// hand the engine a weapon it cannot roll.
-const homebrewSchema = z.object({
-  kind: z.enum(["spell", "feat", "item", "race", "background", "archetype", "hazard"]),
+// hand the engine a weapon it cannot roll. A character file carries the
+// entries its sheet depends on in the same shape (src/lib/character-bundle.ts).
+export const homebrewSchema = z.object({
+  kind: z.enum(["spell", "feat", "item", "race", "background", "archetype", "hazard", "class"]),
   name: z.string().trim().min(1).max(80),
   data: z.record(z.string(), z.unknown()).default({}),
 });

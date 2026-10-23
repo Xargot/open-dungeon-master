@@ -61,6 +61,7 @@ import { setDmStatus } from "@/lib/dm/status";
 import { renderWorldArcsForPrompt } from "@/lib/dm/world-arc-logic";
 import { ensureWorldArcs } from "@/lib/dm/world-arc";
 import type { ToolResult } from "@/lib/dm/tool-errors";
+import { partyStoryOf, partyStoryPlannerBlock } from "@/lib/dm/party-story";
 
 // Story-arc generation and upkeep. The arc is the DM's secret spine: a saga
 // sized by the lead's campaign-length setting is generated once at campaign
@@ -83,7 +84,7 @@ function worldContext(campaignId: string): string {
   const party = listSheets(campaignId)
     .map(
       (sheet) =>
-        `- ${sheet.name}: level ${sheet.level} ${sheet.race} ${sheet.class}${sheet.subclass ? ` (${sheet.subclass})` : ""}, background ${sheet.background || "unknown"}, ${sheet.spellcasting ? "casts spells" : "casts nothing at all"}${sheet.backstory ? `\n  backstory: ${sheet.backstory.slice(0, 400)}` : ""}`,
+        `- ${sheet.name}: level ${sheet.level} ${sheet.race} ${sheet.class}${sheet.subclass ? ` (${sheet.subclass})` : ""}, background ${sheet.background || "unknown"}, ${sheet.spellcasting ? "casts spells" : "casts nothing at all"}${sheet.backstory ? `\n  backstory: ${sheet.backstory}` : ""}`,
     )
     .join("\n");
   return [
@@ -97,6 +98,12 @@ function worldContext(campaignId: string): string {
     // The pack's factions and hooks give the saga real named powers to plan
     // against instead of inventing a pantheon the world does not have.
     packWorldHints(campaign.gameSettings),
+    // The table's combat pace (issue #432) shapes how many beats are fights.
+    campaign.gameSettings.combatPace === "frequent"
+      ? "Pacing: this table wants more fights. Give most acts at least one beat that is a fight the party cannot talk its way past."
+      : campaign.gameSettings.combatPace === "rare"
+        ? "Pacing: this table wants fewer fights. Favor beats of talk, intrigue, travel and discovery; keep fights to the moments the story turns on."
+        : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -113,7 +120,8 @@ function recentChapterLines(campaignId: string): string {
     .join("\n");
 }
 
-// Party-composition planning lines: pets, and AI companions the saga should
+// Party-composition planning lines: the table's shared party backstory when
+// it wrote one, pets, and AI companions the saga should
 // plan moments for. A beastmaster's wolf or a drakewarden's drake is a
 // promise the story ought to keep, so saga-scale generation (initial,
 // upgrade, and sequel passes) is told explicitly to plan around them. The
@@ -144,10 +152,18 @@ function partyCompositionContext(campaignId: string): string {
       );
     }
   }
-  if (!lines.length) {
-    return "";
-  }
-  return `Party composition notes; the plan must keep these promises (tie at least one boss, ally, or event to each line):\n${lines.join("\n")}`;
+  // The table's own account of why the party is together rides with the
+  // composition notes, so every saga-scale pass (initial, upgrade, act
+  // detail, sequel) keeps it and the per-chapter refresh stays as cheap.
+  const campaign = getCampaignById(campaignId);
+  return [
+    campaign ? partyStoryPlannerBlock(partyStoryOf(campaign)) : "",
+    lines.length
+      ? `Party composition notes; the plan must keep these promises (tie at least one boss, ally, or event to each line):\n${lines.join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 // Capability roster for the passes that write real beats. They see the arc

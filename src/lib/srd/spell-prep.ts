@@ -2,7 +2,7 @@ import { findCustomClass, spellClassFor } from "@/lib/classes";
 import { suggestedCantripCount, suggestedSpellCount } from "@/lib/content/mechanics";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { SRD_CLASSES, abilityMod, spellSlotsFor } from "@/lib/srd";
-import { subclassSpellsFor } from "@/lib/srd/features";
+import { subclassSpellsFor, subclassExpandedSpellsFor, subclassSpellListsFor } from "@/lib/srd/features";
 import type { SubclassExtras } from "@/lib/srd/subclass-tables";
 import { isCantripName, spellLevelOf, spellsAgainstLimit } from "@/lib/srd/spell-lists";
 import {
@@ -84,13 +84,16 @@ export type CasterView = {
   // for the always-prepared spells of a subclass the bundled tables do not
   // carry. Read, never written back to the sheet.
   extras?: SubclassExtras;
+  // The sheet's features, for the spells an option chosen for one of them
+  // brings ("Circle Spells (Forest)"). Read, never written back.
+  features?: Array<{ name: string }>;
 };
 
 type SheetLike = Pick<CharacterSheet, "class" | "level" | "subclass" | "classes" | "abilities"> & {
   spellcasting: CharacterSheet["spellcasting"];
+  features?: Array<{ name: string }>;
 };
 
-const lower = (name: string) => name.trim().toLowerCase();
 const has = (list: string[], name: string) => list.some((entry) => textKey(entry) === textKey(name));
 const without = (list: string[], name: string) => list.filter((entry) => textKey(entry) !== textKey(name));
 
@@ -113,10 +116,12 @@ function viewOf(
   level: number,
   subclass: string,
   extras?: SubclassExtras,
+  features?: Array<{ name: string }>,
 ): CasterView {
   return {
     classId,
     ...(extras ? { extras } : {}),
+    ...(features?.length ? { features } : {}),
     ...(lists.progression ? { progression: lists.progression } : {}),
     ability,
     level,
@@ -140,11 +145,11 @@ export function casterViewsOf(sheet: SheetLike, extras?: SubclassExtras): Caster
   }
   if (casting.casters?.length) {
     return casting.casters.map((caster) => {
-      const entry = (sheet.classes ?? []).find((row) => lower(row.id) === lower(caster.classId));
-      return viewOf(caster, caster.classId, caster.ability, entry?.level ?? sheet.level, entry?.subclass ?? "", extras);
+      const entry = (sheet.classes ?? []).find((row) => textKey(row.id) === textKey(caster.classId));
+      return viewOf(caster, caster.classId, caster.ability, entry?.level ?? sheet.level, entry?.subclass ?? "", extras, sheet.features);
     });
   }
-  return [viewOf(casting, sheet.class, casting.ability, sheet.level, sheet.subclass ?? "", extras)];
+  return [viewOf(casting, sheet.class, casting.ability, sheet.level, sheet.subclass ?? "", extras, sheet.features)];
 }
 
 // Writes views back: onto `casters` (with the top-level lists kept as their
@@ -155,7 +160,7 @@ export function withCasterViews(
 ): NonNullable<CharacterSheet["spellcasting"]> {
   if (casting.casters?.length) {
     const casters = casting.casters.map((caster) => {
-      const view = views.find((entry) => lower(entry.classId) === lower(caster.classId));
+      const view = views.find((entry) => textKey(entry.classId) === textKey(caster.classId));
       return view ? writeLists(caster, view) : caster;
     });
     const union = (pick: (view: CasterView) => string[]) => dedupeNames(views.flatMap(pick));
@@ -218,7 +223,27 @@ export function spellbookOf(view: Pick<CasterView, "spellbook" | "prepared" | "p
 }
 
 export function grantedSpellsOf(view: CasterView): string[] {
-  return subclassSpellsFor(view.classId, view.subclass, view.level, view.extras);
+  return subclassSpellsFor(view.classId, view.subclass, view.level, view.extras, view.features);
+}
+
+// What this caster may learn beyond its class's list: its subclass's
+// expanded spells (a warlock patron's), by name, and other classes' lists
+// (a Divine Soul's cleric list). Learned, they count like any other spell.
+export function widerListOf(view: CasterView): { spells: string[]; lists: string[] } {
+  return {
+    spells: subclassExpandedSpellsFor(view.classId, view.subclass, view.level, view.extras, view.features),
+    lists: subclassSpellListsFor(view.classId, view.subclass, view.extras),
+  };
+}
+
+// Whether a spell a list check found off the class's list is one the
+// caster's subclass widens it with.
+export function onWiderList(view: CasterView, spell: { name: string; classes: string[] }): boolean {
+  const wider = widerListOf(view);
+  return (
+    wider.spells.some((name) => textKey(name) === textKey(spell.name)) ||
+    spell.classes.some((entry) => wider.lists.includes(textKey(entry)))
+  );
 }
 
 // The highest spell level this class can prepare or learn at its own level.

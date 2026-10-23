@@ -189,6 +189,9 @@ event before returning HTTP 202. It ignores repeated opportunities, checks
 current state before waking Codex, and tells the agent to re-read the table
 before every write. A combat notification has an `act` or `finish` phase;
 the latter permits ending the turn, not submitting another initial action.
+An earned level waits in the inbox behind any roll, turn or response queued
+with it; the agent then reads `odm_level_up_options` and takes that one
+level with `odm_level_up`, choosing the picks itself.
 
 ## Receivers that need their own auth header (hosted agent webhooks)
 
@@ -280,8 +283,8 @@ These are the same opportunities a pushed webhook carries (see the event
 contract below), with no story text and no names. Once woken, the agent works
 as a webhook-driven one does: it reads `odm_get_player_webhook_opportunities`
 with the `subscriptionId`, reads the table, and puts the `subscriptionId` and
-the current `opportunityId` in every `odm_take_action`, `odm_answer_roll` and
-`odm_end_turn` call.
+the current `opportunityId` in every `odm_take_action`, `odm_answer_roll`,
+`odm_end_turn`, `odm_pass` and `odm_level_up` call.
 
 * **The link is the secret.** It needs no login, so a hook that can hold no
   credential can use it. Only its SHA-256 is stored. Keep it in the hook's
@@ -290,7 +293,8 @@ the current `opportunityId` in every `odm_take_action`, `odm_answer_roll` and
   Anyone holding it can see what the answer above shows, for that one
   character: the campaign, character and subscription IDs, whether the
   campaign is active, paused or ended, whether the DM is busy, and the kind of
-  decision waiting (a combat turn, a roll or a response). Never the story,
+  decision waiting (a combat turn, a roll, a response or an earned level,
+  with its number). Never the story,
   names, sheets or anything another player sees.
 * It stops when the subscription is removed (`odm_unsubscribe_player_webhook`)
   or replaced by a new link, the connection is revoked or expires, the
@@ -392,7 +396,10 @@ opportunityId is no longer listed, stop. Otherwise read odm_get_campaign
 and your sheet with odm_get_sheet, then make this one decision as your
 character only. Pass
 subscriptionId and the current opportunityId with every odm_take_action,
-odm_answer_roll and odm_end_turn. Answer rolls with fallback digital. Never
+odm_answer_roll, odm_end_turn, odm_pass and odm_level_up. If odm_get_campaign
+shows tableWait with you in waitingOn and you have nothing to add, call
+odm_pass. Answer rolls with fallback digital. For level_up_available, read
+odm_level_up_options and take that level with odm_level_up. Never
 repeat a submission whose outcome is uncertain. Stop when no legal work
 remains.
 ```
@@ -420,12 +427,21 @@ Sources: [Claude Code routines](https://code.claude.com/docs/en/routines.md),
 
 ## Pause and stop
 
-Lobby, held floor, safety pause, narration in progress and another player's
-turn suppress play opportunities. A pending roll wakes only the owner of
-the subscribed active character. After a safety or floor pause, fresh
-opportunity IDs let an unfinished decision resume. An open-floor narration
+Lobby, held floor, safety pause, a table break, narration in progress and
+another player's turn suppress play opportunities, and a table break reports
+the lifecycle `paused` (`campaign_paused`, then `campaign_resumed`) like the
+X-card. A pending roll wakes only the owner of the subscribed active
+character. After a safety, break or floor pause, fresh opportunity IDs let an
+unfinished decision resume. An agent can never pause or resume a table
+break: only the people at the table can. An open-floor narration
 notification invites the agent to inspect the passage; it should speak
 only when addressed or when the scene calls for party action.
+
+An earned level is offered under the same conditions (active, not paused
+or held, no narration in progress), but nothing at the table holds it
+back: another seat's roll or someone else's combat turn does not. It is
+listed after any roll, turn or response for the same character, and its
+ID is the same before and after a pause, so one level is one invitation.
 
 To stop automatic play, stop the receiver with Ctrl+C. To stop deliveries
 and delete the server subscription too:
@@ -481,11 +497,23 @@ Events use schema version 1, with `eventId`, `subscriptionId`, `campaignId`,
 `occurredAt`, plus `text`: one plain line naming the character, the campaign
 and what is waiting, followed by the other fields as JSON, for hosted
 receivers that pass on only a text field. Types are `turn_started`, `roll_requested`,
-`response_requested`, `campaign_paused`, `campaign_resumed` and
-`campaign_ended`. Roll requests add `pendingRollId`; combat requests add
-`phase`. Events contain no narration, private notes, hidden enemy numbers,
+`response_requested`, `level_up_available`, `campaign_paused`,
+`campaign_resumed` and `campaign_ended`. Roll requests add `pendingRollId`;
+combat requests add `phase`; `level_up_available` adds `level`, the next
+level, which `odm_level_up` takes. Events contain no narration, private notes, hidden enemy numbers,
 dice results or bearer tokens. `seq` identifies the snapshot revision and
 is not itself an opportunity ID.
+
+`level_up_available` is offered while the subscribed character's
+experience has earned a level above its own (the same check the level-up
+dialog makes, `levelForXp(xp) > level`, never past 20), for a player's
+character, not a companion. Its opportunity ID is
+`level:<characterId>:<level>`: more experience toward the same level, a
+retried delivery or a pause does not invite it again. Taking the level
+ends it; if the experience has earned another, the next level is a new
+opportunity. A copy of the bundled receiver from before this type answers
+it with 400, and the server stops after eight attempts, as with any refused
+delivery; update the receiver to have its agent level up.
 
 Every POST carries `X-ODM-Event-Id`, `X-ODM-Timestamp` (Unix seconds) and
 `X-ODM-Signature`. The signature is `v1=` followed by the hex HMAC-SHA256 of
@@ -507,13 +535,14 @@ The agent reads the table with `odm_get_campaign`, `odm_get_sheet` (the
 table's copy of its character, not the library copy), `odm_get_whispers`
 (the DM's private whispers, which the transcript never carries) and
 `odm_get_messages`. Every tool result stays under the agent's result cap
-as valid JSON. `odm_get_campaign` puts the safety pause, DM status, floor,
+as valid JSON. `odm_get_campaign` puts the safety pause, table break, DM status, floor,
 caps, pending rolls and encounter first, then the newest messages that
 fit; `history.olderBefore` pages further back through `odm_get_messages`.
 
 For an automatic play submission, send `subscriptionId` and the matching
-current `opportunityId` with `odm_take_action`, `odm_answer_roll` or
-`odm_end_turn`. The server reserves one submission per tool per opportunity,
+current `opportunityId` with `odm_take_action`, `odm_answer_roll`,
+`odm_end_turn`, `odm_pass` or `odm_level_up`. A `level_up_available` opportunity
+accepts only `odm_level_up`, and `odm_level_up` only that opportunity. The server reserves one submission per tool per opportunity,
 checks the current state and then invokes the existing authenticated web
 route. Identical retries return its saved result. A changed submission or
 an unresolved receipt is refused. A refusal from the game itself (HTTP
@@ -535,3 +564,19 @@ real player token or spend a model turn. The Codex protocol tests simulate
 app-server replies. Test a complete signed-in Codex session on a disposable
 campaign before deploying automatic play. No live player session was
 started while developing this feature.
+
+## Tables that wait for everyone
+
+A campaign can turn on **Wait for the table** (Settings, Players, Pacing).
+After each narration on an open floor, the AI DM then waits until every
+present player has acted or passed, or until nobody has answered for the
+table's timeout (five minutes unless the lead changes it; every post or
+pass restarts the clock), and answers them all in one turn. A player with a
+live webhook or poll link counts as present even with no tab open.
+
+While the table gathers, the DM stays idle, so a `response_requested`
+narration opportunity stays live after another player posts: the agent's
+guarded write is no longer refused as stale. `odm_get_campaign` carries
+`tableWait`, which lists `waitingOn` and `answered`. An agent with nothing
+to add calls `odm_pass` with the same guards; a pass answers the passage
+the way a post does, and nothing is written to the transcript.

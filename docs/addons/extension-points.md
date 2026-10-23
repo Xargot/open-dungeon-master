@@ -205,6 +205,87 @@ grid.
 
 ## Board views
 
+### Optional session stage layout
+
+A board view may declare `"sessionLayout": "stage"`. On a docked desktop
+session, selecting that view uses a host-owned layout: Party above Chronicle
+at left, board in the center, native side controls at right, the native hand
+under the board, and the composer under Chronicle. The existing live DM status
+occupies a fixed row above Chronicle while the DM is busy (or stays beside
+the composer on browsers without CSS anchor positioning). The same form,
+hand, status and input components stay mounted; only CSS placement changes.
+Addon code, stylesheets and assets remain in its sandbox. A stage view can
+optionally declare `sessionTheme: { "surface": "#17212b", "accent": "#7dd3fc" }`:
+two opaque `#RRGGBB` colors interpreted by the host, never injected CSS.
+Each surface channel is limited to 0–63 to keep the native light text readable.
+The accent colors decorative borders; text, health, errors and keyboard focus
+retain native colors. Unknown theme keys and non-hex values are refused. A theme
+requires `sessionLayout: "stage"`. It affects the native panel/card surfaces and
+board frame only in night mode on a docked desktop. Day mode, mobile and the
+native view keep their existing styles. This is a first appearance slice,
+not a complete component skin or arbitrary layout API. Older views omit the field and
+retain the original session layout. No arbitrary layout names or CSS are accepted.
+
+Session views must leave `needsViewData` false: they work even without a
+tactical map. The same View control is available above the table when there
+is no map, or while the full transcript covers the board. Selection stays
+per device. The native saved arrangement and stage/story preference are not
+overwritten. Previously detached tabs keep their component owners; Battle
+occupies the center and the remaining detached controls share the right side.
+Narrow screens retain the native responsive layout.
+
+Activation from native Story keeps an already-open board under its existing
+side-panel owner. CSS places it in the center, with native side controls
+alongside it; changing side tabs does not remove that board. Its native
+camera uses the existing resize behavior, and token selection/local controls
+survive activation and return to Story. A quest glance, when present, sits
+below the center controls in this composition.
+
+Session renderers fill the visible board viewport independently of the flat
+grid camera. The host keeps the native grid/camera mounted for fallback,
+and places token anchors in this visible viewport. Inline and enlarged boards
+have separate anchors. Ordinary board-only addons retain the flat camera.
+The snapshot message includes `sessionLayout: "stage"` only for session views;
+pages shared with a board-only contribution must leave its camera to the host.
+Handle `camera-control` for the host's zoom, fit and arrow keys, and report
+`camera-state` after rendering/camera changes so DM steering uses your current
+view. State coordinates are fractional tile coordinates at the view center;
+zoom is relative to your fitted view (1). The host validates finite values,
+in-map centers and zoom 0.25–8, and normalizes to the existing DM route's
+integer coordinates (clamped within the map)/zoom 0.5–3 when the DM explicitly pulls/locks the view.
+Reporting camera state never moves tokens or grants DM authority.
+
+The native transcript, Chronicle, composer and mapped renderer remain mounted
+while switching story/board within this presentation. Removing a map or
+changing the renderer can recreate the renderer frame; addons reconstruct
+their view from the next bridge message. Native component lifetimes outside
+this opted-in layout retain their original behavior.
+
+After `ready`, a session view without a tactical map receives:
+
+```js
+{ odm: 1, type: "scene", genre, appearance, options, assetsUrl }
+```
+
+`appearance` and `options` have the same meaning as in a board snapshot.
+This message supplies no map, tokens, story text, campaign state, or permissions.
+Tile/token/hover/anchor input is ignored without a map; map-file and portrait
+requests fail. A later mapped frame receives the normal projected snapshot.
+Do not invent mechanical terrain from this message.
+
+An opted-in renderer that reports `error` or fails to send `ready` within
+30 seconds returns this device to the native presentation. Send `ready` once
+the message listener is installed, before loading large assets. A renderer
+that hangs after readiness can be disabled through the native View control;
+there is no post-readiness watchdog. Server-side removal/disable is reflected
+after reload, matching the existing offered-addon cache.
+
+Map models and arbitrary `view.data` are not automatically redacted per viewer.
+Build hidden-map geometry from projected terrain; never ship secret rooms or
+scene descriptions to a restricted viewer and rely on visual fog to hide them.
+
+### Board rendering contract
+
 **Where:** the board's View switch, at the table and in the enlarged
 tabletop, for everyone who opens the board in a browser or the desktop app.
 **Result:** your page draws the board, with every layer the flat board draws
@@ -270,6 +351,7 @@ From the table to your page:
 { odm: 1, type: "fx", events }                                      // effects as they land, each once
 { odm: 1, type: "ping", x, y, focus, at }                           // somebody pointed at a square
 { odm: 1, type: "camera", mode: "pull" | "lock" | "free", x, y, zoom } // the DM steering everyone's view
+{ odm: 1, type: "camera-control", action }                          // session view: zoom-in, zoom-out, fit, left, right, up, down
 ```
 
 An effect is `{ id, kind, from, to, fromTokenId, toTokenId, outcome,
@@ -291,6 +373,7 @@ From your page to the table:
 { odm: 1, type: "file", requestId, name }          // "backdrop", or one of snapshot.view.files[].name
 { odm: 1, type: "face", requestId, tokenId }       // the picture the figure wears on the flat board
 { odm: 1, type: "anchors", tokens }                // where you drew each figure (below)
+{ odm: 1, type: "camera-state", x, y, zoom }         // session view's current camera; never an action
 { odm: 1, type: "error", message }                 // shown to the viewer under the board
 ```
 
@@ -333,7 +416,7 @@ table hides its own over a board view.
   tokens: [{
     id, kind: "pc" | "enemy" | "npc" | "prop", name, x, y, size, mine, down, hidden, elevation, health, conditions, stamp,
     creature,       // a monster's { type: "undead", slug: "ghoul", cr: 1 }, or null
-    character,      // a character's { race: "elf", class: "wizard" }, or null
+    character,      // a character's { race: "elf", class: "wizard", gender?: "Female" | "Male" | "Nonbinary" | "" }, or null
     auras,          // [{ radiusFeet, tone: "ward" | "harm" | "bless" | "neutral" }]
   }],
   lights: [{ x, y, radius }],
@@ -342,6 +425,7 @@ table hides its own over a board view.
   board,            // "fight" or "scene"
   myTokenId,
   reachable,        // squares this viewer's figure can reach this turn
+  moveAim,          // { x, y } a first tap aimed this viewer's walk at, or null
   zones,            // spell areas: [{ id, spell, caster, tone, look, cells, hot, label, untilRound }]
   labels,           // [{ x, y, text, dmOnly }] pinned to squares
   marks,            // what people drew: [{ id, kind: "stroke" | "arrow" | "rect" | "ellipse", tone, points: [{ x, y }] }]
@@ -364,10 +448,22 @@ Older addons may ignore these additions; missing audio preferences should mean
 silence. These fields grant no session, file or gameplay authority.
 
 `creature` and `character` are for a view that draws figures by kind: a
-skeleton model for `undead`, a sprite by `slug`, a robe for a `wizard`. A
+skeleton model for `undead`, a sprite by `slug`, a robe for a `wizard`.
+`character.gender` is optional: `Female`, `Male`, `Nonbinary`, or `""` when
+unspecified. Older hosts omit it. It comes from the character sheet already
+available to this viewer; ordinary encounter monsters have no gender field.
+Use a default model when it is missing or unspecified; do not infer it from a
+name or portrait. No hidden figures or additional character-sheet fields are
+included. A
 zone's `look` says how the flat board draws it (`wall` a band, `cloud` a soft
 fill, `ground`, `light`, `dark`, `ward` a tint with an edge) and `hot` is a
 wall of fire's burning side.
+
+A player's walk takes two taps. The first `tile` on a reachable square only
+aims it, and `moveAim` names that square until the walk is made, aimed
+elsewhere or dropped with Esc; the second `tile` on the same square makes the
+walk. Mark the aimed square, as the flat board holds its ruler there. Older
+hosts omit `moveAim`, and their first tap walks.
 
 Square `i` is at `x = i % width`, `y = floor(i / width)`. The snapshot is the
 projection the server made for this viewer: a hidden enemy is absent from a

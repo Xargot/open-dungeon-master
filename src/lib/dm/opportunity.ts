@@ -19,7 +19,7 @@ import {
   weaponOf,
 } from "@/lib/dm/attack-logic";
 import { RAGING } from "@/lib/srd/class-resources";
-import { computeSheetDerived } from "@/lib/srd";
+import { acBreakdownFor, computeSheetDerived } from "@/lib/srd";
 import { matchWeapon } from "@/lib/srd/weapons";
 import { magicWeaponOfRow } from "@/lib/dm/gear-attack";
 import { combatRiders } from "@/lib/srd/feature-effects";
@@ -47,6 +47,8 @@ import { blowByType, resolveOnHit, scaledParts } from "@/lib/dm/enemy-hit";
 import { effectOutcome } from "@/lib/dm/effect-tools";
 import { hasTrait } from "@/lib/dm/monster-abilities";
 import { enfeebledBlow, spellRetort } from "@/lib/dm/spell-retort";
+import { holdsFeature } from "@/lib/srd/feature-names";
+import { activeAuthored } from "@/lib/srd/authored-effects";
 
 // Opportunity attacks: walking out of an enemy's reach is not free. Before
 // this, a player could stroll away from a troll with no consequence at all,
@@ -236,7 +238,10 @@ export function resolveOpportunityAttacks(
     const light = lightOnAttack(sight, { attacker: enemy.displayName, target: sheet.name });
     // Escape the Horde (a Hunter ranger's Defensive Tactics): opportunity
     // attacks against them are made at disadvantage.
-    const escapes = sheet.features.some((feature) => /escape the horde/i.test(feature.name));
+    const escapes = holdsFeature(sheet, "Escape the Horde");
+    // Totem Spirit (Eagle): opportunity attacks against the raging barbarian
+    // are made at disadvantage.
+    const eagle = activeAuthored(sheet, "oa_disadv").length > 0;
     // An active effect on its attack and damage rolls (set_effect).
     const attackEffect = effectOutcome(campaign.id, { kind: "enemy", id: enemy.id }, "attack");
     const damageEffect = effectOutcome(campaign.id, { kind: "enemy", id: enemy.id }, "damage").bonus;
@@ -244,6 +249,7 @@ export function resolveOpportunityAttacks(
       ...context.sources,
       ...light.sources,
       ...(escapes ? ["disadvantage" as const] : []),
+      ...(eagle ? ["disadvantage" as const] : []),
       ...(attackEffect.advantage ? ["advantage" as const] : []),
       ...(attackEffect.disadvantage ? ["disadvantage" as const] : []),
     ]);
@@ -362,12 +368,12 @@ function stokeRage(sheet: NonNullable<ReturnType<typeof getSheetById>>) {
 }
 
 // The melee weapon a character strikes with when something walks away from
-// them: the best one they carry. A character carrying only a bow has no
-// opportunity attack to make. A magic weapon is its base weapon (a Flame
-// Tongue is a longsword, src/lib/dm/gear-attack.ts).
+// them: the best one they carry, one-handed beside a shield. A character
+// carrying only a bow has no opportunity attack to make. A magic weapon is
+// its base weapon (a Flame Tongue is a longsword, src/lib/dm/gear-attack.ts).
 function meleeWeaponFor(sheet: NonNullable<ReturnType<typeof getSheetById>>) {
   const weaponFor = (item: (typeof sheet.equipment)[number]) =>
-    magicWeaponOfRow(item).srd ?? weaponOf(item) ?? matchWeapon(item.name);
+    magicWeaponOfRow(item).srd ?? weaponOf(item) ?? matchWeapon(item);
   const melee = sheet.equipment.filter((item) => {
     const weapon = weaponFor(item);
     return weapon !== null && weapon.kind === "melee";
@@ -376,7 +382,9 @@ function meleeWeaponFor(sheet: NonNullable<ReturnType<typeof getSheetById>>) {
   if (!melee.length && carriesWeapon) {
     return null;
   }
-  return resolveAttackWeapon(melee, sheet.proficiencies.weapons, undefined);
+  return resolveAttackWeapon(melee, sheet.proficiencies.weapons, undefined, {
+    shieldOnArm: acBreakdownFor(sheet).shieldName !== null,
+  });
 }
 
 // The other side of the same rule: an enemy that walks out of a character's

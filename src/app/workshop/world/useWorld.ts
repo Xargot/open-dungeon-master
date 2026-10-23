@@ -33,6 +33,14 @@ export type EntryInput = Partial<Omit<WorldEntity["entry"], "wfId">> & {
   portrait?: string;
 };
 
+// A world route's answer carries each entry's WorldForge data once, on its
+// entity, when asked with ?lean=1 (src/lib/db/world-forge.ts
+// worldAnswerFor); the document's entries are put back from there.
+function fromAnswer(payload: { doc: Omit<WorldDoc, "entries">; entities: WorldEntity[] }): WorldState {
+  return { doc: { ...payload.doc, entries: Object.fromEntries(payload.entities.map((entity) => [entity.ref, entity.entry])) } as WorldDoc, entities: payload.entities };
+}
+type Answer = Parameters<typeof fromAnswer>[0];
+
 export function useWorld(campaignId: string) {
   const [world, setWorld] = useState<WorldState | null>(null);
   const [error, setError] = useState("");
@@ -43,6 +51,7 @@ export function useWorld(campaignId: string) {
   const { loaded, loadError, settle } = useLoadStatus();
   const [reload, setReload] = useState(0);
   const base = `/api/campaigns/${campaignId}/world`;
+  const lean = `${base}?lean=1`;
   // Slice saves sent or waiting, in order, and the chain they wait on.
   const pending = useRef<Array<{ ops: DocOps }>>([]);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
@@ -54,16 +63,16 @@ export function useWorld(campaignId: string) {
 
   useEffect(() => {
     let cancelled = false;
-    readLoad<WorldState>(fetch(base), "The world").then((outcome) => {
+    readLoad<Answer>(fetch(lean), "The world").then((outcome) => {
       if (cancelled) return;
       settle(outcome);
       // A reload while saves are still waiting keeps them laid over it.
-      if (outcome.payload) setWorld(withPending(outcome.payload));
+      if (outcome.payload) setWorld(withPending(fromAnswer(outcome.payload)));
     });
     return () => {
       cancelled = true;
     };
-  }, [base, reload, settle, withPending]);
+  }, [lean, reload, settle, withPending]);
 
   const refresh = useCallback(() => setReload((value) => value + 1), []);
 
@@ -111,19 +120,19 @@ export function useWorld(campaignId: string) {
       setInFlight((count) => count + 1);
       const run = queue.current.then(async () => {
         try {
-          const payload = await send(base, { method: "PATCH", body: JSON.stringify({ ops, ...(move ? { moveFolder: move } : {}) }) });
+          const payload = await send(lean, { method: "PATCH", body: JSON.stringify({ ops, ...(move ? { moveFolder: move } : {}) }) });
           pending.current = pending.current.filter((other) => other !== entry);
           if (payload) {
-            const fresh = payload as unknown as WorldState & { conflicts?: string[]; region?: Placement[] };
-            setWorld(withPending({ doc: fresh.doc, entities: fresh.entities }));
+            const fresh = payload as unknown as Answer & { conflicts?: string[]; region?: Placement[] };
+            setWorld(withPending(fromAnswer(fresh)));
             if (fresh.conflicts?.length) setError(fresh.conflicts.join(" "));
             if (fresh.region?.length) options?.onRegion?.(fresh.region);
             return !fresh.conflicts?.length;
           }
           // Refused or unreachable: this save's rows go back to what the
           // server holds; the saves still queued stay on top.
-          const reloaded = (await fetch(base).then((response) => (response.ok ? response.json() : null)).catch(() => null)) as WorldState | null;
-          if (reloaded) setWorld(withPending(reloaded));
+          const reloaded = (await fetch(lean).then((response) => (response.ok ? response.json() : null)).catch(() => null)) as Answer | null;
+          if (reloaded) setWorld(withPending(fromAnswer(reloaded)));
           return false;
         } finally {
           setInFlight((count) => count - 1);
@@ -132,7 +141,7 @@ export function useWorld(campaignId: string) {
       queue.current = run.catch(() => false);
       return run;
     },
-    [base, send, world, withPending],
+    [lean, send, world, withPending],
   );
 
   const placeEntity = (entity: WorldEntity) =>
@@ -209,10 +218,9 @@ export function useWorld(campaignId: string) {
   // [secretId]/reveal). Answers the entry made, or null with `error` said.
   const reveal = useCallback(
     async (secretId: string, told: { title: string; body: string; show: boolean }) => {
-      const payload = await send(`${base}/secrets/${encodeURIComponent(secretId)}/reveal`, { method: "POST", body: JSON.stringify(told) });
+      const payload = await send(`${base}/secrets/${encodeURIComponent(secretId)}/reveal?lean=1`, { method: "POST", body: JSON.stringify(told) });
       if (!payload || !payload.entry) return null;
-      const fresh = payload as unknown as WorldState;
-      setWorld(withPending({ doc: fresh.doc, entities: fresh.entities }));
+      setWorld(withPending(fromAnswer(payload as unknown as Answer)));
       return payload.entry as { id: string; title: string };
     },
     [base, send, withPending],
@@ -254,10 +262,9 @@ export function useWorld(campaignId: string) {
   // its review, or with what it did; a delete or restore carries the world.
   const atlasStep = useCallback(
     async (step: "delete" | "restore" | "frame", body: Record<string, unknown>) => {
-      const payload = await send(`${base}/atlas/${step}`, { method: "POST", body: JSON.stringify(body) });
+      const payload = await send(`${base}/atlas/${step}?lean=1`, { method: "POST", body: JSON.stringify(body) });
       if (payload?.doc) {
-        const fresh = payload as unknown as WorldState;
-        setWorld(withPending({ doc: fresh.doc, entities: fresh.entities }));
+        setWorld(withPending(fromAnswer(payload as unknown as Answer)));
       } else if (payload?.applied) refresh();
       return payload;
     },

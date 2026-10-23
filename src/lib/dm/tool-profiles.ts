@@ -59,7 +59,7 @@ const CORE_EXPLORE = [
   "remove_item",
   "modify_gold",
   "purchase",
-  "award_xp",
+  "party_award",
   "take_rest",
 ];
 
@@ -77,9 +77,6 @@ const CORE_COMBAT = [
   "end_encounter",
   "add_enemies",
   "enemy_flees",
-  "set_enemy_condition",
-  "clear_enemy_condition",
-  "damage_enemy",
   "apply_damage",
   "stabilize",
 ];
@@ -103,6 +100,7 @@ export type ToolGroupId =
   | "scenes"
   | "sound"
   | "mounts"
+  | "gear"
   | "pets"
   | "relationships"
   | "picture";
@@ -114,12 +112,12 @@ export const TOOL_GROUPS: Record<ToolGroupId, { summary: string; tools: readonly
   outside: { summary: "moving the party, items and gold, XP, social checks, a rest (the out-of-fight actions)", tools: CORE_EXPLORE },
   companions: { summary: "adding or dismissing an AI companion", tools: ["add_companion", "dismiss_companion"] },
   sheet: {
-    summary: "lasting sheet changes: damage outside a fight, stabilizing, XP for the party, revealing an item, learning a spell, a story change to who a character is",
-    tools: ["apply_damage", "stabilize", "party_award", "reveal_item", "learn_spell", "update_sheet"],
+    summary: "lasting sheet changes: damage outside a fight, stabilizing, revealing an item, learning a spell, a story change to who a character is",
+    tools: ["apply_damage", "stabilize", "reveal_item", "learn_spell", "update_sheet"],
   },
   tactics: {
-    summary: "fight extras: damage split among targets, teleports, flying or climbing, telegraphing an enemy's intent",
-    tools: ["split_damage", "teleport_token", "set_movement", "declare_intent"],
+    summary: "fight extras: flying or climbing, telegraphing an enemy's intent",
+    tools: ["set_movement", "declare_intent"],
   },
   legendary: { summary: "legendary actions, legendary resistance and lair actions", tools: ["legendary_action", "legendary_resist", "lair_action"] },
   hazards: { summary: "falls, traps, drowning, suffocation, extreme heat and cold", tools: ["apply_hazard"] },
@@ -130,14 +128,18 @@ export const TOOL_GROUPS: Record<ToolGroupId, { summary: string; tools: readonly
   explore: { summary: "downtime, lifestyles, lifting and dragging, diseases, madness and poisons", tools: ["lift", "set_lifestyle", "downtime", "afflict"] },
   binder: { summary: "handouts and the quest log", tools: ["show_handout", "dismiss_handout", "set_quest", "tick_objective"] },
   factions: { summary: "faction standing and notes", tools: ["adjust_reputation", "faction_note"] },
-  shop: { summary: "opening a shop, buying, selling, haggling", tools: ["open_shop", "buy_item", "sell_item", "haggle"] },
+  // Buying and selling is purchase, in the exploring core (issue #471).
+  shop: { summary: "opening a shop and haggling over its prices", tools: ["open_shop", "haggle"] },
   settlement: { summary: "inventing a settlement", tools: ["generate_settlement"] },
   party: { summary: "the party's shared pack and purse", tools: ["party_stash"] },
   effects: { summary: "lasting effects that are not conditions (a blessing, a curse, a boon)", tools: ["set_effect", "clear_effect"] },
   scenes: { summary: "structured scenes: chases, heists, skill challenges", tools: ["start_scene", "scene_check", "end_scene"] },
   sound: { summary: "the table's music and sound stings", tools: ["set_ambience", "play_sting"] },
   mounts: { summary: "mounting and dismounting", tools: ["mount_up", "dismount"] },
-  pets: { summary: "familiars, pets and animal companions", tools: ["summon_pet", "pet_attack", "damage_pet", "dismiss_pet"] },
+  gear: { summary: "a shield put on or off, a weapon drawn or stowed, something dropped, picked up or handed over", tools: ["handle_item"] },
+  // A pet's damage is apply_damage's (issue #471), which a table with pets
+  // is offered with this group.
+  pets: { summary: "familiars, pets and animal companions", tools: ["summon_pet", "pet_attack", "dismiss_pet", "apply_damage"] },
   relationships: { summary: "bonds, romance and their endings", tools: ["relationship_beat", "romance_advance", "relationship_end"] },
   picture: { summary: "a picture of the scene", tools: ["generate_image"] },
 };
@@ -164,10 +166,18 @@ export const COMBAT_SPARE_TOOLS = [
 ];
 
 const GROUP_IDS = Object.keys(TOOL_GROUPS) as ToolGroupId[];
-const GROUPED = new Map<string, ToolGroupId>(GROUP_IDS.flatMap((id) => TOOL_GROUPS[id].tools.map((name) => [name, id] as const)));
+// A merged tool sits in every group its siblings sat in (apply_damage in the
+// sheet's and the pets'), so it is offered wherever one of them was.
+const GROUPED = new Map<string, ToolGroupId[]>();
+for (const id of GROUP_IDS) {
+  for (const name of TOOL_GROUPS[id].tools) {
+    GROUPED.set(name, [...(GROUPED.get(name) ?? []), id]);
+  }
+}
 
+// The first group a tool sits in: the one a card that names it opens.
 export function groupOfTool(name: string): ToolGroupId | null {
-  return GROUPED.get(name) ?? null;
+  return GROUPED.get(name)?.[0] ?? null;
 }
 
 export function isToolGroup(value: string): value is ToolGroupId {
@@ -188,21 +198,26 @@ export type ProfileSignals = {
   legendary?: boolean;
   // Someone at the table casts spells.
   caster?: boolean;
-  // The newest player lines, and the tool a card played from the Hand names.
-  playerText?: string;
+  // The newest player lines at an English table, read for the English words
+  // of ENGLISH_INTENT (none at another table), and the tool a card played
+  // from the Hand names.
+  englishPlayerText?: string;
   cardTool?: string | null;
 };
 
-// Words in the players' newest lines that call for a group. Deliberately
-// plain: a miss costs one more_tools call, a false hit a few hundred tokens.
-// English words only, an extra: at a table in another language every group
-// these would open is that one more_tools call away.
-const INTENT: Array<[ToolGroupId, RegExp]> = [
-  ["shop", /\b(buy|buying|sell|selling|shop|shops|merchant|wares|haggle|barter|price|prices)\b/i],
+// English words in the players' newest lines that call for a group, read
+// only at an English table. Deliberately plain: a miss costs one more_tools
+// call, a false hit a few hundred tokens. An extra: at a table in another
+// language every group these would open is that one more_tools call away.
+const ENGLISH_INTENT: Array<[ToolGroupId, RegExp]> = [
+  // Trading words, and the places that sell: walking into a smithy has to
+  // offer open_shop before the DM describes its shelf.
+  ["shop", /\b(buy|buys|buying|bought|sell|sells|selling|sold|shop|shops|shopping|merchants?|wares|browse|browsing|haggle|haggling|barter|bartering|prices?|(?:black|weapon)?smiths?|smithy|smithies|forges?|armou?rers?|stores?|stalls?|stand|stands|vendors?|traders?|trading post|markets?|marketplace|bazaars?|apothecary|apothecaries|herbalists?|alchemists?|outfitters?|provisioners?|fletchers?)\b/i],
   ["world", /\b(travel|journey|road|ride (?:to|north|south|east|west)|march|days? (?:later|pass)|wait (?:until|for)|treasure|hoard|loot|break (?:down|open|the)|smash|weather)\b/i],
   ["explore", /\b(craft|crafting|downtime|research|train(?:ing)?|lifestyle|carouse|lift|drag|push|haul|disease|poison(?:ed)?|madness)\b/i],
   ["hazards", /\b(trap|traps|fall|falls|jump|leap|climb|drown|swim|lava|fire|burning|freezing|suffocat\w*)\b/i],
   ["mounts", /\b(horse|horses|mount|mounts|saddle|steed|pony)\b/i],
+  ["gear", /\b(drops?|dropping|draws?|drawing|sheathes?|stows?|shield|picks? up|(?:hand|give)(?:s|ed)? (?:it|him|her|them|over|my|the|his|their))\b/i],
   ["relationships", /\b(romance|kiss|flirt|court|befriend|friendship)\b/i],
   ["pets", /\b(familiar|pet|animal companion)\b/i],
   ["binder", /\b(quest|quests|handout|map of|letter|journal)\b/i],
@@ -221,8 +236,8 @@ export function autoGroups(signals: ProfileSignals): Set<ToolGroupId> {
   if (signals.quests) groups.add("binder");
   if (signals.inEncounter && signals.legendary) groups.add("legendary");
   if (signals.caster) groups.add("spells");
-  const text = signals.playerText ?? "";
-  for (const [group, pattern] of INTENT) {
+  const text = signals.englishPlayerText ?? "";
+  for (const [group, pattern] of ENGLISH_INTENT) {
     if (pattern.test(text)) groups.add(group);
   }
   const carded = signals.cardTool ? groupOfTool(signals.cardTool) : null;
@@ -242,9 +257,9 @@ export function compactToolNames(
   if (!signals.inEncounter) groups.add("outside");
   const offered = new Set<string>();
   for (const name of fullNames) {
-    const group = groupOfTool(name);
+    const inGroups = GROUPED.get(name) ?? [];
     // A tool no group names is core: a new tool is never hidden by omission.
-    if (core.has(name) || (group ? groups.has(group) : true)) {
+    if (core.has(name) || !inGroups.length || inGroups.some((group) => groups.has(group))) {
       offered.add(name);
     }
   }

@@ -28,6 +28,7 @@ import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
 import { computeSheetDerived } from "@/lib/srd";
 import { classLevelFor } from "@/lib/srd/multiclass";
+import { isConditionNamed } from "@/lib/srd/feature-names";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { rollCard } from "@/lib/dm/roll-card";
 import { freshLastHit, type LastHit, type SwingRecord } from "@/lib/dm/last-hit";
@@ -173,7 +174,7 @@ export function planCounterReaction(input: Input): Plan | ToolError | null {
       if (apart !== null && apart > 1) {
         return { error: `${target.name} is ${apart * 5} ft from ${sheet.name}; Warding Maneuver covers a creature within 5 feet. Nothing was spent.`, refused: "rules" };
       }
-      const armed = Boolean(acBreakdownFor(sheet).shieldName) || sheet.equipment.some((item) => item.equipped && matchWeapon(item.name)?.kind === "melee");
+      const armed = Boolean(acBreakdownFor(sheet).shieldName) || sheet.equipment.some((item) => item.equipped && matchWeapon(item)?.kind === "melee");
       if (!armed) {
         return { error: `Warding Maneuver needs ${sheet.name} wielding a melee weapon or a shield. Nothing was spent.`, refused: "rules" };
       }
@@ -215,7 +216,7 @@ export function planCounterReaction(input: Input): Plan | ToolError | null {
           const marker = `${HUSK_RECOVERING} (${rests})`;
           patchSheet(sheet.id, {
             ...(tired ?? {}),
-            conditions: [...after.conditions.filter((entry) => !entry.toLowerCase().startsWith(HUSK_RECOVERING)), marker],
+            conditions: [...after.conditions.filter((entry) => !isConditionNamed(entry, HUSK_RECOVERING)), marker],
           });
           publishSheet(campaign, sheet.id);
           const burst = huskBurst(campaign, input, level);

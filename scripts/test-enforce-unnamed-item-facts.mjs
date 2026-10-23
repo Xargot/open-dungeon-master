@@ -39,8 +39,11 @@ await test("A thing no table knows by name, sent with no tags, is asked what it 
   }
 });
 
-await test("Told its tags, the potion is granted and heals as one; tags [] grants a thing that is none of them.", async () => {
-  const granted = await ai("grant_item", { characterId: hero.id, name: "Pozione di guarigione", tags: ["consumable", "potion", "healing_potion"], reason: "the chest" }, hero);
+await test("Told it heals, the potion is asked which healing potion it is, and granted once srdName names it; tags [] grants a thing that is none of them.", async () => {
+  const asked = await ai("grant_item", { characterId: hero.id, name: "Pozione di guarigione", tags: ["consumable", "potion", "healing_potion"], reason: "the chest" }, hero);
+  assert.equal(asked.retry, true, "a healing potion of no kind was granted");
+  assert.match(asked.error, /srdName naming the potion's kind/);
+  const granted = await ai("grant_item", { characterId: hero.id, name: "Pozione di guarigione", srdName: "Potion of Healing", tags: ["consumable", "potion", "healing_potion"], reason: "the chest" }, hero);
   assert.equal(granted.ok, true, granted.error);
   assert.deepEqual(carried("Pozione di guarigione").tags, ["consumable", "potion", "healing_potion"]);
   const letter = await ai("grant_item", { characterId: hero.id, name: "Lettera sigillata", tags: [], reason: "the courier" }, hero);
@@ -89,6 +92,18 @@ await test("An srdName no list holds is asked again, from the model and the cons
     assert.match(out.error, /no SRD or pack item is called "Elixir of Nowhere"/);
   }
   assert.equal(carried("Elisir strano"), undefined);
+});
+
+await test("An srdName that carries a bonus is asked again, with the bonus kept in the name, and nothing is granted.", async () => {
+  for (const srdName of ["Longsword +1", "+2 Plate", "Weapon, +1", "Shield +3"]) {
+    const out = await ai("grant_item", { characterId: hero.id, name: "Lama del destino", srdName, reason: "the chest" }, hero);
+    assert.equal(out.retry, true, `${srdName} was stored`);
+    assert.match(out.error, /carries a bonus, which belongs in name/, srdName);
+  }
+  assert.equal(carried("Lama del destino"), undefined);
+  const granted = await ai("grant_item", { characterId: hero.id, name: "Lama del destino +1", srdName: "Longsword", reason: "the chest" }, hero);
+  assert.equal(granted.ok, true, granted.error);
+  assert.equal(carried("Lama del destino +1").srdName, "Longsword");
 });
 
 await test("A spell named for a thing no row knows makes it a spell scroll, with no question asked.", async () => {

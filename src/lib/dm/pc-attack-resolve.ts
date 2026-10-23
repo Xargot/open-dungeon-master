@@ -48,9 +48,11 @@ import {
   spendFeatureUse,
 } from "@/lib/dm/attack-onhit";
 import { storeBudget } from "@/lib/dm/turn-budget";
+import { landNaturalOnHit } from "@/lib/dm/natural-onhit";
 import { untilTurnEnd } from "@/lib/dm/turn-end";
 import { rollAgainst } from "@/lib/roll-labels";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
+import { markCritRange } from "@/lib/dm/attack-marks";
 
 // The roll the attack makes and the damage it carries, built once the
 // attack is paid for and shared by both dice paths.
@@ -125,8 +127,9 @@ export function rollPcAttack(plan: AttackPlan, strike: Strike): Record<string, u
 
   const judged = adjudicateHit(hitOutcome.total, hitOutcome.crit, plan.effectiveAc, {
     natural: hitOutcome.natural,
-    // Improved and Superior Critical are written for weapon attacks.
-    critRange: plan.weaponAttack ? riders.critRange : 20,
+    // Improved and Superior Critical are written for weapon attacks; a mark
+    // (Hexblade's Curse) for every attack on its creature.
+    critRange: Math.min(plan.weaponAttack ? riders.critRange : 20, markCritRange(plan.marks.applies)),
   });
   // Parry: the creature's reaction lifts its AC against a melee hit it sees (enemy-reactions.ts).
   const parry = judged.hit && !judged.crit
@@ -387,7 +390,7 @@ export function rollPcAttack(plan: AttackPlan, strike: Strike): Record<string, u
         ? `${enemy.displayName} is knocked out, unconscious at 0 hit points and out of the fight; the server already applied this. Narrate it falling senseless, not dying.`
       : dealt === 0
         ? `The blow lands and does no harm: its damage came to 0. Narrate a hit that fails to hurt ${enemy.displayName}.`
-        : `The server already applied this damage to ${enemy.displayName}. Do NOT call damage_enemy for this hit; narrate from this state.`,
+        : `The server already applied this damage to ${enemy.displayName}. Do NOT call apply_damage for this hit; narrate from this state.`,
   };
 }
 
@@ -429,6 +432,21 @@ export function hitExtras(plan: AttackPlan, dead: boolean, over: boolean): Recor
   }
   if (over || dead) {
     return out;
+  }
+  // A creature's natural attack: the save, poison, condition or grapple its
+  // stat block's hit carries (src/lib/dm/natural-onhit.ts).
+  if (plan.profile.creatureOnHit) {
+    const lines = landNaturalOnHit(campaign, {
+      turn: plan.turn,
+      attacker: { kind: "sheet", sheetId: sheet.id, name: sheet.name },
+      holderId: sheet.id,
+      attack: plan.profile.weapon,
+      enemyId: enemy.id,
+      onHit: plan.profile.creatureOnHit,
+    });
+    if (lines.length) {
+      out.onHit = lines;
+    }
   }
   if (extras.openHand) {
     out.openHand = openHandOnHit(campaign, sheet.id, enemy.id, extras.openHand.choice, extras.openHand.dc);
@@ -487,7 +505,7 @@ function maneuverRiderSave(plan: AttackPlan, maneuver: ManeuverPick): Record<str
   // The creature's save as every other is rolled (src/lib/dm/forced-save.ts):
   // its conditions (a paralyzed creature fails a STR or DEX save outright),
   // Bane or Bless on it, its exhaustion, lasting effects, authored features.
-  const save = rollEnemySave(campaign.id, fresh, rider.save, dc);
+  const save = rollEnemySave(campaign.id, fresh, rider.save, dc, { against: rider.condition });
   if (save.result) {
     const saveRoll = insertRoll({
       campaignId: campaign.id,

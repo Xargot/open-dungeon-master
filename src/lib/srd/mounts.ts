@@ -21,7 +21,8 @@ export type MountProfile = {
   // Feet per round.
   speed: number;
   // Pounds it carries before it slows, which is the 5e carrying-capacity rule
-  // applied to a beast: Strength x 15, doubled for a Large creature.
+  // applied to a beast: Strength x 15, doubled for a Large creature and
+  // quadrupled for a Huge one; a mule's Beast of Burden counts it as Large.
   carry: number;
   // A controlled mount is one trained to bear a rider (PHB p.198): the rider
   // chooses its actions and it shares their initiative. An independent mount
@@ -39,6 +40,9 @@ export type MountSize = (typeof MOUNT_SIZES)[number];
 const SIZE_ORDER: Record<MountSize, number> = { small: 1, medium: 2, large: 3, huge: 4 };
 
 // The SRD's riding animals, with the two flying mounts a table will ask for.
+// Each speed is the stat block's walking speed (the griffon's its flying
+// speed, 80 feet, as it is ridden in the air), held to the SRD creature
+// table by scripts/test-mounts.mjs.
 export const MOUNTS: MountProfile[] = [
   {
     slug: "riding-horse",
@@ -104,6 +108,24 @@ export const MOUNTS: MountProfile[] = [
     blurb: "Ridden by those the wild allows. Keeps its own counsel.",
   },
   {
+    slug: "mule",
+    name: "Mule",
+    speed: 40,
+    carry: 420,
+    controllable: true,
+    size: "medium",
+    blurb: "Sure-footed on a mountain path; carries like a horse.",
+  },
+  {
+    slug: "elephant",
+    name: "Elephant",
+    speed: 40,
+    carry: 1320,
+    controllable: true,
+    size: "huge",
+    blurb: "Carries a howdah and a war band; tramples what stands in front.",
+  },
+  {
     slug: "griffon",
     name: "Griffon",
     speed: 80,
@@ -119,7 +141,6 @@ export function mountProfile(ref: string): MountProfile | null {
   return (
     MOUNTS.find((mount) => mount.slug === needle) ??
     MOUNTS.find((mount) => textKey(mount.name) === textKey(ref)) ??
-    MOUNTS.find((mount) => textKey(mount.name).includes(textKey(ref))) ??
     null
   );
 }
@@ -173,7 +194,7 @@ export function checkMount(input: {
   }
   const profile = mountProfile(input.ref);
   if (!profile) {
-    return { error: `No mount called "${input.ref}". Describe one instead and the DM can write it in.`, retry: true };
+    return { error: `No mount called "${input.ref}"; the mounts are ${MOUNTS.map((mount) => mount.name).join(", ")}. A listed one is sent in mount by that name whatever the table calls it; an animal no list has is sent in customName with its speed and size.`, retry: true };
   }
   if (!canCarry(profile.size, riderSize)) {
     return {
@@ -249,7 +270,6 @@ export function vehicleProfile(ref: string): VehicleProfile | null {
   return (
     VEHICLES.find((vehicle) => vehicle.slug === needle) ??
     VEHICLES.find((vehicle) => textKey(vehicle.name) === textKey(ref)) ??
-    VEHICLES.find((vehicle) => textKey(vehicle.name).includes(textKey(ref))) ??
     null
   );
 }

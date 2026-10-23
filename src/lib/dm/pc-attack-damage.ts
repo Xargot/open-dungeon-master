@@ -11,7 +11,7 @@ import type { Advantage, RollResult } from "@/lib/dice";
 import { claimOncePerTurn, type TurnBudget } from "@/lib/dm/action-budget";
 import { ragingMeleeBonus, type AttackProfile } from "@/lib/dm/attack-logic";
 import { damageParts, type TypedRider } from "@/lib/dm/damage-parts";
-import { damageAdjust, resistsAllDamage } from "@/lib/dm/damage-logic";
+import { damageAdjust, resistsAllDamage, type BlowSource } from "@/lib/dm/damage-logic";
 import { resistLineFor } from "@/lib/dm/underwater";
 import { effectOutcome } from "@/lib/dm/effect-tools";
 import type { Encounter, EncounterEnemy } from "@/lib/db/encounters";
@@ -31,7 +31,9 @@ import { conditionOnHitDice } from "@/lib/srd/condition-effects";
 import { conditionStrikesMagical } from "@/lib/srd/condition-effect-queries";
 import { effectsFor, type CombatRiders } from "@/lib/srd/feature-effects";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
-import { textKey } from "@/lib/language/text-logic";
+import { holdsFeature, isNamed } from "@/lib/srd/feature-names";
+import { subclassNamed } from "@/lib/srd/subclass-name";
+import { authoredDamageAbility } from "@/lib/srd/authored-effects-more";
 
 export type FeatureRider = CombatRiders["damageRiders"][number];
 
@@ -61,6 +63,16 @@ export function foldDamageRiders(input: {
       ...profile,
       damageExpression: `${profile.damageExpression}+${rageBonus}`,
     };
+  }
+
+  // An ability modifier a feature adds to weapon damage (Aura of Hate,
+  // Song of Victory: src/lib/srd/authored-effects-more.ts).
+  const abilityRiders =
+    kind === "weapon" || kind === "natural"
+      ? authoredDamageAbility(sheet, { melee: !profile.ranged }, Object.fromEntries(Object.entries(sheet.abilities).map(([key, score]) => [key, Math.floor((score - 10) / 2)])))
+      : [];
+  for (const rider of abilityRiders) {
+    profile = { ...profile, damageExpression: `${profile.damageExpression}+${rider.amount}`, riderNotes: [...profile.riderNotes, `${rider.feature}: +${rider.amount} damage`] };
   }
 
   // Effect conditions riding the attacker's hits (Divine Favor's +1d4
@@ -148,7 +160,7 @@ function hunterRiders(
   sheet: CharacterSheet,
   enemy: Pick<EncounterEnemy, "currentHp" | "maxHp"> | undefined,
 ): FeatureRider[] {
-  const slayer = sheet.features.some((feature) => /colossus slayer/i.test(feature.name));
+  const slayer = holdsFeature(sheet, "Colossus Slayer");
   if (!slayer || !enemy || enemy.currentHp >= enemy.maxHp) {
     return [];
   }
@@ -161,7 +173,7 @@ function hunterRiders(
 // is in its text, and "of the weapon's type" (War) or a choice of three
 // (Nature) rides as the weapon's own.
 function riderType(sheet: CharacterSheet, rider: FeatureRider): string {
-  if (rider.type || !/^divine strike/i.test(rider.feature.trim())) {
+  if (rider.type || !isNamed(rider.feature, "divine strike")) {
     return rider.type;
   }
   const domains = [
@@ -169,7 +181,7 @@ function riderType(sheet: CharacterSheet, rider: FeatureRider): string {
     ...(sheet.classes ?? []).map((entry) => ({ id: entry.id, subclass: entry.subclass })),
   ].filter((entry) => entry.id.toLowerCase() === "cleric" && entry.subclass);
   for (const { subclass } of domains) {
-    if (/^life\b|life domain/i.test(subclass.trim())) {
+    if (subclassNamed(subclass, "Life Domain")) {
       return "radiant";
     }
     const text = subclassFeatureDescription("cleric", subclass, "Divine Strike") ?? "";
@@ -362,11 +374,10 @@ function magicalStrikeApplies(plan: Pick<AttackPlan, "kind" | "profile" | "rider
   return effectsFor(plan.sheet)
     .filter(({ effect }) => effect.kind === "magical_attacks")
     .some(({ feature }) => {
-      const name = textKey(feature);
-      if (name.startsWith("ki empowered strikes")) {
+      if (isNamed(feature, "Ki-Empowered Strikes")) {
         return plan.profile.unarmed === true;
       }
-      if (name.startsWith("primal strike")) {
+      if (isNamed(feature, "Primal Strike")) {
         return plan.kind === "natural";
       }
       return true;
@@ -413,7 +424,20 @@ export function applyHitDamage(input: {
     ignoreResistance: plan.elementalAdept || poisonerIgnoresResistance(plan.sheet, plan.profile.damageType),
     ignoreResistanceBy: plan.elementalAdept ? "Elemental Adept" : "Poisoner",
     concentrationDisadvantage: plan.mageSlayer,
+    blow: blowSource(plan),
   });
+}
+
+const GOOD_ALIGNMENTS = ["LG", "NG", "CG"];
+
+// A spell attack is a spell's damage; a weapon in a good character's hands
+// meets the defences that name the wielder (a rakshasa's vulnerability).
+export function blowSource(plan: Pick<AttackPlan, "kind" | "sheet">): BlowSource {
+  if (plan.kind === "spell") {
+    return { spell: true };
+  }
+  // The builder stores the alignment as its code (LG, NG, CG...).
+  return GOOD_ALIGNMENTS.includes((plan.sheet.alignment ?? "").trim().toUpperCase()) ? { goodWielder: true } : {};
 }
 
 // One blow landing on an enemy, per damage type: the shared end of
@@ -441,6 +465,8 @@ export function landBlow(input: {
   nonlethal?: boolean;
   // An opportunity attack leaves the fight open (enemy-damage.ts).
   holdVictory?: boolean;
+  // A spell's damage, or a good wielder's weapon (damage-logic.ts).
+  blow?: BlowSource;
 }): Record<string, unknown> {
   const { campaign, turn, encounter, enemy, sheets, sheetsById, profile, damageOutcome, dealt, crit, critExtraDice, magical } = input;
   // A silvered or adamantine weapon passes the resistances that name it.
@@ -470,7 +496,7 @@ export function landBlow(input: {
       sheets,
       sheetsById,
       profile.damageType,
-      { magical, nonlethal, holdVictory, ...material, ...(input.ignoreResistance ? { ignoreResistance: true, ignoreResistanceBy: input.ignoreResistanceBy } : {}), ...(input.concentrationDisadvantage ? { concentrationDisadvantage: true } : {}) },
+      { magical, nonlethal, holdVictory, ...material, ...input.blow, ...(input.ignoreResistance ? { ignoreResistance: true, ignoreResistanceBy: input.ignoreResistanceBy } : {}), ...(input.concentrationDisadvantage ? { concentrationDisadvantage: true } : {}) },
     );
   } else {
     // Two damage types in one blow: each meets the creature's resistances
@@ -485,7 +511,7 @@ export function landBlow(input: {
         resistAll ? "" : resistLineFor(campaign.id, enemy),
         enemy.stats.immune,
         enemy.stats.vulnerable,
-        { magical: index === 0 ? magical : true, ...(index === 0 ? material : {}) },
+        { magical: index === 0 ? magical : true, ...(index === 0 ? material : {}), ...(index === 0 ? input.blow : { spell: input.blow?.spell }) },
       ),
     }));
     const landed = byType.reduce((sum, part) => sum + part.amount, 0);

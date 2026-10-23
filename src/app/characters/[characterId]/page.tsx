@@ -20,6 +20,8 @@ import { SheetSections, StorySoFar, type CharacterEvent } from "./SheetSections"
 import { currentQuery, navigateTo, workshopReturnPath } from "@/lib/navigation";
 import { UseInCampaignDialog } from "./UseInCampaignDialog";
 import { slugOf } from "@/lib/language/text-logic";
+import { registerWorkshopClasses, workshopClassName } from "@/lib/classes/workshop-registry";
+import type { WorkshopClass } from "@/lib/homebrew/class-data";
 
 // Where this character is playing; see src/lib/db/characters.ts.
 type CharacterAssignment = {
@@ -67,6 +69,8 @@ export default function CharacterDetailPage({
   const [cloning, setCloning] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+  // What the downloaded file carries besides the sheet (its Homebrew).
+  const [exportNote, setExportNote] = useState("");
   const [cropping, setCropping] = useState(false);
   const [seating, setSeating] = useState(false);
   const [painting, setPainting] = useState(false);
@@ -97,13 +101,21 @@ export default function CharacterDetailPage({
     }
     setExporting(true);
     setExportError("");
+    setExportNote("");
     try {
       const response = await fetch(`/api/characters/${characterId}/export`);
       if (!response.ok) {
         setExportError("Export failed.");
         return;
       }
-      downloadBlob(`${slugOf(character.name) || "character"}.odm-character.json`, await response.blob());
+      const blob = await response.blob();
+      downloadBlob(`${slugOf(character.name) || "character"}.odm-character.json`, blob);
+      // The Homebrew the sheet stands on rides in the file (src/lib/db/
+      // character-file.ts): said, so the person knows the file is whole.
+      const carried = ((JSON.parse(await blob.text()) as { homebrew?: Array<{ name?: string }> }).homebrew ?? []).map((entry) => String(entry.name ?? "")).filter(Boolean);
+      if (carried.length) {
+        setExportNote(`The file carries the Homebrew ${character.name} uses: ${carried.join(", ")}. Importing it on another account or server puts those on that shelf too.`);
+      }
     } catch {
       setExportError("Export failed.");
     } finally {
@@ -196,6 +208,8 @@ export default function CharacterDetailPage({
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (data?.character) {
+          // The workshop classes it holds, before anything reads its class.
+          registerWorkshopClasses((data.workshopClasses ?? []) as WorkshopClass[]);
           setCharacter(data.character);
           setEvents(data.events ?? []);
         }
@@ -376,7 +390,7 @@ export default function CharacterDetailPage({
                 <GameIcon icon={{ kind: "glyph", key: "rest-level-up" }} size="size-5" />
                 Level {character.level}
               </span>
-              {titleCase(character.race)} {titleCase(character.class)}
+              {titleCase(character.race)} {workshopClassName(character.class) ?? titleCase(character.class)}
               {character.subclass ? ` (${character.subclass})` : ""}
               {character.background ? ` · ${titleCase(character.background)}` : ""}
             </p>
@@ -450,6 +464,7 @@ export default function CharacterDetailPage({
           ) : null}
         </div>
         {exportError ? <p role="alert" className="motion-shake mt-2 text-sm text-red-400">{exportError}</p> : null}
+        {exportNote ? <p role="status" className="live-in mt-2 text-sm text-stone-400">{exportNote}</p> : null}
         {portraitError ? <p role="alert" className="motion-shake mt-2 text-sm text-red-400">{portraitError}</p> : null}
       </ContextMenu>
 

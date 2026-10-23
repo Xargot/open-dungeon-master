@@ -17,8 +17,8 @@ import { parkPcAttack } from "@/lib/dm/pc-attack-parked";
 import { planPcAttack, type AttackPlan } from "@/lib/dm/pc-attack-plan";
 import { rollPcAttack, strikeToHit } from "@/lib/dm/pc-attack-resolve";
 import { castAttackSpell } from "@/lib/dm/pc-attack-spell";
-import { resolveSheetRef } from "@/lib/dm/rolls";
-import { markReactionUsed, storeBudget } from "@/lib/dm/turn-budget";
+import { resolveSheetRef, unknownSheetRef } from "@/lib/dm/rolls";
+import { markReactionUsed, noteSwing, storeBudget } from "@/lib/dm/turn-budget";
 import { spendReadied } from "@/lib/dm/object-actions";
 import { spendGiantKiller } from "@/lib/dm/reaction-attacks";
 import { withAmmoCount } from "@/lib/srd/ammunition";
@@ -29,6 +29,7 @@ import { moteBurst, moteOf } from "@/lib/dm/authored-mote";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { invalidArguments, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
 import { attacksLeft } from "@/lib/dm/action-budget";
+import { approachForAttack, withApproach } from "@/lib/dm/pc-attack-approach";
 
 // Re-exported for the callers that learned it here.
 export { resolvePendingPcAttack } from "@/lib/dm/pc-attack-parked";
@@ -70,7 +71,17 @@ export const pcAttackTool: ToolDef = {
         weapon: {
           type: "string",
           description:
-            "Weapon they attack with, from their equipment, or 'unarmed strike'. Omit to use their best carried weapon. A weapon a subclass feature makes is named here too: a raging Path of the Beast barbarian's 'bite', 'claws' or 'tail', a Soulknife's 'psychic blade' (offHand for the second blade), a Sun Soul monk's 'radiant sun bolt'.",
+            "The weapon from their equipment, or 'unarmed strike' for a punch or kick in any language. Omit to use their best carried weapon. A weapon a subclass feature makes is named here too: a raging Path of the Beast barbarian's 'bite', 'claws' or 'tail', a Soulknife's 'psychic blade' (offHand for the second blade), a Sun Soul monk's 'radiant sun bolt'.",
+        },
+        approach: {
+          type: "boolean",
+          description:
+            "True when the player said their character moves to the target first (closes in, charges, rushes it) and the target is out of melee reach: the server walks them to the nearest open square beside it out of their movement, drawing any opportunity attacks, then attacks. Too far to reach this turn, they close in as far as they can and nothing is attacked.",
+        },
+        endTurn: {
+          type: "boolean",
+          description:
+            "True when the player said their turn ends after this attack (\"...then I end my turn\"): the server ends it once the attack resolves, as end_turn does, and the result names who acts next. Only on the last attack they declared; never call end_turn for it as well.",
         },
         spell: {
           type: "string",
@@ -86,13 +97,13 @@ export const pcAttackTool: ToolDef = {
           type: "string",
           enum: ["none", "advantage", "disadvantage"],
           description:
-            "Situational advantage or disadvantage from the fiction that the server cannot see. It counts only with advantageSource 'other' and advantageReason. The server already applies conditions (prone, invisible, hidden, restrained...), cover, light and darkness, range, Help, flanking, Reckless Attack and every feature: never claim those.",
+            "Situational advantage or disadvantage from the fiction that the server cannot see. It counts only with advantageSource 'other' and advantageReason. The server already applies conditions (prone, invisible, hidden, restrained...), cover, light and darkness, range, Help, flanking, spells, Reckless Attack and every feature: never claim those.",
         },
         advantageSource: {
           type: "string",
           enum: [...ADVANTAGE_SOURCES],
           description:
-            "Where the advantage or disadvantage comes from. Only 'other', a circumstance of the fiction the server cannot see (named in advantageReason), counts: the server applies conditions, cover, light, range, Help, flanking, spells, Inspiration and features itself.",
+            "Where the advantage or disadvantage comes from; only 'other' counts.",
         },
         advantageReason: {
           type: "string",
@@ -179,6 +190,11 @@ export const pcAttackTool: ToolDef = {
           description:
             "Hunter ranger with Volley: the action makes one ranged weapon attack against each creature within 10 feet of the first target; call pc_attack once per creature with volley true. The first spends the whole action.",
         },
+        improvised: {
+          type: "boolean",
+          description:
+            "An object picked up that is no weapon on their sheet (a chair, a bottle), swung as an improvised weapon.",
+        },
         twoHanded: {
           type: "boolean",
           description:
@@ -218,10 +234,15 @@ const pcAttackArgsSchema = z.object({
   characterId: z.string(),
   targetEnemyId: z.string(),
   weapon: z.string().max(80).optional(),
+  // The move to the target the player declared (pc-attack-approach.ts).
+  approach: z.coerce.boolean().optional(),
+  // The player ends their turn with this attack (encounter-tools.ts).
+  endTurn: z.coerce.boolean().optional(),
   spell: z.string().max(80).optional(),
   damage: z.string().max(30).optional(),
   damageType: z.string().max(30).optional(),
   advantage: z.enum(["none", "advantage", "disadvantage"]).optional(),
+  improvised: z.coerce.boolean().optional(),
   twoHanded: z.coerce.boolean().optional(),
   offHand: z.coerce.boolean().optional(),
   smite: z.coerce.number().int().min(1).max(9).optional(),
@@ -291,13 +312,55 @@ export function handlePcAttack(
   const staleSheet = resolveSheetRef(args.characterId, sheets, sheetsById);
   const sheet = staleSheet ? (getSheetById(staleSheet.id) ?? staleSheet) : null;
   if (!sheet) {
-    return { error: "Unknown characterId; use one from GAME STATE.", retry: true };
+    return unknownSheetRef("characterId", args.characterId, sheets);
   }
 
+  // The move to the target the player declared, when the swing needs it
+  // (src/lib/dm/pc-attack-approach.ts): the plan is asked first (it spends
+  // nothing), and only a refusal for reach alone walks: asked again with
+  // reach set aside, anything else that would refuse the swing (the turn's
+  // attacks spent, a feature they lack) refuses it where they stand. The
+  // attack is then planned from where it is made.
+  if (args.approach) {
+    const dry = planPcAttack({ campaign, turn, encounter, sheet, args, sheets, sheetsById });
+    if ("refused" in dry) {
+      const beside = planPcAttack({ campaign, turn, encounter, sheet, args, sheets, sheetsById, skipReach: true });
+      if ("refused" in beside) {
+        return beside.refused;
+      }
+      const approach = approachForAttack(campaign, encounter, sheet, args, dry.refused);
+      if (!approach) {
+        return dry.refused;
+      }
+      if ("refused" in approach) {
+        return approach.refused;
+      }
+      const attack = attackFrom(campaign, turn, sheet, args, sheets, sheetsById, realDiceUserIds, toolCallId);
+      return attack[PC_ATTACK_PARKED] ? attack : withApproach(attack, approach.walked);
+    }
+  }
+  return attackFrom(campaign, turn, sheet, args, sheets, sheetsById, realDiceUserIds, toolCallId);
+}
+
+function attackFrom(
+  campaign: Campaign,
+  turn: DmTurn,
+  sheet: CharacterSheet,
+  args: PcAttackArgs,
+  sheets: CharacterSheet[],
+  sheetsById: Map<string, CharacterSheet>,
+  realDiceUserIds: Set<string>,
+  toolCallId: string | null,
+): ToolResult {
+  // The walk may have changed the fight: read it again.
+  const encounter = getActiveEncounter(campaign.id);
+  if (!encounter) {
+    return { error: "No active encounter. Call start_encounter first.", retry: true };
+  }
   // ---- refusals: everything that can stop this attack, before any spend ----
   // Asked in one place, in order, by planPcAttack (src/lib/dm/pc-attack-plan.ts).
 
-  const plan = planPcAttack({ campaign, turn, encounter, sheet, args, sheets, sheetsById });
+  const plan = planPcAttack({ campaign, turn, encounter, sheet: getSheetById(sheet.id) ?? sheet, args, sheets, sheetsById });
   if ("refused" in plan) {
     return plan.refused;
   }
@@ -334,6 +397,7 @@ export function handlePcAttack(
     return { [PC_ATTACK_PARKED]: true };
   }
   const rolled = rollPcAttack(plan, strike);
+  noteSwing(campaign.id, sheet.id, rolled);
   const burst = moteBurst(campaign, turn, mote, plan.enemy);
   return burst ? { ...rolled, mote: burst } : rolled;
 }
@@ -387,18 +451,28 @@ function spendPcAttack(plan: AttackPlan): ToolError | null {
       `made off their own turn: ${sheet.name}'s reaction is spent until their next turn starts`,
     );
   }
+  // The weapon drawn for this attack is in hand from now on (issue #424).
+  if (plan.drawn) {
+    patchSheet(sheet.id, { equipment: plan.drawn.equipment });
+    context.notes.push(plan.drawn.note);
+  }
   if (ammo && ammo.ok) {
-    const equipment = withAmmoCount(sheet.equipment, ammo.index, ammo.remaining);
+    const carried = plan.drawn?.equipment ?? sheet.equipment;
+    const equipment = withAmmoCount(carried, ammo.index, ammo.remaining);
     patchSheet(sheet.id, { equipment });
     // Tallied under the line's name as it reads NOW: a quiver written
     // "Arrows (20)" is renamed by every shot, and the tally follows it so the
-    // end of the fight finds the line it has to refill.
+    // end of the fight finds the line it has to refill. The last one spent
+    // takes the line off the sheet, so the tally keeps the line itself.
+    const emptied = ammo.remaining <= 0;
     const before = `${sheet.id}|${ammo.name}`;
-    const after = `${sheet.id}|${equipment[ammo.index]?.name ?? ammo.name}`;
+    const after = `${sheet.id}|${emptied ? ammo.name : (equipment[ammo.index]?.name ?? ammo.name)}`;
     const tally = { ...encounter.ammoSpent };
-    const spentSoFar = tally[before] ?? 0;
+    const spentOf = (entry: (typeof tally)[string] | undefined) => (typeof entry === "object" ? entry.spent : (entry ?? 0));
+    const spentSoFar = spentOf(tally[before]);
     delete tally[before];
-    tally[after] = (tally[after] ?? 0) + spentSoFar + 1;
+    const spent = spentOf(tally[after]) + spentSoFar + 1;
+    tally[after] = emptied && carried[ammo.index] ? { spent, line: carried[ammo.index] } : spent;
     encounter.ammoSpent = tally;
     saveEncounter(encounter);
   }

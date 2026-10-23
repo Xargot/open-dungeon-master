@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { GameTerm } from "@/components/ui/GameTerm";
 import { InfoButton, InfoDialog } from "@/components/ui/InfoDialog";
 import { describeFeature, describeSkill } from "@/lib/help";
@@ -23,7 +23,8 @@ import { ClassChoices } from "./ClassChoices";
 import { PlaystylePicker } from "../PlaystylePicker";
 import { EASY_CLASSES, fillClassSkills, type PlaystyleId } from "../playstyles";
 import FeatChoicesFields, { knownTraining } from "../FeatChoicesFields";
-import { Field, PickPill, StepPanel, inputClass } from "./shared";
+import { Field, PickForMe, PickPill, StepPanel, inputClass } from "./shared";
+import { featChoice } from "@/lib/schemas/sheet";
 
 // Step 3: the class (painted cards in the picker's groups and order, the
 // setting's callings first and badged, each with its emblem and a ? that
@@ -45,6 +46,9 @@ export function CallingStep({
   subclassLockedAt,
   chosenArchetype,
   playstyle,
+  onPickForMe,
+  classNote = null,
+  subclassNote = null,
 }: {
   state: BuilderState;
   derived: BuilderDerived;
@@ -62,6 +66,13 @@ export function CallingStep({
   chosenArchetype: ArchetypeOption | null;
   // The answer given on the first step, so the picker opens on it.
   playstyle?: { value: PlaystyleId | null; onChange: (style: PlaystyleId | null) => void };
+  // "Pick for me" on the subclass (quickBuild.ts), offered once the level
+  // asks for one.
+  onPickForMe?: (target: "subclass") => void;
+  // Why the class or subclass list may be short (TableScopeNote): the
+  // asker's own Homebrew the table leaves out, or a list that did not load.
+  classNote?: ReactNode;
+  subclassNote?: ReactNode;
 }) {
   const { subclass } = state;
   const { effectiveLevel, grantedFeatures } = derived;
@@ -245,6 +256,7 @@ export function CallingStep({
             facets={classFacets}
             compact
           />
+          {classNote}
           {/* The same write-up the dropdown's info button opened: the pack's
               blurb, the catalog blurb or the content pack's entry. */}
           <InfoDialog
@@ -298,14 +310,18 @@ export function CallingStep({
                   />
                 </>
               ) : (
-                <span className="grow">
-                  <span className="text-amber-300">Still to choose. </span>
-                  Your <GameTerm id="subclass">subclass</GameTerm> is the biggest choice about how
-                  this character plays. Tap the info icon next to any option to read what it does
-                  before choosing.
-                </span>
+                <>
+                  <span className="grow">
+                    <span className="text-amber-300">Still to choose. </span>
+                    Your <GameTerm id="subclass">subclass</GameTerm> is the biggest choice about how
+                    this character plays. Tap the info icon next to any option to read what it does
+                    before choosing.
+                  </span>
+                  {onPickForMe ? <PickForMe what="a subclass" onPick={() => onPickForMe("subclass")} /> : null}
+                </>
               )}
             </span>
+            {subclassNote}
             {/* What the subclass trains the character in (issue 251): its
                 armor and weapons said outright, and its picks asked for here,
                 as a feat's are. */}
@@ -314,7 +330,7 @@ export function CallingStep({
                 key={grant.name}
                 feat={grant.name}
                 spec={grant.spec}
-                picks={state.featChoices[grant.name.trim().toLowerCase()]}
+                picks={featChoice(state.featChoices, grant.name)}
                 known={knownTraining(derived)}
                 onChange={(picks) => state.setFeatPicks(grant.name, picks)}
                 source="subclass"
@@ -328,8 +344,9 @@ export function CallingStep({
             <p className="rounded-lg border border-dashed border-stone-700/70 bg-stone-950/40 px-3 py-2 text-xs text-stone-400">
               A {klass.name.toLowerCase()} chooses a <GameTerm id="subclass">subclass</GameTerm> at level{" "}
               {subclassLockedAt}; there is nothing to pick at level {effectiveLevel}. The choice comes with
-              that level-up.
+              that level-up, and subclasses made in the Workshop wait for that level too.
             </p>
+            {subclassNote}
           </Field>
         ) : null}
       </StepPanel>

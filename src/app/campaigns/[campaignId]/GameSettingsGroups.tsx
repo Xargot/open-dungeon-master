@@ -539,7 +539,24 @@ export function BondsGroup({ settings, patch }: Base) {
   );
 }
 
-export function PlayersGroup({ settings, patch }: Base) {
+// Wait for the table (src/lib/dm/table-wait.ts) as one picker: the DM answers
+// the first post, or waits for everyone with a choice of how long a quiet
+// table holds it (15 to 900 seconds allowed). A stored length that is not
+// one of the choices is offered as itself.
+const WAIT_CHOICES = [30, 60, 120, 180, 300, 600, 900];
+function waitLabel(seconds: number) {
+  return `Waits for everyone, up to ${seconds % 60 ? `${seconds}s` : `${seconds / 60} min`}`;
+}
+const PACING_INFO =
+  "Answers the first post: the AI DM narrates as soon as anyone acts, so the quickest player sets the pace.\n\nWaits for everyone: after each narration the AI DM waits until every player who has the table open (or plays through a connected agent) has acted or pressed Pass, then answers them all in one turn. The clock starts with the first answer and restarts with every post or pass, so only a quiet table runs it out. The lead can say Go on now at any time. A spotlight, a fight's turn order and table talk never wait.";
+function pacingOptions(seconds: number) {
+  const lengths = WAIT_CHOICES.includes(seconds) ? WAIT_CHOICES : [...WAIT_CHOICES, seconds].sort((a, b) => a - b);
+  // "0": no wait, the first post wakes the DM.
+  return [{ value: "0", label: "Answers the first post" }, ...lengths.map((length) => ({ value: String(length), label: waitLabel(length) }))];
+}
+
+// `solo`: a table of one, where nobody else could be waited for.
+export function PlayersGroup({ settings, patch, solo = false }: Base & { solo?: boolean }) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
@@ -555,6 +572,22 @@ export function PlayersGroup({ settings, patch }: Base) {
           </SettingToggle>
         </Tooltip>
       </div>
+      {/* Only where it can matter: an AI turn to hold, and someone else to
+          wait for. */}
+      {!solo && settings.dmMode !== "human" ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="pk-rowlabel">Pacing</span>
+          <Select
+            size="sm"
+            label="When the AI DM answers"
+            value={settings.waitForTable ? String(settings.waitForTableSeconds) : "0"}
+            onChange={(value) => patch(Number(value) ? { waitForTable: true, waitForTableSeconds: Number(value) } : { waitForTable: false })}
+            options={pacingOptions(settings.waitForTableSeconds)}
+            className={selectClass}
+          />
+          <InfoButton label="What does waiting for everyone do?" text={PACING_INFO} />
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <span className="pk-rowlabel">Items</span>
         <Tooltip content="When on, DM-granted loot, item removals, and gold changes become offers the owning player accepts or declines before they land on the sheet. Damage, healing and conditions have their own switch.">

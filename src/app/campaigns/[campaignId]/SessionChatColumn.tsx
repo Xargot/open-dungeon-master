@@ -36,8 +36,11 @@ export function SessionChatColumn({
   onError,
   onLoreCheck,
   onRenarrate,
+  onBrowseShop,
   onPinned,
   stage,
+  keepTranscript = false,
+  showTranscript = false,
   children,
 }: {
   state: CampaignState;
@@ -57,11 +60,15 @@ export function SessionChatColumn({
   onError: (message: string) => void;
   onLoreCheck: (message: CampaignMessage, selection: string) => void;
   onRenarrate: (message: CampaignMessage) => void;
+  // A shop's "is open" line opens the Market on that shop.
+  onBrowseShop: (shopId: string) => void;
   // A memory pin landed, so the pins panel should refetch.
   onPinned: () => void;
   // The fight stage (the board and the chronicle scroll) in place of the
   // transcript while a board is on the table and the columns are docked.
   stage?: ReactNode;
+  keepTranscript?: boolean;
+  showTranscript?: boolean;
   children: ReactNode;
 }) {
   const { campaign, messages, rolls, sheets, locations, dmStatus, utilityCalls } = state;
@@ -92,8 +99,10 @@ export function SessionChatColumn({
         onClose={() => setReportTarget(null)}
         onBlocked={(userId) => setJustBlocked((current) => [...current, userId])}
       />
-      {stage ? stage : (
+      {stage}
+      {!stage || keepTranscript ? (
       <MessageList
+        hidden={Boolean(stage) && !showTranscript}
         messages={messages}
         campaignId={campaignId}
         canRetryTurn={steersStory}
@@ -133,6 +142,7 @@ export function SessionChatColumn({
           onLoreCheck(message, selection.length > 3 ? selection : "");
         }}
         onRenarrate={steersStory ? onRenarrate : undefined}
+        onBrowseShop={onBrowseShop}
         onContinueScene={
           steersStory
             ? async (message) => {
@@ -240,7 +250,7 @@ export function SessionChatColumn({
             : undefined
         }
       />
-      )}
+      ) : null}
 
       {/* Everything under the transcript, in one box: beside a staged board
           it is the column under the board, next to the full-height scroll
@@ -249,6 +259,7 @@ export function SessionChatColumn({
           always did. Always drawn, so switching the stage never remounts
           the Ask draft or the Hand. */}
       <div className="cine-fight-controls">
+      <div className="session-compose-support">
       <RulingBar
         campaignId={campaignId}
         disputes={state.disputes}
@@ -287,6 +298,7 @@ export function SessionChatColumn({
           them. Shown to every seat, because a player owed an answer is owed
           the knowledge of who is giving it. */}
       <DmCoverNotice cover={campaign?.dmCover ?? null} />
+      </div>
 
       {children}
       </div>

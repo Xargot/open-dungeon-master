@@ -5,6 +5,20 @@ Back to the [README](../README.md). Prefer containers? See
 
 ## Requirements
 
+What each setup needs from the machine:
+
+| Setup | Machine |
+|---|---|
+| A human DM, an API key or an agent program | Any machine that runs Node or Docker; 2 GB of memory is comfortable. No graphics card. |
+| A local model, the minimum | 16 GB of graphics memory (a 16 GB card, or 24 GB of memory on a Mac) for gpt-oss-20b: 90 to 160 seconds a turn on an AMD BC-250 |
+| A local model, recommended | About 28 GB for Qwen3.6-35B-A3B at Q4, 45 GB at Q8: a median of 90 seconds a turn on a Framework Desktop (Ryzen AI Max+ 395, 128 GB shared) |
+| Local pictures (ComfyUI) | 8 GB of graphics memory or more for an SDXL-class model, on top of a local model's share ([image-generation.md](image-generation.md)) |
+
+The app's own needs, the measured machines and what hosting a group takes are on
+one page of the guide:
+[System requirements](https://opendungeonmaster.com/guide/start/system-requirements/).
+Software:
+
 - **Node 22.18+, 24 or 26+** (npm). `npm install` pulls everything the app itself needs. Or
   **Docker**, if you would rather not install a toolchain at all: see
   [Run with Docker](docker.md).
@@ -12,18 +26,24 @@ Back to the [README](../README.md). Prefer containers? See
   - [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` at
     `http://127.0.0.1:8001`, the address the app looks at first. The recommended
     model is Qwen3.6-35B-A3B
-    ([text-backends.md](text-backends.md#the-recommended-dm-model-qwen36-35b-on-llamacpp)).
+    ([text-backends.md](text-backends.md#the-recommended-dm-model-qwen36-35b-on-llamacpp)),
+    or gpt-oss-20b on a 16 GB card.
     A server that lists exactly one chat model runs it with no model chosen;
     with several, pick one in the guided setup. Or:
-  - any other OpenAI-compatible server with tool calling: Ollama, LM Studio, vLLM,
-    TabbyAPI, KoboldCpp, or a remote API key like OpenAI or OpenRouter. Or:
+  - any other model server with tool calling (Ollama, LM Studio, vLLM, TabbyAPI,
+    KoboldCpp: supported, with llama.cpp the one we recommend), or a remote API
+    key like OpenAI or OpenRouter. Or:
   - a CLI agent already installed and signed in on the server's computer: Claude
     Code, Codex, opencode or Grok Build, running on the plan you already pay for.
     Pick it in **Admin > Agent program**. Works for a server started with npm or
     systemd, not inside the Docker image
     ([agent-harness.md](agent-harness.md)).
 
-  A local model needs a context window of at least 16K tokens to narrate and
+  A local model needs at least 16 GB of graphics memory (a 16 GB card, or 24 GB
+  of memory on a Mac): gpt-oss-20b is the minimum, and the recommended
+  Qwen3.6-35B-A3B needs about 28 GB at Q4
+  ([text-backends.md](text-backends.md#hardware-for-a-local-model)). Below 16 GB
+  is not supported. It needs a context window of at least 16K tokens to narrate and
   24K to run fights; 32K or more is recommended
   ([text-backends.md](text-backends.md#context-window)). Hosted models and
   agent programs have far more.
@@ -64,7 +84,9 @@ takes it from there, one question at a time:
 - **The storyteller.** It looks at what is already running on the computer
   (llama.cpp, Ollama, LM Studio, vLLM, KoboldCpp, TabbyAPI, Jan) and offers each
   server with the models it serves, the best fit the model catalog knows of
-  preselected. Or paste an API key (OpenAI, OpenRouter, any OpenAI-compatible
+  preselected. When nothing answers, it gives the llama-server commands for
+  this machine; an Ollama it finds is connected through Ollama's own API, so
+  the app sets the model's window. Or paste an API key (OpenAI, OpenRouter, any OpenAI-compatible
   provider) and pick from the models it can reach. Or pick an agent program you
   already pay for (Claude Code, Codex, opencode, Grok Build): it shows whether each
   is installed and signed in, and the exact command to fix it when not. Or choose a
@@ -191,6 +213,7 @@ building the older files would be a downgrade, which an upgraded database refuse
 ```bash
 npm test            # every scripts/test-*.mjs, one at a time, failures listed at the end
 npm run coverage    # the same, plus a code coverage report in coverage/index.html
+npm run dead-code   # files, exports, locals and parameters nothing uses (a report, not a CI gate)
 ```
 
 Each test script is a plain Node program, so `node scripts/test-<name>.mjs` runs one
@@ -198,3 +221,7 @@ on its own. Code coverage counts the `.ts` files under `src/`; `.tsx` is left ou
 since the scripts render no UI. It shows which code ran, not what a test checked.
 A script reports a failure by throwing or by calling `process.exit(1)`; setting
 `process.exitCode` on its own is not seen by the runner.
+
+The dead-code check follows imports from the entry points Next.js and the
+test runner know, plus those listed in `knip.jsonc`: a file only the desktop
+and Android apps import goes there, or the check reports it as unused.

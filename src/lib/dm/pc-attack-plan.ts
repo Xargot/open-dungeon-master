@@ -16,7 +16,10 @@ import { listEnemies, type Encounter, type EncounterEnemy } from "@/lib/db/encou
 import type { Advantage } from "@/lib/dice";
 import { spendAction, spendAttack, type TurnBudget } from "@/lib/dm/action-budget";
 import type { AttackProfile } from "@/lib/dm/attack-logic";
-import { isUndeadOrFiend, offHandProblem, slotFree, smiteDice } from "@/lib/dm/attack-rules";
+import { dualWields, isUndeadOrFiend, offHandProblem, slotFree, smiteDice } from "@/lib/dm/attack-rules";
+import { drawRow, gearKindOf, handsFor, handsFullError, spendInteraction } from "@/lib/dm/gear-hands";
+import { wearingIsExplicit } from "@/lib/srd/armor";
+import type { EquipmentItem } from "@/lib/schemas/sheet";
 import { planMarks, type MarkPlan } from "@/lib/dm/attack-marks";
 import type { TypedRider } from "@/lib/dm/damage-parts";
 import { itemRidersAgainst } from "@/lib/dm/gear-attack";
@@ -41,6 +44,7 @@ import { spellFactsFor } from "@/lib/content";
 import { spellAuthorsFor } from "@/lib/dm/spell-authors";
 import { checkAttackSpell } from "@/lib/dm/pc-attack-spell";
 import { attacksAllowedFor, budgetFor } from "@/lib/dm/turn-budget";
+import { textKey } from "@/lib/language/text-logic";
 import { acBreakdownFor } from "@/lib/srd";
 import { foeSlayerBonus } from "@/lib/dm/attack-features";
 import { carriesPoison, type OpenHandChoice } from "@/lib/dm/attack-onhit";
@@ -85,6 +89,9 @@ export type AttackPlan = {
   spellSlotLevel: number | null;
   weaponAttack: boolean;
   ammo: AmmoSpend | null;
+  // A weapon not in hand, drawn as part of the attack (issue #424): the pack
+  // after the draw, and the line the result says.
+  drawn: { equipment: EquipmentItem[]; note: string } | null;
   typedRiders: TypedRider[];
   // Once-per-turn riders already used this turn: they left the expression.
   droppedRiders: string[];
@@ -153,8 +160,20 @@ export function planPcAttack(input: {
   args: PcAttackArgs;
   sheets: CharacterSheet[];
   sheetsById: Map<string, CharacterSheet>;
+  // A dry run asking whether the attack would stand once its attacker walked
+  // into reach (pc_attack's approach, src/lib/dm/pc-attack-approach.ts).
+  skipReach?: boolean;
 }): AttackPlan | { refused: ToolError } {
-  const { campaign, turn, encounter, sheet, args, sheets, sheetsById } = input;
+  const { campaign, turn, encounter, sheet, sheets, sheetsById } = input;
+  // A Flurry of Blows strike is a bonus-action unarmed strike the ki already
+  // paid for (src/lib/dm/bonus-actions.ts): one sent as Martial Arts' or a
+  // feature's bonus attack while the flurry has strikes left is one of
+  // them, not a second bonus action.
+  const flurryLeft = budgetFor(encounter, sheet.id, attacksAllowedFor(sheet))?.flurryStrikes ?? 0;
+  const args =
+    flurryLeft > 0 && (input.args.bonusAttack === "martial arts" || input.args.bonusAttack === "feature") && textKey(input.args.weapon ?? "") === "unarmed strike"
+      ? { ...input.args, bonusAttack: undefined }
+      : input.args;
 
   // ---- refusals: everything that can stop this attack, before any spend ----
 
@@ -169,6 +188,11 @@ export function planPcAttack(input: {
   const built = buildAttackProfile(campaign.id, sheet, args, { apart: tilesBetween(encounter.id, sheet.id, enemy.id) });
   if ("error" in built) {
     return { refused: built };
+  }
+  // Hooves and stomps that strike "one prone creature" (an elk's, an
+  // elephant's): a standing target is out of their reach.
+  if (built.profile.proneTargetsOnly && !enemy.conditions.includes("prone")) {
+    return { refused: { error: `${built.profile.weapon} strikes only a prone creature, and ${enemy.displayName} is not prone. Nothing was rolled.`, refused: "rules" } };
   }
   const { riders, kind, grantedBonusAction } = built;
 
@@ -202,7 +226,7 @@ export function planPcAttack(input: {
 
   // Battle-map positions are authoritative; players move their own tokens,
   // so an out-of-reach attack is refused rather than auto-approached.
-  const rangeError = checkPcAttackRange(encounter.id, sheet.id, enemy.id, {
+  const rangeError = input.skipReach ? null : checkPcAttackRange(encounter.id, sheet.id, enemy.id, {
     ranged: profile.ranged,
     rangeTiles: profile.rangeTiles,
     reachTiles: profile.reachTiles,
@@ -397,6 +421,38 @@ export function planPcAttack(input: {
   } else if (options.bonusFeat === "Crossbow Expert") {
     featNotes.push("Crossbow Expert: the hand crossbow shot as the bonus action");
   }
+  // A weapon the sheet does not hold is drawn as part of the attack, with
+  // the turn's free object interaction (issue #424); a second draw would be
+  // the Use an Object action, which an attack cannot be as well. Only on the
+  // attacker's own turn and on a sheet that says what it holds.
+  let drawn: AttackPlan["drawn"] = null;
+  if (budget && kind === "weapon" && wearingIsExplicit(sheet.equipment)) {
+    const row = sheet.equipment.find((item) => item.name === profile.weapon) ?? null;
+    if (row && row.equipped !== true && gearKindOf(row) === "weapon") {
+      const swap = drawRow(sheet.equipment, row, null);
+      if (swap.full.length) {
+        return { refused: { error: handsFullError(sheet.name, row.name, swap.full), refused: "rules" } };
+      }
+      const draw = spendInteraction(budget, {
+        what: `drawing ${row.name}`,
+        who: sheet.name,
+        oneHandedWeapon: handsFor(row) === 1,
+        dualWielder: dualWields(sheet.feats, sheet.campaignId),
+        withAction: false,
+      });
+      if (!draw.ok) {
+        return { refused: toolError(draw) };
+      }
+      budget = draw.budget;
+      // A thrown weapon leaves the hand that drew it: the draw is spent, and
+      // the hand is free again after the throw.
+      const throws = atRange && (profile.properties ?? []).includes("thrown");
+      drawn = {
+        equipment: throws ? [...sheet.equipment] : swap.equipment,
+        note: `${sheet.name} draws ${row.name}${throws ? " and throws it" : ""}: their free object interaction this turn`,
+      };
+    }
+  }
   // The part of the turn the attack spends (src/lib/dm/pc-attack-spend.ts).
   const spent = spendAttackEconomy({
     sheet,
@@ -580,6 +636,7 @@ export function planPcAttack(input: {
     weaponAttack,
     // Curving Shot's reroll is the same arrow.
     ammo: options.featureBonus?.noAmmo ? null : ammo,
+    drawn,
     typedRiders: [...folded.typedRiders, ...gear.typed, ...(curse ? [curse] : [])],
     droppedRiders,
     hitClaims,

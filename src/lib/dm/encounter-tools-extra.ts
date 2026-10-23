@@ -3,11 +3,12 @@ import type { Campaign } from "@/lib/db/campaigns";
 import { getActiveEncounter, listEnemies, patchEnemyConditions, patchEnemyHp } from "@/lib/db/encounters";
 import { getBattleMapForEncounter, removeTokenByRef } from "@/lib/db/battle-maps";
 import type { DmTurn } from "@/lib/db/dm-turns";
-import { finishEncounter, publishEncounter, resolveEnemyRef } from "@/lib/dm/enemy-damage";
+import { finishEncounter, publishEncounter, resolveEnemyRef, unknownEnemyRef } from "@/lib/dm/enemy-damage";
 import { addEnemiesTool, handleAddEnemies } from "@/lib/dm/encounter-spawn";
 import { handleLairAction, handleLegendaryAction, handleLegendaryResist, legendaryTools } from "@/lib/dm/legendary-tools";
 import { declareIntentTool, handleDeclareIntent } from "@/lib/dm/intent-tools";
 import { canonicalCondition } from "@/lib/dm/mutations";
+import { conditionNameRefusal } from "@/lib/dm/set-condition";
 import { addConditionInstance, instancesOf, isIncapacitated, pruneMeta, type ConditionMetaMap } from "@/lib/dm/condition-logic";
 import { AI_BIND_REFUSAL, AI_CLEAR_REFUSAL, bindsCreature, engineKept } from "@/lib/dm/ai-boundary";
 import { rollEnemySave } from "@/lib/dm/forced-save";
@@ -17,7 +18,7 @@ import { enemyCallOutOfTurn, enemyTurnRefusal } from "@/lib/dm/enemy-turn-order"
 import { characterCallUnasked } from "@/lib/dm/player-word";
 import { standUpIfProne } from "@/lib/dm/enemy-approach";
 import { enemySpeedTiles } from "@/lib/dm/enemy-speed";
-import { PRONE } from "@/lib/dm/vitals-logic";
+import { namesExhaustion, PRONE } from "@/lib/dm/vitals-logic";
 import { normalizeAbility } from "@/lib/dm/arg-coerce";
 import { publishBattleMapUpdate } from "@/lib/dm/map-tools";
 import { planConditionFx } from "@/lib/battlemap/fx-plan";
@@ -25,6 +26,8 @@ import { publishFx, tokenPosition } from "@/lib/dm/fx";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { aoeDamageTool, handleAoeDamage } from "@/lib/dm/aoe-damage";
 import type { ToolResult } from "@/lib/dm/tool-errors";
+import { isConditionNamed } from "@/lib/srd/feature-names";
+import { enemyExhaustion } from "@/lib/dm/monster-abilities";
 
 // Encounter tools beyond the core start/damage/attack/end set:
 // reinforcements, enemy flight, enemy conditions, and multi-target AoE.
@@ -66,77 +69,9 @@ const enemyFleesTool: ToolDef = {
   },
 };
 
-const setEnemyConditionTool: ToolDef = {
-  type: "function",
-  function: {
-    name: "set_enemy_condition",
-    description:
-      "Apply a condition to an enemy (prone, poisoned, stunned, restrained, frightened, grappled, ...). Call it BEFORE narrating the effect taking hold, exactly as with characters. The server refuses conditions the enemy is immune to.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        enemyId: { type: "string", description: "Exact enemyId from GAME STATE." },
-        condition: { type: "string" },
-        rounds: {
-          type: "integer",
-          minimum: 1,
-          maximum: 100,
-          description: "Rounds until the condition ends on its own.",
-        },
-        saveAbility: {
-          type: "string",
-          enum: ["str", "dex", "con", "int", "wis", "cha"],
-          description: "Save-ends: ability the enemy re-saves at the end of each round.",
-        },
-        saveDc: { type: "integer", minimum: 1, maximum: 30, description: "Save-ends DC." },
-        sourceCharacterId: {
-          type: "string",
-          description:
-            "The character that caused it, when the condition is tied to one (the grappler, the charmer, the source of the fear): exact characterId from GAME STATE.",
-        },
-        sourceEnemyId: {
-          type: "string",
-          description: "The enemy that caused it, when it was another enemy: exact enemyId from GAME STATE.",
-        },
-        level: {
-          type: "integer",
-          minimum: 1,
-          maximum: 6,
-          description:
-            "Exhaustion only: the level it now has. The server applies it: 2 halves speed, 3 disadvantage on attacks and saves, 4 halves hit points, 5 speed 0, 6 dead.",
-        },
-        reason: { type: "string", description: "Short in-fiction cause." },
-      },
-      required: ["enemyId", "condition"],
-    },
-  },
-};
-
-const clearEnemyConditionTool: ToolDef = {
-  type: "function",
-  function: {
-    name: "clear_enemy_condition",
-    description:
-      "Remove a condition from an enemy the moment the fiction ends it (it stands up, shakes off the fear, breaks the grapple). Use the condition name shown in GAME STATE.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        enemyId: { type: "string", description: "Exact enemyId from GAME STATE." },
-        condition: { type: "string" },
-        reason: { type: "string", description: "Short in-fiction cause." },
-      },
-      required: ["enemyId", "condition"],
-    },
-  },
-};
-
 export const extraEncounterTools: ToolDef[] = [
   addEnemiesTool,
   enemyFleesTool,
-  setEnemyConditionTool,
-  clearEnemyConditionTool,
   aoeDamageTool,
   ...legendaryTools,
   declareIntentTool,
@@ -179,7 +114,7 @@ function handleEnemyFlees(
   }
   const enemy = resolveEnemyRef(encounter.id, args.enemyId);
   if (!enemy) {
-    return { error: "Unknown enemyId; use one from GAME STATE.", retry: true };
+    return unknownEnemyRef(encounter.id, "enemyId", args.enemyId);
   }
   if (enemy.status !== "alive") {
     return { error: `${enemy.displayName} is already ${enemy.status}.`, retry: true };
@@ -224,7 +159,7 @@ function handleEnemyCondition(
   }
   const enemy = resolveEnemyRef(encounter.id, args.enemyId);
   if (!enemy) {
-    return { error: "Unknown enemyId; use one from GAME STATE.", retry: true };
+    return unknownEnemyRef(encounter.id, "enemyId", args.enemyId);
   }
   if (enemy.status !== "alive") {
     return { error: `${enemy.displayName} is ${enemy.status}.`, retry: true };
@@ -235,15 +170,25 @@ function handleEnemyCondition(
   }
 
   if (action === "set") {
-    if (enemy.stats.conditionImmune.toLowerCase().includes(wanted)) {
+    // "exhaustion 2", the form the engine itself writes, names exhaustion
+    // and its level.
+    const exhaustion = namesExhaustion(args.condition ?? "");
+    const misnamed = exhaustion ? null : conditionNameRefusal(args.condition ?? "");
+    if (misnamed) {
+      return misnamed;
+    }
+    const named = exhaustion ? "exhaustion" : wanted;
+    if (enemy.stats.conditionImmune.toLowerCase().includes(named)) {
       return {
-        error: `${enemy.displayName} is immune to ${wanted} (immunities: ${enemy.stats.conditionImmune}).`,
+        error: `${enemy.displayName} is immune to ${named} (immunities: ${enemy.stats.conditionImmune}).`,
         refused: "rules",
       };
     }
     // Exhaustion is a level, not a flag: the table applies (enemy-exhaustion.ts).
-    if (/^exhaust/.test(wanted)) {
-      return setEnemyExhaustion(campaign, ctx.turn, encounter, enemy, args.level, ctx.sheets, ctx.sheetsById);
+    if (exhaustion) {
+      // A bare "exhaustion" is one more level; "exhaustion 2" is that level.
+      const written = isConditionNamed(args.condition ?? "", "exhaustion") ? undefined : enemyExhaustion([args.condition ?? ""]);
+      return setEnemyExhaustion(campaign, ctx.turn, encounter, enemy, args.level ?? written, ctx.sheets, ctx.sheetsById);
     }
     // The model does not bind a creature by saying so: the creature's save
     // is rolled first, and the condition lands only on a failure
@@ -255,6 +200,7 @@ function handleEnemyCondition(
       }
       const save = rollEnemySave(campaign.id, enemy, args.saveAbility, args.saveDc, {
         resist: true,
+        against: wanted,
         record: { turn: ctx.turn, detail: `${enemy.displayName}: ${args.saveAbility.toUpperCase()} save against being ${wanted}` },
       });
       initialSave = `${args.saveAbility.toUpperCase()} save ${save.total ?? "failed outright"} vs DC ${args.saveDc}`;
@@ -308,11 +254,9 @@ function handleEnemyCondition(
     };
   }
 
-  // Forgiving clear, matching the character-side clear_condition behavior.
-  const matches = (entry: string) =>
-    entry === wanted ||
-    canonicalCondition(entry) === wanted ||
-    (wanted.length > 3 && (entry.includes(wanted) || wanted.includes(entry)));
+  // The condition by its whole name, as the character-side clear_condition
+  // finds it; a miss lists what the enemy holds.
+  const matches = (entry: string) => entry === wanted || canonicalCondition(entry) === wanted || isConditionNamed(entry, wanted);
   const removed = enemy.conditions.filter(matches);
   if (!removed.length) {
     return {

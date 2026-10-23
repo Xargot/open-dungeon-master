@@ -138,6 +138,15 @@ export const gameSettingsSchema = z.object({
   // After each DM narration, block do and say for everyone until the party
   // lead opens responses. OOC and lead directions stay available.
   holdSubmissions: z.boolean().default(false),
+  // Wait for the table (src/lib/dm/table-wait.ts): after a narration on an
+  // open floor, the AI DM's next turn waits until every present player has
+  // acted or passed, or waitForTableSeconds have passed since the latest
+  // answer (each post or pass restarts the clock), then one turn reads them
+  // all. On by default, as a person running the table waits for everyone:
+  // a player alone at the table is answered at once (nobody else is present
+  // to wait for), and the lead can set "Answers the first post" instead.
+  waitForTable: z.boolean().default(true),
+  waitForTableSeconds: z.number().int().min(15).max(900).default(300),
   // Human-DM story capture: how much play may pass with nothing written down
   // before the console nudges the DM to record a beat. Two units because a
   // session has two tempos (src/lib/dm/beat-cadence.ts); either one at 0 turns
@@ -191,6 +200,11 @@ export const gameSettingsSchema = z.object({
   // Standard and blank change nothing in the prompt.
   narrationLength: z.enum(["short", "standard", "rich"]).default("standard"),
   styleNotes: z.string().trim().max(500).default(""),
+  // How often the AI DM's world brings a fight (issue #432): the encounter
+  // dice of the world tick (src/lib/dm/world-tick-logic.ts pacedTickConfig),
+  // what an encounter spark asks for, and one pacing line in the prompt.
+  // Balanced is the dice as they were and changes nothing in the prompt.
+  combatPace: z.enum(["rare", "balanced", "frequent"]).default("balanced"),
   // Optional 5e variant rules the server engines and DM prompt honor.
   // Rendered as one line each in the prompt by src/lib/dm/rules-logic.ts.
   // Optional turn stages (src/lib/dm/stages.ts). All default on; this exists

@@ -47,6 +47,13 @@ const creationSurface = `${payload}\n${worldSetup}\n${rulesPanel}`;
 // first sessions, not its creation (issue 383): how long the AI DM runs and
 // what its prose needs is learned by hearing it on this model. Both start
 // as no change at all, and the AI group of GameSettingsPanel owns them.
+// `combatPace` (issue #432) is the same kind of choice: how often fights come
+// is learned in play, starts balanced, and sits beside them.
+//
+// `waitForTable` and `waitForTableSeconds` (PR #438) are too: whether the AI
+// DM waits for everyone before it answers is learned once the table plays,
+// has a safe default, and the Players group of GameSettingsPanel owns it as
+// one Pacing picker (AGENTS.md, settings rule 2).
 const DELIBERATELY_OMITTED = new Set([
   "stages",
   "beatReminder",
@@ -54,6 +61,9 @@ const DELIBERATELY_OMITTED = new Set([
   "targetParty",
   "narrationLength",
   "styleNotes",
+  "combatPace",
+  "waitForTable",
+  "waitForTableSeconds",
 ]);
 
 let passed = 0;

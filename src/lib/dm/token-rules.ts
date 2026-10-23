@@ -24,10 +24,11 @@ import { applyDmMutation } from "@/lib/dm/mutations";
 import { characterDrag, dragLandings } from "@/lib/dm/drag-move";
 import { releaseGrapplesOutOfReach } from "@/lib/dm/grapple";
 import { resolveOpportunityAttacks } from "@/lib/dm/opportunity";
-import { resolveSheetRef } from "@/lib/dm/rolls";
+import { resolveSheetRef, unknownSheetRef } from "@/lib/dm/rolls";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { toolError, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
 import { textKey } from "@/lib/language/text-logic";
+import { unknownEnemyRef } from "@/lib/dm/enemy-damage";
 
 // The rules behind two board moves the model can make: a teleport, which
 // the AI makes only through the spell or ability that does it (cast and
@@ -89,7 +90,7 @@ export function payForTeleport(
   if (args.casterId) {
     const caster = resolveSheetRef(args.casterId, sheets, sheetsById);
     if (!caster) {
-      return { error: "Unknown casterId; use one from GAME STATE.", retry: true };
+      return unknownSheetRef("casterId", args.casterId, sheets);
     }
     const facts = spellFactsFor(spell);
     if (facts?.range.kind === "self" && token.refId !== caster.id) {
@@ -110,8 +111,11 @@ export function payForTeleport(
     const enemy = listEnemies(encounter.id).find(
       (entry) => entry.id === args.casterEnemyId || textKey(entry.displayName) === ref,
     );
-    if (!enemy || enemy.status !== "alive") {
-      return { error: "Unknown or fallen casterEnemyId; use a living enemy from GAME STATE.", retry: true };
+    if (!enemy) {
+      return unknownEnemyRef(encounter.id, "casterEnemyId", args.casterEnemyId);
+    }
+    if (enemy.status !== "alive") {
+      return { error: `${enemy.displayName} is ${enemy.status} and casts nothing.`, retry: true };
     }
     const key = textKey(spell);
     const listed =
@@ -185,7 +189,9 @@ export function walkCharacter(
   sheet: CharacterSheet,
   token: BattleToken,
   destination: XY,
-  options: { drag?: boolean } = {},
+  // whole: a walk the movement cannot finish is refused, nothing moved
+  // (pc_attack's approach walks only when the swing can follow).
+  options: { drag?: boolean; whole?: boolean } = {},
 ): ToolResult {
   // Off their turn, the move they readied (SRD 5.1, Ready): their reaction,
   // up to their full speed, their own turn's movement untouched.
@@ -261,6 +267,9 @@ export function walkCharacter(
   if (!walk.at) {
     const why = fear ? `${sheet.name} is frightened and cannot move closer to what it fears.` : `${sheet.name} has no movement left for that.`;
     return { error: `${why}${stillAt(listTokens(map.id), token)}`, refused: "rules" };
+  }
+  if (options.whole && !walk.reachedEnd) {
+    return { error: `${sheet.name} cannot reach (${destination.x},${destination.y}) with the movement left this turn.`, refused: "rules" };
   }
   const origin = { x: token.x, y: token.y };
   const walkedSquares = steps.slice(0, steps.findIndex((step) => step.x === walk.at?.x && step.y === walk.at?.y) + 1);

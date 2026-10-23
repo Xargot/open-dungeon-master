@@ -17,6 +17,13 @@ import { AUDIO_PREF_FIELDS, hydrateAudioPrefs, writeAudioPref } from "@/lib/audi
 // refuses to autoplay hands the narration back to wait for the next gesture,
 // and an audio file that will not load or decode is named in playbackFailure
 // so the passage can say so.
+//
+// A table break (src/lib/dm/table-break.ts) holds narration on every screen:
+// `onBreak` stops whatever is being read (it goes back to the front of the
+// line, to be heard whole), nothing new starts, and what lands meanwhile
+// queues. Resume plays the line in order, each passage from its finished
+// file when that is ready, since a live stream may be gone by then. A replay
+// pressed during the break is the listener's own choice and still plays.
 
 const MUTED_KEY = AUDIO_PREF_FIELDS.narrationMuted.key;
 const VOLUME_KEY = AUDIO_PREF_FIELDS.narrationVolume.key;
@@ -46,6 +53,11 @@ export type NarrationAudio = {
   volume: number;
   unlocked: boolean;
   playingMessageId: string | null;
+  // How many narrations the browser is holding back until a gesture on this
+  // page (pendingRef's length). The table says so above the composer and on
+  // the header's narration icon, because a struck-through icon alone was
+  // easy to miss for someone watching an AI party play without clicking.
+  held: number;
   // The message whose audio this device last failed to play, if any.
   playbackFailure: string | null;
   setMuted: (muted: boolean) => void;
@@ -56,12 +68,13 @@ export type NarrationAudio = {
   onTtsReady: (messageId: string, url: string, live: boolean) => void;
 };
 
-export function useNarrationAudio(): NarrationAudio {
+export function useNarrationAudio(onBreak = false): NarrationAudio {
   const muted = useSyncExternalStore(subscribePrefs, readMuted, () => true);
   const volume = useSyncExternalStore(subscribePrefs, readVolume, () => 0.8);
   const [unlocked, setUnlocked] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [playbackFailure, setPlaybackFailure] = useState<string | null>(null);
+  const [held, setHeld] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [audioByMessage] = useState(() => new Map<string, string>());
   const unlockedRef = useRef(false);
@@ -72,9 +85,16 @@ export function useNarrationAudio(): NarrationAudio {
   // same tts_ready re-enters through re-renders or reducer echoes.
   const handledRef = useRef(new Set<string>());
   // Narration that landed before the first user gesture. SessionView hands
-  // each message over exactly once, so dropping these would lose them for
-  // good; they wait here and play from unlock().
+  // each message over exactly once, so they wait here, oldest first, and
+  // unlock() plays the newest; the rest keep their transcript replay.
   const pendingRef = useRef<Array<{ messageId: string; url: string }>>([]);
+  // Every change to pendingRef goes through here so `held` follows it.
+  const setPending = useCallback((next: Array<{ messageId: string; url: string }>) => {
+    pendingRef.current = next;
+    setHeld(next.length);
+  }, []);
+  // A table break is on: nothing starts by itself.
+  const breakRef = useRef(onBreak);
 
   // The account copy of the prefs, applied over localStorage unless the
   // user touched a control first.
@@ -101,11 +121,11 @@ export function useNarrationAudio(): NarrationAudio {
     if (next) {
       audioRef.current?.pause();
       queueRef.current = [];
-      pendingRef.current = [];
+      setPending([]);
       playingRef.current = null;
       setPlayingMessageId(null);
     }
-  }, []);
+  }, [setPending]);
 
   const setVolume = useCallback((next: number) => {
     const clamped = Math.max(0, Math.min(1, next));
@@ -129,6 +149,9 @@ export function useNarrationAudio(): NarrationAudio {
         }
         playingRef.current = null;
         setPlayingMessageId(null);
+        if (breakRef.current) {
+          return;
+        }
         const next = queueRef.current.shift();
         if (next && !readMuted()) {
           run(next.messageId, next.url);
@@ -156,7 +179,9 @@ export function useNarrationAudio(): NarrationAudio {
           // touched, or one that sat idle). This narration is offered only
           // once, so it goes back to wait, along with whatever queued
           // behind it, and the header shows the "enable audio" state again.
-          pendingRef.current = [{ messageId: id, url: src }, ...queueRef.current, ...pendingRef.current];
+          // Oldest first, so the next unlock() plays only the newest of them
+          // and leaves the rest to their replay buttons, as at first load.
+          setPending([{ messageId: id, url: src }, ...queueRef.current, ...pendingRef.current]);
           queueRef.current = [];
           playingRef.current = null;
           setPlayingMessageId(null);
@@ -174,7 +199,7 @@ export function useNarrationAudio(): NarrationAudio {
       });
     }
     run(messageId, url);
-  }, []);
+  }, [setPending]);
 
   // Explicit replay: interrupts whatever is playing and clears the queue.
   const play = useCallback(
@@ -190,21 +215,55 @@ export function useNarrationAudio(): NarrationAudio {
   const unlock = useCallback(() => {
     setUnlocked(true);
     unlockedRef.current = true;
-    // Anything that arrived before this gesture starts now, oldest first,
-    // on the same "never interrupt what is playing" rule as live narration.
-    const held = pendingRef.current;
-    pendingRef.current = [];
-    if (!held.length || readMuted()) {
+    // Only the newest passage that arrived before this gesture plays, on the
+    // same "never interrupt what is playing" rule as live narration. A tab
+    // watched for an hour can hold ten minutes of narration, and playing it
+    // all back to back would bury the live scene under stale passages (the
+    // server skips narration that fell behind on the same rule). The older
+    // ones keep their replay buttons in the transcript (audioByMessage).
+    const waiting = pendingRef.current;
+    if (waiting.length) {
+      setPending([]);
+    }
+    const newest = waiting[waiting.length - 1];
+    if (!newest || readMuted()) {
       return;
     }
-    if (playingRef.current) {
-      queueRef.current.push(...held);
+    if (playingRef.current || breakRef.current) {
+      queueRef.current.push(newest);
       return;
     }
-    const [first, ...rest] = held;
-    queueRef.current.push(...rest);
-    startPlayback(first.messageId, first.url);
-  }, [startPlayback]);
+    startPlayback(newest.messageId, newest.url);
+  }, [setPending, startPlayback]);
+
+  // The break begins: the passage being read stops and waits at the front
+  // of the line. It ends: the line plays, oldest first.
+  useEffect(() => {
+    breakRef.current = onBreak;
+    if (onBreak) {
+      const current = playingRef.current;
+      if (!current) {
+        return;
+      }
+      const audio = audioRef.current;
+      playingRef.current = null;
+      setPlayingMessageId(null);
+      if (audio) {
+        audio.onended = null;
+        audio.onerror = null;
+        audio.pause();
+      }
+      queueRef.current.unshift({ messageId: current, url: audioByMessage.get(current) ?? audio?.src ?? "" });
+      return;
+    }
+    if (playingRef.current || !unlockedRef.current || readMuted()) {
+      return;
+    }
+    const next = queueRef.current.shift();
+    if (next) {
+      startPlayback(next.messageId, audioByMessage.get(next.messageId) ?? next.url);
+    }
+  }, [onBreak, audioByMessage, startPlayback]);
 
   // Any first interaction with the page (click, key press) also counts as
   // the unlock gesture, so narration autoplays without hunting for the
@@ -232,16 +291,16 @@ export function useNarrationAudio(): NarrationAudio {
       // The browser refuses to play before a user gesture, so hold rather
       // than drop: this narration is never offered a second time.
       if (!unlockedRef.current) {
-        pendingRef.current.push({ messageId, url });
+        setPending([...pendingRef.current, { messageId, url }]);
         return;
       }
-      if (playingRef.current) {
+      if (playingRef.current || breakRef.current) {
         queueRef.current.push({ messageId, url });
       } else {
         startPlayback(messageId, url);
       }
     },
-    [audioByMessage, startPlayback],
+    [audioByMessage, setPending, startPlayback],
   );
 
   // One object per real change, so the memoized header and the chat column
@@ -252,6 +311,7 @@ export function useNarrationAudio(): NarrationAudio {
       volume,
       unlocked,
       playingMessageId,
+      held,
       playbackFailure,
       setMuted,
       setVolume,
@@ -260,6 +320,6 @@ export function useNarrationAudio(): NarrationAudio {
       audioByMessage,
       onTtsReady,
     }),
-    [muted, volume, unlocked, playingMessageId, playbackFailure, setMuted, setVolume, unlock, play, audioByMessage, onTtsReady],
+    [muted, volume, unlocked, playingMessageId, held, playbackFailure, setMuted, setVolume, unlock, play, audioByMessage, onTtsReady],
   );
 }

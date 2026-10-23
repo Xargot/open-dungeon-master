@@ -6,8 +6,10 @@ import type { StoredRoll } from "@/lib/db/rolls";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { ADVENTURE_BEGINS_NOTE, LEAD_NOTE_PREFIX, OPENING_SCENE_CUE, type CampaignMember } from "@/lib/campaign-types";
 import { heldRollUserIds } from "@/lib/dice/held-rolls";
-import { computeSheetDerived, findSkill, formatModifier, sizeForRace, speedFor, SRD_SKILLS } from "@/lib/srd";
+import { computeSheetDerived, findClass, findSkill, formatModifier, sizeForRace, speedFor, SRD_SKILLS } from "@/lib/srd";
+import { attackSummary } from "@/lib/srd/creature-attacks";
 import { encumbranceFor } from "@/lib/srd/encumbrance";
+import { wearingIsExplicit } from "@/lib/srd/armor";
 import { classFeatureDescription, findCustomClass } from "@/lib/classes";
 // The genre catalogs' rules text, all of it: the model reads it beside a
 // custom feature (src/lib/classes/feature-text.ts).
@@ -36,9 +38,11 @@ import { renderWorldArcsForPrompt } from "@/lib/dm/world-arc-logic";
 import { renderFactsForPrompt, type FactLike } from "@/lib/dm/fact-logic";
 import { MOMENT_INSTRUCTION, splitAtMoment, THIS_MOMENT_HEADING, THIS_TURN_HEADING } from "@/lib/prompt-boundary";
 import { companionMode } from "@/lib/dm/companion-tools";
+import { commanderOf } from "@/lib/dm/companion-command";
 import { breakDown, describeInstant, isDark, normalizeClock } from "@/lib/dm/calendar";
 import { describeWeather } from "@/lib/srd/weather";
 import { describeParty, normalizeParty } from "@/lib/dm/party-logic";
+import { partyStoryOf, partyStoryPromptLines } from "@/lib/dm/party-story";
 import { formationPartyIds } from "@/lib/dm/roster";
 import { getSceneTracker } from "@/lib/db/scene-tracker";
 import { trackerPromptBlock } from "@/lib/dm/scene-tracker-logic";
@@ -74,13 +78,14 @@ import { describeIntent } from "@/lib/dm/intent-logic";
 import { describeEquipmentItem } from "@/lib/dm/equipment-line";
 import { summonStateLine } from "@/lib/dm/summon-rules";
 import { dmSystemText, encounterRulesText, tracksAmmunition, type RuleContext } from "@/lib/dm/prompt-rules";
+import { healthState } from "@/lib/bestiary/health";
 import { rollerName } from "@/lib/roll-labels";
 import { tableHazards } from "@/lib/srd/table-hazards";
 import { waypointProperty } from "@/lib/dm/waypoint-logic";
 import { languageDirective } from "@/lib/dm/table-language-logic";
 import { OFFER_NOTE_PREFIX, renderOffersBlock, type OfferLine } from "@/lib/dm/proposal-logic";
 import { ENEMY_TURNS_CUE } from "@/lib/dm/enemies-due";
-import { CREATURE_TYPES } from "@/lib/bestiary/statblock";
+import { CREATURE_TYPES } from "@/lib/bestiary/creature-type";
 import { CHECK_KEY_PROPERTIES, NONE, SAVE_AGAINST } from "@/lib/dm/roll-about";
 import { stopWordsFor } from "@/lib/language/language";
 import { textKey } from "@/lib/language/text-logic";
@@ -107,18 +112,24 @@ export function buildDmSystem(
   // The table's safety limits stand first of all (docs/vtt-parity-
   // implementation-plan.md 9.1): they outrank the engine boundary as well
   // as every rule under it.
+  // The short rules say the boundary in their own three steps, so a small
+  // model reads it once rather than twice.
   const parts = [
     renderSafetyBlock(normalizeSafety(campaign.gameSettings.safety)),
-    campaign.gameSettings.narrationGuard
-      ? `${ENGINE_BOUNDARY_RULES}${ENGINE_BOUNDARY_CHECK}`
-      : ENGINE_BOUNDARY_RULES,
+    ...(ruleContext?.brief
+      ? []
+      : [campaign.gameSettings.narrationGuard ? `${ENGINE_BOUNDARY_RULES}${ENGINE_BOUNDARY_CHECK}` : ENGINE_BOUNDARY_RULES]),
     dmSystemText(tracksAmmunition(campaign), ruleContext),
   ];
   const gmBlock = renderGmBlock(normalizeGm(campaign.gameSettings.gm));
   if (gmBlock) {
     parts.push(gmBlock);
   }
-  const styleBlock = renderNarrationStyle(campaign.gameSettings.narrationLength, campaign.gameSettings.styleNotes);
+  const styleBlock = renderNarrationStyle(
+    campaign.gameSettings.narrationLength,
+    campaign.gameSettings.styleNotes,
+    campaign.gameSettings.combatPace,
+  );
   if (styleBlock) {
     parts.push(styleBlock);
   }
@@ -175,7 +186,7 @@ export type DmEncounterState = {
     ac: number;
     status: string;
     conditions: string[];
-    attacks: Array<{ name: string; toHit: number; damage: string; type: string }>;
+    attacks: Array<{ name: string; toHit: number; damage: string; type: string; bonusAction?: boolean }>;
     traits: string[];
     resist: string;
     immune: string;
@@ -204,6 +215,15 @@ export type DmGameState = {
   // agent program's rendering (src/lib/harness/render.ts) moves that part
   // itself, so its prompt leaves it in the system message.
   momentAfterHistory?: boolean;
+  // A chat model reads the rules (and a fight's rules) as the system message
+  // and the game state from THIS_TURN_HEADING on as a user message before
+  // the transcript, in the same order as before. llama-server keeps a hybrid
+  // model's cache (Qwen3.5 and 3.6) or a sliding-window one's (Gemma) only
+  // where a message starts, and the state changes every turn: inside the
+  // system message it made each turn read the whole prompt again, 40K
+  // tokens and 140 seconds on a BC-250, where now the tools and rules are
+  // reused. An agent program's rendering splits the prompt itself.
+  stateAfterRules?: boolean;
   currentLocation?: {
     name: string;
     layoutDescription: string;
@@ -229,6 +249,9 @@ export type DmGameState = {
   }>;
   // Public party notes (lead-curated canon), pinned first.
   publicNotes?: Array<{ pinned: boolean; title: string; body: string }>;
+  // Things dropped rather than lost, where they lie (src/lib/dm/gear-tool.ts
+  // describeGround, issue #424).
+  groundItems?: string[];
   // The DM's private prep notes (src/lib/db/notes.ts listDmPrepNotes).
   dmPrepNotes?: Array<{ title: string; body: string }>;
   // Server-tracked world facts (the divergence register), newest first.
@@ -344,8 +367,9 @@ export function companionRules(campaign: Campaign, mode: "full" | "guests"): str
     : genreClassIds(campaign.gameSettings.genre);
   const setting = [
     `- Companions belong to THIS world (${preset.name}), not to generic fantasy.`,
+    // By name, not id: a snake_case id reads to a model as a tool to call.
     classIds.length
-      ? ` Only these classes exist here: ${classIds.join(", ")}; add_companion refuses anything else.`
+      ? ` Only these classes exist here: ${classIds.map((id) => findClass(id)?.name ?? id).join(", ")}; add_companion refuses anything else.`
       : "",
     ` ${preset.raceHint}`,
     preset.nameHints ? ` Name them in the world's register: ${nameRegisterHint(preset.nameHints)}` : "",
@@ -358,9 +382,10 @@ export function companionRules(campaign: Campaign, mode: "full" | "guests"): str
 ${setting}
 - A friendly NPC who joins one fight (a guard who takes your side, a stranger who draws a blade with the party) is a 'guest': add_companion them so the server tracks their HP, initiative, and attacks, and let them go afterwards. When a fight ends, every guest is dismissed AUTOMATICALLY and a table note says so; narrate their goodbye, and add_companion them again if the story keeps them around.
 - An ally who will fight or be targeted MUST go through add_companion BEFORE you narrate them joining, exactly like add_enemies for the other side; an ally who never went through add_companion has no sheet and cannot fight, be attacked, or be healed. Ordinary background NPCs (shopkeepers, quest-givers) are NOT companions; only use add_companion for someone who will act alongside the party.
-- A character's OWN bound creature (a familiar from Find Familiar, a Beast Master's companion, a Drakewarden's drake, a story pet) is a pet on their sheet, not a companion: a caster's Find Familiar is cast with cast_buff (the form in variant; the server pays the casting and binds the pet), and the others come with summon_pet (the server validates the granting feature and refuses characters who lack it), attack with pet_attack on the owner's own turn (it costs what the bond says: a Beast Master's companion the owner's action, a drake the bonus action, a Pact of the Chain familiar one attack of the Attack action; ordinary familiars cannot attack, and a downed owner commands nothing), route enemy damage at it with damage_pet (its own hit points, never the owner's; a familiar at 0 HP vanishes), and end the bond with dismiss_pet. Pets listed in GAME STATE are real; a pet not listed there does not exist.
+- A character's OWN bound creature (a familiar from Find Familiar, a Beast Master's companion, a Drakewarden's drake, a story pet) is a pet on their sheet, not a companion: a caster's Find Familiar is cast with cast_buff (the form in variant; the server pays the casting and binds the pet), and the others come with summon_pet (the server validates the granting feature and refuses characters who lack it), attack with pet_attack on the owner's own turn (it costs what the bond says: a Beast Master's companion the owner's action, a drake the bonus action, a Pact of the Chain familiar one attack of the Attack action; ordinary familiars cannot attack, and a downed owner commands nothing), route enemy damage at it with apply_damage and its petName (its own hit points, never the owner's; a familiar at 0 HP vanishes), and end the bond with dismiss_pet. Pets listed in GAME STATE are real; a pet not listed there does not exist.
 - You play companions fully. Speak their dialogue inline in your narration with a voice matching their personality brief. They are supporting cast: they advise, banter, and fight, but never make the party's decisions, never outshine the players, and never speak for a player character.
 - In combat, on a companion's initiative turn, act for them: move_token with no forced if they need to reposition (it spends their speed and draws opportunity attacks like any walk), then pc_attack or cast_at_enemy with their characterId (or another tool that fits), then end_turn for them if no attack fits. If you do nothing on their turn, the server makes a basic attack for them automatically.
+- A companion GAME STATE says a player commands in fights is the exception: on its turn that player gives its orders, and you resolve them from the player's message exactly as you resolve a player character's, never moving or attacking for it on your own. Its voice and choices out of fights stay yours.
 - All sheet rules apply to companions: their tools, spells, slots, and resources work exactly like a player character's, through the same tool calls.
 - Never call request_player_input for a companion and never send_whisper to one; no human is behind them.
 - When a companion dies, narrate it, record_event the death, and then dismiss_companion once the story moves on.`;
@@ -431,6 +456,17 @@ function spellListLabel(lists: {
   return parts.join("; ") || "none";
 }
 
+// What GAME STATE adds of a companion a player commands in fights
+// (src/lib/dm/companion-command.ts): whose orders its turns follow.
+function companionCommandNote(campaign: Campaign, sheet: CharacterSheet, usernames: Map<string, string>): string {
+  const commander = commanderOf(campaign, sheet);
+  if (!commander) {
+    return "";
+  }
+  const name = usernames.get(commander) ?? "their player";
+  return `; in fights ${name} commands them: on their turn wait for ${name}'s orders and resolve them as a player's`;
+}
+
 export function describeSheet(
   sheet: CharacterSheet,
   playedBy: string,
@@ -439,7 +475,9 @@ export function describeSheet(
   // the load penalty in it and a carried-weight line is added, so the model
   // never has to work the pounds out itself.
   // The table owner's id, for the feats they brewed themselves.
-  options: { encumbrance?: boolean; ownerUserId?: string; authors?: string[] } = {},
+  // `compact` is a call packed for a small window (tool-profiles.ts): the
+  // backstory keeps its start there, and says it was cut.
+  options: { encumbrance?: boolean; ownerUserId?: string; authors?: string[]; compact?: boolean } = {},
 ): string {
   const derived = computeSheetDerived(sheet);
   // A workshop or pack subclass's features carry their own text.
@@ -583,13 +621,19 @@ export function describeSheet(
           .map(([ability, score]) => `${ability.toUpperCase()} ${score}`)
           .join("/")}.`
       : "";
-    const attacks = shape.attacks?.length
-      ? ` Natural attacks (use pc_attack): ${shape.attacks
-          .map((attack) => `${attack.name} +${attack.toHit} (${attack.damage} ${attack.type})`)
-          .join(", ")}.`
+    // Every attack with its reach, its rider dice and what its hit carries;
+    // a form whose block has none (a frog) says so.
+    const attacks = shape.attacks
+      ? shape.attacks.length
+        ? ` Natural attacks (use pc_attack): ${shape.attacks.map(attackSummary).join(", ")}${(shape.attacksPerTurn ?? 1) > 1 ? ` (${shape.attacksPerTurn} per Attack action)` : ""}.`
+        : " The form has no attack, and their own weapons merged into it."
       : "";
+    // A form that is no beast says what it is, and what it shrugs off
+    // (True Polymorph's fire elemental); the server applies both.
+    const kind = shape.type && shape.type !== "beast" ? ` (${shape.type})` : "";
+    const defenses = [shape.resist ? `resists ${shape.resist}` : "", shape.immune ? `immune to ${shape.immune}` : "", shape.vulnerable ? `vulnerable to ${shape.vulnerable}` : ""].filter(Boolean).join("; ");
     lines.push(
-      `  ${label} a ${shape.form}: ${shape.beastHp}/${shape.beastMaxHp} beast HP, AC ${shape.beastAc}${shape.speed !== undefined ? `, speed ${shape.speed} ft` : ""}.${stats}${attacks} Damage hits the beast pool first and their own hit points above are untouched until the form breaks. They fight with the beast's natural weapons and cannot cast spells${shape.kind === "polymorph" ? " or speak" : ""}.`,
+      `  ${label} a ${shape.form}${kind}: ${shape.beastHp}/${shape.beastMaxHp} beast HP, AC ${shape.beastAc}${shape.speed !== undefined ? `, speed ${shape.speed} ft` : ""}.${stats}${defenses ? ` The form ${defenses}.` : ""}${attacks} Damage hits the beast pool first and their own hit points above are untouched until the form breaks. They fight with the beast's natural weapons and cannot cast spells${shape.kind === "polymorph" ? " or speak" : ""}.`,
     );
   }
   if ((sheet.exhaustion ?? 0) > 0) {
@@ -661,13 +705,54 @@ export function describeSheet(
         : "none"
     } | Gold: ${sheet.gold}`,
   );
+  // What the hands hold and the body wears, on a sheet that says (issue
+  // #424): an attack with anything else draws it first, the turn's free
+  // object interaction.
+  if (wearingIsExplicit(sheet.equipment)) {
+    const worn = sheet.equipment.filter((item) => item.equipped === true).map((item) => item.name);
+    lines.push(`  Worn and in hand: ${worn.length ? worn.join(", ") : "nothing"} (everything else is packed away)`);
+  }
   if (sheet.background || sheet.alignment) {
     lines.push(`  Background: ${sheet.background || "unknown"} | Alignment: ${sheet.alignment || "unstated"}`);
   }
   if (sheet.backstory) {
-    lines.push(`  Backstory: ${sheet.backstory.slice(0, 400)}`);
+    // Whole: the builder promises the DM weaves it in, and a god, a rival or
+    // a lost sibling sits as often in its last lines as its first (issue
+    // #429: the first 400 characters of 2,000 used to be all the DM saw).
+    lines.push(`  Backstory: ${options.compact ? cutForRoom(sheet.backstory, COMPACT_TEXT_CHARS.backstory) : sheet.backstory}`);
   }
   return lines.join("\n");
+}
+
+// What a compact call keeps of the text the table wrote for the DM, and
+// what each notes list carries whole before its notes keep only their start.
+const COMPACT_TEXT_CHARS = { backstory: 400, note: 300 } as const;
+const NOTES_SHARE_CHARS = 4_000;
+
+// The start of a text cut at a word, saying it was cut, so the model never
+// takes the first lines for the whole.
+export function cutForRoom(text: string, cap: number): string {
+  if (text.length <= cap) {
+    return text;
+  }
+  return `${text.slice(0, cap).replace(/\s+\S*$/, "")}... (cut for room)`;
+}
+
+// Notes ride whole, in the order given (pinned first), until the list's
+// share is spent; past it, and in a compact call, each keeps its start. A
+// note used to be cut to 300 characters of the 2,000 its box takes, which
+// lost the secret at the end of a storyboard card or a long canon note.
+export function fitNoteBodies<T extends { body: string }>(notes: T[], compact: boolean): string[] {
+  let left = NOTES_SHARE_CHARS;
+  return notes.map((note) => {
+    if (compact) {
+      return cutForRoom(note.body, COMPACT_TEXT_CHARS.note);
+    }
+    const whole = note.body.length <= left;
+    const text = whole ? note.body : cutForRoom(note.body, Math.max(COMPACT_TEXT_CHARS.note, left));
+    left = Math.max(0, left - text.length);
+    return text;
+  });
 }
 
 export function buildGameStateBlock(state: DmGameState): string {
@@ -699,6 +784,9 @@ export function buildGameStateBlock(state: DmGameState): string {
   if (campaign.description) {
     sections.push(`Premise: ${campaign.description}`);
   }
+  // Why this party is together, when the table wrote it down: the setup hook
+  // and the lobby's shared backstory. Nothing at all when both are blank.
+  sections.push(...partyStoryPromptLines(partyStoryOf(campaign)));
   // The in-world date, time of day and season. Authoritative like everything
   // else in this block: the model narrates from it rather than inventing
   // "as evening fell" over a scene the clock says is mid-morning. Moved by
@@ -874,20 +962,31 @@ export function buildGameStateBlock(state: DmGameState): string {
       );
     }
     lines.push(
-      "Enemies (DM-SECRET numbers, never revealed to players; HP and AC are server-authoritative and change only through tool results: pc_attack and the spell tools for the party's blows, enemy_attack for theirs, damage_enemy only for harm that is neither an attack nor a spell):",
+      "Enemies (DM-SECRET numbers, never revealed to players; HP and AC are server-authoritative and change only through tool results: pc_attack and the spell tools for the party's blows, enemy_attack for theirs, apply_damage only for harm that is neither an attack nor a spell):",
     );
     for (const enemy of encounter.enemies) {
       if (enemy.status !== "alive") {
         lines.push(`- ${enemy.name} [enemyId=${enemy.enemyId}] ${enemy.status.toUpperCase()}`);
         continue;
       }
-      const parts = [
-        `- ${enemy.name} [enemyId=${enemy.enemyId}] HP ${enemy.hp} AC ${enemy.ac}`,
-        ...enemy.attacks.map(
-          (attack) => `${attack.name} +${attack.toHit} (${attack.damage} ${attack.type})`,
-        ),
-        ...enemy.traits,
-      ];
+      // A small model told the players a thug had "barely three hit points
+      // left": on the short rules it reads how hurt each enemy looks and
+      // what its attacks are called, never a number it could repeat.
+      const [current, max] = enemy.hp.split("/").map(Number);
+      const parts = state.ruleContext?.brief
+        ? [
+            `- ${enemy.name} [enemyId=${enemy.enemyId}] ${healthState(current, max)}`,
+            ...(enemy.attacks.length ? [`attacks: ${enemy.attacks.map((attack) => `${attack.name}${attack.bonusAction ? " (bonus action)" : ""}`).join(", ")}`] : []),
+            ...enemy.traits,
+          ]
+        : [
+            `- ${enemy.name} [enemyId=${enemy.enemyId}] HP ${enemy.hp} AC ${enemy.ac}`,
+            ...enemy.attacks.map(
+              // A bonus action's attack is made beside the action's, by name.
+              (attack) => `${attack.name} +${attack.toHit} (${attack.damage} ${attack.type})${attack.bonusAction ? " [bonus action]" : ""}`,
+            ),
+            ...enemy.traits,
+          ];
       if (enemy.resist) {
         parts.push(`resists: ${enemy.resist}`);
       }
@@ -939,24 +1038,33 @@ export function buildGameStateBlock(state: DmGameState): string {
   if (state.houseRulesBlock) {
     moment.push(state.houseRulesBlock);
   }
+  // In the moment: a drop or a pick-up changes it from one turn to the next.
+  if (state.groundItems?.length) {
+    moment.push(
+      `On the ground (dropped, not lost; anyone within 5 ft takes it with handle_item pick_up, by name or [id]):\n${state.groundItems.map((line) => `- ${line}`).join("\n")}`,
+    );
+  }
   if (state.loreBlock) {
     moment.push(state.loreBlock);
   }
+  const compact = Boolean(state.ruleContext);
   if (state.publicNotes?.length) {
+    const notes = state.publicNotes.slice(0, 10);
+    const bodies = fitNoteBodies(notes, compact);
     sections.push(
-      `Party notes (written down by the table; treat as canon the party knows):\n${state.publicNotes
-        .slice(0, 10)
+      `Party notes (written down by the table; treat as canon the party knows):\n${notes
         .map(
-          (note) =>
-            `- ${note.pinned ? "[pinned] " : ""}${note.title ? `${note.title}: ` : ""}${note.body.slice(0, 300)}`,
+          (note, index) =>
+            `- ${note.pinned ? "[pinned] " : ""}${note.title ? `${note.title}: ` : ""}${bodies[index]}`,
         )
         .join("\n")}`,
     );
   }
   if (state.dmPrepNotes?.length) {
+    const bodies = fitNoteBodies(state.dmPrepNotes, compact);
     sections.push(
       `DM prep notes (secret; the table's own preparation for you: let them shape what happens, never read them out or hint that they exist):\n${state.dmPrepNotes
-        .map((note) => `- ${note.title ? `${note.title}: ` : ""}${note.body.slice(0, 300)}`)
+        .map((note, index) => `- ${note.title ? `${note.title}: ` : ""}${bodies[index]}`)
         .join("\n")}`,
     );
   }
@@ -1060,11 +1168,11 @@ export function buildGameStateBlock(state: DmGameState): string {
         const base = describeSheet(
           sheet,
           sheet.isCompanion
-            ? `nobody: AI companion under your control (${sheet.companionKind === "guest" ? "scene-scoped guest ally" : "party member"}; personality: ${sheet.personality || "plain and steady"})`
+            ? `nobody: AI companion under your control (${sheet.companionKind === "guest" ? "scene-scoped guest ally" : "party member"}; personality: ${sheet.personality || "plain and steady"})${companionCommandNote(state.campaign, sheet, usernamesById)}`
             : usernamesById.get(sheet.userId) ?? "unknown",
           !sheet.isCompanion && physicalDiceUsers.has(sheet.userId),
           // Optional all the way down: test doubles build partial campaigns.
-          { encumbrance: state.campaign.gameSettings?.variantRules?.encumbrance ?? false, ownerUserId: state.campaign.ownerUserId, authors: spellAuthorsFor(state.campaign) },
+          { encumbrance: state.campaign.gameSettings?.variantRules?.encumbrance ?? false, ownerUserId: state.campaign.ownerUserId, authors: spellAuthorsFor(state.campaign), compact: Boolean(state.ruleContext) },
         );
         const events = state.recentEventsByCharacter?.get(sheet.id);
         const between = state.betweenBySheet?.get(sheet.id);
@@ -1213,7 +1321,7 @@ export const requestRollTool = {
           type: "string",
           enum: [...ADVANTAGE_SOURCES],
           description:
-            "Where the advantage or disadvantage comes from. Only 'other', a circumstance of the fiction the server cannot see (named in advantageReason), counts: the server applies conditions, cover, light, range, Help, flanking, spells, Inspiration and features itself.",
+            "Where the advantage or disadvantage comes from; only 'other' counts.",
         },
         advantageReason: {
           type: "string",
@@ -1223,7 +1331,7 @@ export const requestRollTool = {
         targetEnemyId: {
           type: "string",
           description:
-            "damage only, in combat, from someone with no sheet (an NPC ally who was never recruited): the enemy this damage strikes, exact enemyId from GAME STATE. The server applies the rolled total to that enemy automatically and reports its new state; never follow up with damage_enemy. A party character's damage goes through pc_attack or the spell tools, and the server refuses it here.",
+            "damage only, in combat, from someone with no sheet (an NPC ally who was never recruited): the enemy this damage strikes, exact enemyId from GAME STATE. The server applies the rolled total to that enemy automatically and reports its new state; never follow up with apply_damage. A party character's damage goes through pc_attack or the spell tools, and the server refuses it here.",
         },
         reason: {
           type: "string",
@@ -1283,12 +1391,16 @@ export const requestRollTool = {
 
 // Gives the floor to specific characters: other players are blocked from
 // acting until one of the named players responds (or the owner releases it).
+// When to call it is said here as well as in the core rules: the model reads
+// a tool's own words where it chooses the tool, and with the trigger only in
+// the core rules a live table's spotlights fell to a third. It rides in the
+// first sentence, the one a compact call keeps (src/lib/dm/tool-profiles.ts).
 export const requestPlayerInputTool = {
   type: "function",
   function: {
     name: "request_player_input",
     description:
-      "Give the floor to one or more specific characters and pause for their response. Narrate first, then call it.",
+      "Give the floor to specific characters and pause for their response whenever your reply ends with an NPC speaking to them or a decision that is theirs, not the whole party's. Narrate first, then call it. Never answer for them instead.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -1480,6 +1592,10 @@ export function buildDmMessages(
   history: CampaignMessage[],
 ): ChatMessage[] {
   const sheetsById = new Map(state.sheets.map((sheet) => [sheet.id, sheet]));
+  // A small model reads the server's "[roll:<id>]" markers in its own past
+  // narration as something to write: Qwen3.5 9B wrote "[roll:pc_attack]" in
+  // place of the attack. The short rules leave them out of the transcript.
+  const dmText = (text: string) => (state.ruleContext?.brief ? text.replace(/\[roll:[0-9a-f-]{36}\]\s*/g, "") : text);
 
   const rendered = history.map((message) => {
     const name = message.characterId
@@ -1487,7 +1603,7 @@ export function buildDmMessages(
       : "Unknown";
     const content =
       message.authorType === "dm"
-        ? message.content
+        ? dmText(message.content)
         : message.authorType === "system"
           ? message.content.startsWith(LEAD_NOTE_PREFIX)
             ? `[Authoritative direction from the party lead; weave it into the story now] ${message.content.slice(LEAD_NOTE_PREFIX.length)}`
@@ -1533,15 +1649,11 @@ export function buildDmMessages(
       relationshipRules(state.campaign.gameSettings.romance !== "off"),
     );
   }
-  const systemParts = [buildDmSystem(state.campaign, settingsRules, state.ruleContext ?? null)];
-  if (state.encounter) {
-    systemParts.push(encounterRulesText(tracksAmmunition(state.campaign), state.ruleContext ?? null));
-  }
-  if (state.pendingPlayerWhispers?.length) {
-    systemParts.push(PLAYER_WHISPER_RULES);
-  }
+  const dmSystem = buildDmSystem(state.campaign, settingsRules, state.ruleContext ?? null);
+  const fightRules = state.encounter ? encounterRulesText(tracksAmmunition(state.campaign), state.ruleContext ?? null) : "";
+  const whisperRules = state.pendingPlayerWhispers?.length ? PLAYER_WHISPER_RULES : "";
   const gameStateBlock = buildGameStateBlock(state);
-  systemParts.push(gameStateBlock);
+  const systemParts = [dmSystem, fightRules, whisperRules, gameStateBlock].filter(Boolean);
 
   // The transcript takes its share of the window plus what the rules, the
   // game state and the director's note left of theirs, up to a ceiling
@@ -1697,10 +1809,26 @@ export function buildDmMessages(
     ],
   };
 
-  const system = systemParts.join("\n\n");
-  const { standing, moment } = state.momentAfterHistory ? splitAtMoment(system) : { standing: system, moment: "" };
+  // The fight's rules hold for every turn of the fight, so they stay with
+  // the rules in the system message (stateAfterRules).
+  const turnAt = state.stateAfterRules ? dmSystem.indexOf(THIS_TURN_HEADING) : -1;
+  let rules = systemParts.join("\n\n");
+  let table = "";
+  if (turnAt >= 0) {
+    rules = [dmSystem.slice(0, turnAt).trimEnd(), fightRules].filter(Boolean).join("\n\n");
+    table = [dmSystem.slice(turnAt), whisperRules, gameStateBlock].filter(Boolean).join("\n\n");
+  }
+  let moment = "";
+  if (state.momentAfterHistory) {
+    const split = splitAtMoment(table || rules);
+    if (table) table = split.standing;
+    else rules = split.standing;
+    moment = split.moment;
+  }
+  const historyStart = table ? 2 : 1;
   const messages: ChatMessage[] = [
-    { role: "system", content: standing },
+    { role: "system", content: rules },
+    ...(table ? [{ role: "user" as const, content: table }] : []),
     ...historyMessages,
     // The state, then the instruction to take the turn, so the newest player
     // line is still what the model resolves (src/lib/prompt-boundary.ts).
@@ -1711,7 +1839,7 @@ export function buildDmMessages(
       ? [{ role: "user" as const, content: state.directorBlock }]
       : []),
   ];
-  state.contextTrace.shape = { historyStart: 1, historyEnd: 1 + historyMessages.length, promptMessages: messages.length };
+  state.contextTrace.shape = { historyStart, historyEnd: historyStart + historyMessages.length, promptMessages: messages.length };
   state.contextTrace.historyEvicted = fitted.dropped;
   return messages;
 }

@@ -3,6 +3,7 @@ import type { OptionField } from "@/lib/addons/manifest";
 import type { FxEvent } from "@/lib/battlemap/fx-plan";
 import type { TokenIntent } from "@/lib/battlemap/intent";
 import type { PlayerMapView } from "@/lib/battlemap/view-types";
+import type { Gender } from "@/lib/gender";
 
 // The board view contract: what the table page posts into an addon's
 // sandboxed frame, and what it accepts back (docs/addons/extension-points.md,
@@ -49,7 +50,7 @@ export type BoardSnapshotToken = {
   // stat block and challenge rating, or a character's lineage and class.
   // Null when it is neither (a prop, a bystander the DM put down by hand).
   creature: { type: string; slug: string; cr: number } | null;
-  character: { race: string; class: string } | null;
+  character: { race: string; class: string; gender?: Gender } | null;
   // Auras around it, by reach in feet and what they do.
   auras: Array<{ radiusFeet: number; tone: string }>;
 };
@@ -84,6 +85,9 @@ export type BoardSnapshot = {
   board: "fight" | "scene";
   myTokenId: string | null;
   reachable: number[];
+  // The square a first tap aimed this viewer's walk at, or null: a second
+  // tap there makes the walk (the flat board holds its ruler on it).
+  moveAim: { x: number; y: number } | null;
   // Whether the map has a picture under it; ask for it as the file "backdrop".
   hasBackdrop: boolean;
   // What this addon's own generator left on the map, or null.
@@ -133,6 +137,7 @@ export function boardSnapshot(
     appearance: BoardSnapshot["appearance"];
     looks?: Map<string, BoardLook>;
     intents?: TokenIntent[] | null;
+    moveAim?: { x: number; y: number } | null;
     assetsUrl?: string;
     // The view's option fields and what this device chose for them.
     viewOptions?: { fields: OptionField[]; values: unknown };
@@ -178,6 +183,7 @@ export function boardSnapshot(
     board: view.board,
     myTokenId: view.myTokenId,
     reachable: view.reachable,
+    moveAim: options.moveAim ?? null,
     hasBackdrop: Boolean(view.backdrop),
     view: own ? { data: own.data, files: own.files.map(({ name, type, bytes }) => ({ name, type, bytes })) } : null,
     assetsUrl: options.assetsUrl ?? `/api/addons/${addonId}/assets/`,
@@ -234,11 +240,16 @@ export function boardFx(events: FxEvent[]): BoardFx[] {
 
 // What the page sends the frame. Effects, pings and the camera are moments:
 // each arrives once, as it happens.
+export type CameraControl = "zoom-in" | "zoom-out" | "fit" | "left" | "right" | "up" | "down";
+export type ViewCameraState = { x: number; y: number; zoom: number };
+
 export type HostMessage =
-  | { odm: number; type: "snapshot"; snapshot: BoardSnapshot }
+  | { odm: number; type: "snapshot"; snapshot: BoardSnapshot; sessionLayout?: "stage" }
+  | { odm: number; type: "scene"; genre: string | null; appearance: BoardSnapshot["appearance"]; options: BoardSnapshot["options"]; assetsUrl: string }
   | { odm: number; type: "fx"; events: BoardFx[] }
   | { odm: number; type: "ping"; x: number; y: number; focus: boolean; at: number }
   | { odm: number; type: "camera"; mode: "pull" | "lock" | "free"; x: number | null; y: number | null; zoom: number | null }
+  | { odm: number; type: "camera-control"; action: CameraControl }
   | { odm: number; type: "file"; requestId: string; ok: true; name: string; mime: string; bytes: ArrayBuffer }
   | { odm: number; type: "file"; requestId: string; ok: false; name: string; error: string };
 
@@ -248,6 +259,7 @@ export type HostMessageBody = HostMessage extends infer T ? (T extends unknown ?
 // What the frame may send the page.
 export type ViewMessage =
   | { type: "ready" }
+  | ({ type: "camera-state" } & ViewCameraState)
   | { type: "tile"; x: number; y: number }
   | { type: "token"; tokenId: string }
   | { type: "hover"; x: number; y: number }
@@ -289,6 +301,10 @@ export function readViewMessage(raw: unknown): ViewMessage | null {
   switch (message.type) {
     case "ready":
       return { type: "ready" };
+    case "camera-state":
+      return [message.x, message.y, message.zoom].every(value => typeof value === "number" && Number.isFinite(value)) && (message.zoom as number) >= 0.25 && (message.zoom as number) <= 8
+        ? { type: "camera-state", x: message.x as number, y: message.y as number, zoom: message.zoom as number }
+        : null;
     case "tile": {
       const x = int(message.x);
       const y = int(message.y);

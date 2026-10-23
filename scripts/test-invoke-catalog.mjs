@@ -21,6 +21,9 @@ const read = (relative) => readFileSync(path.join(root, relative), "utf8");
 
 const { ADJUDICATIONS, ADJUDICATION_NAMES, adjudication, checkArgs, consoleAdjudications } =
   await import("../src/lib/dm/invoke-catalog.ts");
+// Names retired into a merged tool (issue #471): still engine actions, never
+// offered, so neither a form of their own nor a tool the scan should count.
+const { RETIRED_TOOLS } = await import("../src/lib/dm/tool-merge-logic.ts");
 
 let passed = 0;
 function test(name, fn) {
@@ -69,6 +72,7 @@ const TOOL_SOURCES = [
   "src/lib/dm/scene-tools.ts",
   "src/lib/dm/ambience-tools.ts",
   "src/lib/dm/mount-tools.ts",
+  "src/lib/dm/gear-tool.ts",
   "src/lib/dm/resource-tools.ts",
   "src/lib/dm/resource-tool-defs.ts",
   "src/lib/dm/companion-tools.ts",
@@ -83,13 +87,16 @@ const TOOL_SOURCES = [
   "src/lib/dm/settlement-tools.ts",
   "src/lib/dm/split-damage.ts",
   "src/lib/dm/explore-tools.ts",
+  "src/lib/dm/merged-tool-defs.ts",
   "src/lib/image-tool.ts",
 ];
 
 const aiToolNames = new Set();
 for (const source of TOOL_SOURCES) {
   for (const name of toolNamesIn(source)) {
-    aiToolNames.add(name);
+    if (!Object.hasOwn(RETIRED_TOOLS, name)) {
+      aiToolNames.add(name);
+    }
   }
 }
 
@@ -214,6 +221,17 @@ test("every catalog entry reaches a handler through the façade", () => {
   const dispatchable = new Set([...routedBySet, ...cases]);
   const orphans = ADJUDICATION_NAMES.filter((name) => !dispatchable.has(name)).sort();
   assert.deepEqual(orphans, [], `catalog entries with no dispatch arm: ${orphans.join(", ")}`);
+});
+
+test("every retired name still reaches its handler, and the tool that took its place has a form", () => {
+  const cases = new Set(
+    [...read("src/lib/dm/invoke-dispatch.ts").matchAll(/case "([a-z_]+)":/g)].map((match) => match[1]),
+  );
+  for (const [retired, merged] of Object.entries(RETIRED_TOOLS)) {
+    assert.ok(!ADJUDICATION_NAMES.includes(retired), `${retired} is retired and offers no form of its own`);
+    assert.ok(ADJUDICATION_NAMES.includes(merged), `${merged}, which took ${retired}'s place, has a form`);
+    assert.ok(routedBySet.has(retired) || cases.has(retired), `${retired} still has a dispatch arm`);
+  }
 });
 
 // ---- every form sends the fields its handler reads ----
@@ -579,8 +597,11 @@ const OMITTED_ON_PURPOSE = {
   // several in activities, each with the same fields the form offers.
   downtime: ["activities"],
   // A person's advantage stands as their ruling; only the AI names where it
-  // comes from (src/lib/dm/pc-attack-options.ts claimedAdvantage).
-  pc_attack: ["advantageSource"],
+  // comes from (src/lib/dm/pc-attack-options.ts claimedAdvantage). A person
+  // walks the token on the board and ends the turn from the initiative bar;
+  // approach and endTurn carry the move and the end a player declared around
+  // their attack on the AI's one call (src/lib/dm/pc-attack-approach.ts).
+  pc_attack: ["advantageSource", "approach", "endTurn"],
   enemy_attack: ["advantageSource"],
   request_roll: ["advantageSource"],
 };
@@ -743,11 +764,12 @@ test("a condition pick takes a story condition and a damage type pick a homebrew
 
 test("multi-target forms pick creatures instead of typing ids (U:UD5)", () => {
   assert.equal(adjudication("aoe_damage").fields.find((field) => field.name === "enemyIds").kind, "enemies");
-  assert.equal(adjudication("split_damage").fields.find((field) => field.name === "targets").kind, "shares");
-  for (const name of ["move_token", "teleport_token", "set_movement"]) {
+  // The damage tray is apply_damage's targets now (issue #471).
+  assert.equal(adjudication("apply_damage").fields.find((field) => field.name === "targets").kind, "shares");
+  for (const name of ["move_token", "set_movement"]) {
     assert.equal(adjudication(name).fields.find((field) => field.name === "tokenName").kind, "combatant", name);
   }
-  const split = adjudication("split_damage");
+  const split = adjudication("apply_damage");
   assert.equal(checkArgs(split, { amount: 9, targets: [{ enemyId: "e1", share: "half" }] }), null);
   assert.match(checkArgs(split, { amount: 9, targets: ["e1 half"] }), /list of rows/);
   const rest = adjudication("take_rest");

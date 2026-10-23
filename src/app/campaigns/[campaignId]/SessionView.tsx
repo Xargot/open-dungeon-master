@@ -1,6 +1,7 @@
 "use client";
 
 import { initiativeCharacter, selectedCharacter } from "@/lib/player-characters";
+import { useThemePrefs } from "@/lib/theme-mode";
 import { LevelUpMoment, LootMoment, MomentVeil, RestMoment, TravelBanner } from "@/app/campaigns/[campaignId]/Moments";
 import { CoordinationPanel } from "@/app/campaigns/[campaignId]/CoordinationPanel";
 import { haptic, useEffectsRoot, useTurnChime } from "@/lib/effects-mode";
@@ -10,6 +11,8 @@ import { SceneTitle } from "@/components/SceneTitle";
 import { askConcentrationSwap, isConcentrationQuestion } from "@/components/concentration-prompt";
 import { HandoutStage } from "@/components/HandoutStage";
 import { SafetyPause } from "@/app/campaigns/[campaignId]/SafetyPause";
+import { TableBreakBanner, type TableBreakControl } from "@/app/campaigns/[campaignId]/TableBreakBanner";
+import { mayResumeBreak } from "@/lib/dm/table-break-logic";
 import type { Speaker } from "@/lib/dm/speech";
 import type { MapLabel } from "@/lib/battlemap/scene";
 
@@ -23,6 +26,7 @@ const EMPTY_IDS: string[] = [];
 
 import {
   type FormEvent,
+  type CSSProperties,
   lazy,
   Suspense,
   useCallback,
@@ -60,7 +64,10 @@ import {
   useSessionTabs,
   type PanelTab,
 } from "@/app/campaigns/[campaignId]/SessionTabs";
+import { browseWares, type MarketRequest } from "@/lib/dm/table-tabs";
 import { SessionChatColumn } from "@/app/campaigns/[campaignId]/SessionChatColumn";
+import { AddonViewSwitch, boardViewKey, useBoardView, useBoardViewOptions } from "@/app/campaigns/[campaignId]/AddonViewSwitch";
+import { AddonBoardView } from "@/app/campaigns/[campaignId]/AddonBoardView";
 import { SessionHeader } from "@/app/campaigns/[campaignId]/SessionHeader";
 import { SessionBanner, bannerButtonClass } from "@/app/campaigns/[campaignId]/SessionBanner";
 import { isPrimaryDm } from "@/lib/dm/viewer";
@@ -76,6 +83,7 @@ import {
   useNarrationReplay,
   useNarrationStatus,
 } from "@/app/campaigns/[campaignId]/NarrationFailureBanner";
+import { AudioWaitingBanner } from "@/app/campaigns/[campaignId]/AudioWaitingBanner";
 import { turnFromEncounter, turnHudBudget } from "@/lib/battlemap/hand-table";
 
 import { TabPane, useDocked } from "@/app/campaigns/[campaignId]/SidePanel";
@@ -308,9 +316,35 @@ export function SessionView({
   const narrationStatus = useNarrationStatus(narration, state.narrationStatus);
   const replayNarration = useNarrationReplay(campaign?.id ?? "", narration, state.narrationAudio);
   const messageIds = useMemo(() => state.messages.map((message) => message.id), [state.messages]);
+  // Sound the browser is holding until this tab is clicked, named above the
+  // composer so a seat that only watches knows to click (AudioWaitingBanner).
+  // A phone on another view has no composer on screen; it gets the same
+  // banner over the bottom tabs.
+  const ttsOn = Boolean(campaign?.gameSettings?.ttsEnabled);
+  const narrationHeld = ttsOn && !narration.muted ? narration.held : 0;
+  const { unlock: unlockNarration } = narration;
+  const { unlock: unlockAmbience, waiting: ambienceWaiting } = ambience;
+  const audioWaiting = useMemo(
+    () => (
+      <AudioWaitingBanner
+        narrationHeld={narrationHeld}
+        ambienceWaiting={ambienceWaiting}
+        onListen={() => {
+          unlockNarration();
+          unlockAmbience();
+        }}
+      />
+    ),
+    [narrationHeld, ambienceWaiting, unlockNarration, unlockAmbience],
+  );
   const narrationNotice = useMemo(
-    () => <NarrationFailureBanner messageIds={messageIds} status={narrationStatus} onRetry={replayNarration} />,
-    [messageIds, narrationStatus, replayNarration],
+    () => (
+      <>
+        {audioWaiting}
+        <NarrationFailureBanner messageIds={messageIds} status={narrationStatus} onRetry={replayNarration} />
+      </>
+    ),
+    [audioWaiting, messageIds, narrationStatus, replayNarration],
   );
   // Chime on new private messages (side chats + DM whispers). The loaded
   // flags keep the page-load backlog silent.
@@ -334,16 +368,28 @@ export function SessionView({
   // than a map in the side panel. The header switch shows the story there
   // instead; the choice is the reader's, kept per browser.
   const docked = useDocked();
+  const { active: addonBoardView, views: addonViews, choose: chooseBoardView } = useBoardView(state.battleMap?.addonView?.addonId);
+  const [addonOptions, setAddonOption] = useBoardViewOptions();
+  const sessionLayout = docked && addonBoardView?.sessionLayout === "stage";
+  const { mode: themeMode } = useThemePrefs();
+  const sessionTheme = sessionLayout && themeMode === "dark" ? addonBoardView?.sessionTheme : undefined;
+  const [addonStageView, setAddonStageView] = useState<"board" | "story">("board");
+  const restoreNativeView = useCallback(() => chooseBoardView(""), [chooseBoardView]);
   const [stageView, setStageView] = useState<"board" | "story">(() =>
     typeof window !== "undefined" && window.localStorage.getItem("odm:stage-view") === "story" ? "story" : "board",
   );
   const toggleStage = useCallback(() => {
+    if (sessionLayout) {
+      setAddonStageView((current) => current === "board" ? "story" : "board");
+      return;
+    }
     setStageView((current) => {
       const next = current === "board" ? "story" : "board";
       window.localStorage.setItem("odm:stage-view", next);
       return next;
     });
-  }, []);
+  }, [sessionLayout]);
+  const shownStageView = sessionLayout ? addonStageView : stageView;
   const { panelTab, setPanelTab, mobileView, setMobileView } = useSessionTabs({
     chatTarget,
     battleMap: state.battleMap,
@@ -396,6 +442,39 @@ export function SessionView({
       isAdmin: Boolean((me as { isAdmin?: boolean } | null)?.isAdmin),
     }),
     [campaign?.id, campaign?.gameSettings?.ambienceAuto, steersStory, me],
+  );
+  // A table break (TableBreakBanner.tsx): any seat may call one on a table
+  // that is playing; the one who called it, the lead or the DM ends it.
+  const tableBreak = state.tableBreak;
+  const breakCampaignId = campaign?.id ?? "";
+  const mayResumeTable = Boolean(tableBreak && me && mayResumeBreak(tableBreak, { userId: me.id, isLead, isDm }));
+  const sendBreak = useCallback(
+    async (method: "POST" | "DELETE") => {
+      const response = await fetch(`/api/campaigns/${breakCampaignId}/table-break`, { method }).catch(() => null);
+      if (!response?.ok) {
+        const body = (await response?.json().catch(() => null)) as { error?: string } | null;
+        setError(body?.error || (method === "POST" ? "Could not pause the table." : "Could not resume the table."));
+      }
+    },
+    [breakCampaignId],
+  );
+  const resumeTable = useCallback(() => sendBreak("DELETE"), [sendBreak]);
+  // A break is for a table with someone else at it (another person or an
+  // agent playing a seat); alone, closing the app is the pause. A muted seat
+  // cannot call one (the route checks its voice), so it is not offered one.
+  const breakMembers = state.members;
+  const breakOffered = breakMembers.length > 1 && !breakMembers.some((member) => member.userId === me?.id && member.muted);
+  const breakControl = useMemo<TableBreakControl | undefined>(
+    () =>
+      campaign?.status === "active" && (tableBreak !== null || breakOffered)
+        ? {
+            paused: tableBreak !== null,
+            mayResume: mayResumeTable,
+            onPause: () => void sendBreak("POST"),
+            onResume: () => void sendBreak("DELETE"),
+          }
+        : undefined,
+    [campaign?.status, tableBreak, breakOffered, mayResumeTable, sendBreak],
   );
   if (isDm && !seenDmSeat) {
     setSeenDmSeat(true);
@@ -693,6 +772,18 @@ export function SessionView({
     },
     [openTab, setMobileView],
   );
+  // A shop's Browse wares in the chat: the Market on that shop, in the side
+  // panel at a desk and in place of the table on a phone.
+  const [marketRequest, setMarketRequest] = useState<MarketRequest | null>(null);
+  const browseShop = useCallback(
+    (shopId: string) => {
+      const target = browseWares(shopId, Date.now());
+      setMarketRequest(target.request);
+      openTab(target.tab);
+      setMobileView(target.mobileView);
+    },
+    [openTab, setMobileView],
+  );
   const bumpPins = useCallback(() => setPinsVersion((count) => count + 1), []);
   const openLoreCheck = useCallback(
     (message: CampaignMessage, selection: string) => setLoreCheck({ message, selection }),
@@ -724,7 +815,9 @@ export function SessionView({
   // stage holds the board, the Battle tab shows the party, so the maps
   // step opens the Map tab instead.
   const hasBattleMap = Boolean(state.battleMap);
-  const boardStaged = docked && stageView === "board" && hasBattleMap && !battlePane;
+  // Keep the native Story board under its existing side-panel owner.
+  const boardInPanel = sessionLayout && stageView === "story" && hasBattleMap && !battlePane;
+  const boardStaged = docked && (sessionLayout || stageView === "board") && hasBattleMap && !battlePane;
   const boardInTab = hasBattleMap && !boardStaged;
   const prepareTourStep = useCallback(
     (name: string) => {
@@ -786,7 +879,7 @@ export function SessionView({
   }
 
   const storyDue = storyCadence.level !== "quiet";
-  const fightStaged = boardStaged;
+  const fightStaged = boardStaged || sessionLayout;
   // Two copies of the scroll: the fight stage's has no composer (the desk
   // is right under the board); the enlarged board's keeps it (the dialog
   // covers the desk).
@@ -888,6 +981,7 @@ export function SessionView({
     worldVersion: state.worldVersion,
     loreVersion: state.loreVersion,
     shopsVersion: state.shopsVersion,
+    marketRequest,
     coins: state.coins,
     activeSheetId: state.activeSheetId,
     questsVersion: state.questsVersion,
@@ -895,11 +989,13 @@ export function SessionView({
     relationshipsEnabled,
     beats: state.beats,
     tabletopChronicle: chronicleDesk ?? undefined,
-    stageBoard: fightStaged,
+    stageBoard: fightStaged && !battlePane && !boardInPanel,
   } satisfies Omit<SidePanelRouterProps, "tab" | "visible" | "onOpenTab">;
 
   return (
-    <main className="cine-stage flex h-dvh flex-col">
+    <main className="cine-stage flex h-dvh flex-col" data-session-view={sessionLayout ? shownStageView : undefined} data-side-board={boardInPanel ? "" : undefined}
+      data-addon-theme={sessionTheme ? "" : undefined}
+      style={sessionTheme ? { "--session-surface": sessionTheme.surface, "--session-accent": sessionTheme.accent } as CSSProperties : undefined}>
       {/* The cinematic frame ("ODM World Concepts" 3b): the scene's painting
           behind everything, the party down the left, the turn order along
           the top, the last roll as a pill. CinematicParts.tsx. */}
@@ -926,8 +1022,9 @@ export function SessionView({
         ambience={ambience}
         sound={sound}
         onHelp={openHelp}
-        stage={state.battleMap && docked && !battlePane ? { on: stageView === "board", onToggle: toggleStage } : undefined}
-        layoutSeat={layoutSeat}
+        stage={sessionLayout || (state.battleMap && docked && !battlePane) ? { on: shownStageView === "board", onToggle: toggleStage } : undefined}
+        layoutSeat={sessionLayout ? undefined : layoutSeat}
+        tableBreak={breakControl}
         ribbon={
           state.encounter?.status === "active" ? (
             <InitiativeRibbon
@@ -940,14 +1037,22 @@ export function SessionView({
         }
       />
 
+      {docked && ((!state.battleMap && addonViews.some((view) => view.sessionLayout)) || (sessionLayout && shownStageView === "story")) ? (
+        <div className="relative px-3 py-1">
+          <AddonViewSwitch views={addonViews.filter((view) => state.battleMap || view.sessionLayout)} value={addonBoardView ? boardViewKey(addonBoardView) : ""} onChange={chooseBoardView} stored={addonOptions} onOption={setAddonOption} />
+        </div>
+      ) : null}
+
       <TableRow
         seat={layoutSeat}
-        active={arranged}
+        active={arranged && !sessionLayout}
+        presentation={sessionLayout ? "stage" : undefined}
         tabs={panelTabs}
         panes={[
           {
             id: "rail",
-            node: fightStaged ? null : (
+            available: !fightStaged || sessionLayout,
+            node: fightStaged && !sessionLayout ? null : (
               <PartyRail
                 sheets={sheets}
                 meUserId={me.id}
@@ -961,12 +1066,15 @@ export function SessionView({
             id: "table",
             node: (
               <SessionChatColumn
+                keepTranscript={sessionLayout}
+                showTranscript={sessionLayout && shownStageView === "story"}
                 stage={
-                  fightStaged && state.battleMap ? (
+                  fightStaged ? (
                     <div className="cine-fight">
                       {chronicle}
                       {chronicle ? <ChronicleSplitter /> : null}
-                      <div className="cine-fight-board cine-board-frame">
+                      <div className="cine-fight-board cine-board-frame" hidden={sessionLayout && (shownStageView === "story" || battlePane || boardInPanel)}>
+                        {state.battleMap && !battlePane && !boardInPanel ? (
                         <Suspense fallback={<PanelLoading />}>
                         <BattleMapPanel
                           campaignId={campaign.id}
@@ -981,7 +1089,9 @@ export function SessionView({
                             // The engine's count, the one the Hand reads
                             // (src/lib/battlemap/hand-table.ts): a spent reaction
                             // lives in reactionsUsed, not the turn budget.
-                            actingSheet && !actingSheet.isCompanion && state.encounter
+                            // A companion only on its own turn, when this
+                            // player commands it (player-characters.ts).
+                            actingSheet && (!actingSheet.isCompanion || actingSheet.id === turnSheet?.id) && state.encounter
                               ? turnHudBudget(
                                   turnFromEncounter(state.encounter, actingSheet, {
                                     myTurn: state.encounter.turn?.ownerId === actingSheet.id,
@@ -1007,6 +1117,17 @@ export function SessionView({
                           visible
                         />
                         </Suspense>
+                        ) : !state.battleMap && sessionLayout && addonBoardView ? (
+                          <AddonBoardView
+                            key={boardViewKey(addonBoardView)}
+                            view={null}
+                            boardView={addonBoardView}
+                            canDirect={caps.adjudicates}
+                            genre={campaign.gameSettings?.genre ?? null}
+                            viewOptions={addonOptions[boardViewKey(addonBoardView)]}
+                            onFailure={restoreNativeView}
+                          />
+                        ) : null}
                       </div>
                     </div>
                   ) : undefined
@@ -1025,6 +1146,7 @@ export function SessionView({
                 onError={setError}
                 onLoreCheck={openLoreCheck}
                 onRenarrate={setRenarrate}
+                onBrowseShop={browseShop}
                 onPinned={bumpPins}
               >
                 {needsCharacter ? (
@@ -1058,6 +1180,8 @@ export function SessionView({
                     campaignId={campaign.id}
                     trackAmmo={campaign.gameSettings?.variantRules?.ammunition ?? false}
                     edges={state.battleMap?.edges}
+                    drops={state.battleMap?.drops}
+                    mounts={state.battleMap?.mounts}
                     sheets={sheets}
                     meUserId={me.id}
                     activeSheetId={state.activeSheetId}
@@ -1076,6 +1200,7 @@ export function SessionView({
                     pendingRolls={pendingRolls}
                     members={state.members}
                     floor={floor}
+                    tableWait={state.tableWait}
                     spotlighted={gate.spotlighted}
                     heldSpotlightNames={gate.heldSpotlightNames}
                     encounter={state.encounter}
@@ -1106,6 +1231,8 @@ export function SessionView({
             node: (
               <SidePanel
                 {...routerProps}
+                boardOnStage={boardInPanel}
+                preservePartyState={sessionLayout}
                 tabs={railTabs}
                 tab={railTab}
                 onTabChange={openTab}
@@ -1128,6 +1255,9 @@ export function SessionView({
 
       <RollToast latestRoll={state.latestRoll} sheets={sheets} />
 
+      {mobileView !== "chat" && (narrationHeld > 0 || ambienceWaiting) ? (
+        <div className="px-2 pb-1 lg:hidden">{audioWaiting}</div>
+      ) : null}
       <BottomTabBar
         tabs={panelTabs}
         mobileView={mobileView}
@@ -1142,6 +1272,7 @@ export function SessionView({
 
       {dice3d ? <DiceOverlay latestRoll={state.latestRoll} enabled /> : null}
       <SceneTitle card={state.titleCard} onShown={markTitleCardShown} />
+      <TableBreakBanner tableBreak={tableBreak} meUserId={me.id} mayResume={mayResumeTable} onResume={resumeTable} />
       <SafetyPause campaignId={campaign.id} paused={state.safetyPause !== null} steersStory={steersStory} />
       <HandoutStage
         campaignId={campaign.id}
@@ -1249,6 +1380,8 @@ export function SessionView({
             targetLevel={myLevelUp.level}
             multiclassAllowed={campaign.gameSettings?.multiclassingEnabled ?? true}
             hpMethod={campaign.gameSettings?.hpMethod ?? "average"}
+            genre={campaign.gameSettings?.genre}
+            worldPack={campaign.gameSettings?.worldPack}
             onDone={() => {
               setDismissedLevelUp(noticeKey);
               setLevelUpByHand(false);

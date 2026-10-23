@@ -113,6 +113,19 @@ await test("a spell name resolves; a misspelling or another language is fixed fr
 
 // ---- the turn loop's own answers ----
 
+// Qwen3.5 9B sent start_encounter ambush "none" twice: the turn refused the
+// whole fight with no word of which field was wrong, and it never started.
+await test("start_encounter on the AI's turn: a side it does not know is no side, and a field it refuses is named", async () => {
+  const world = await openWorld();
+  world.addHero({ class: "fighter", level: 3, proficiencies: TRAINED });
+  const started = await aiEncounter(world, "start_encounter", { enemies: [{ monster: "goblin", count: 1 }], ambush: "none", surprised: "both" });
+  expect(started, "ok");
+  assert.ok(world.encounter(), "the fight started");
+  const fresh = await openWorld();
+  fresh.addHero({ class: "fighter", level: 3, proficiencies: TRAINED });
+  expect(await aiEncounter(fresh, "start_encounter", { enemies: [], summary: "nobody" }), "retry", /fix or leave out: enemies/);
+});
+
 await test("an unknown tool is a retry, and the turn's cap on mutations is a limit", async () => {
   const world = await openWorld({ gameSettings: { ttsEnabled: false } });
   const model = await fakeModel();
@@ -312,8 +325,10 @@ await test("out of a fight: a missing ritual name and a missing form are asked f
   expect(asked, "retry", /needs the beast being assumed in form; at druid level 2 Fern can take: .*Wolf \(CR 1\/4\)/);
   assert.doesNotMatch(asked.error, /Brown Bear|Giant Eagle/, "a form above the druid's caps was offered");
   expect(await ai(world, "use_resource", { characterId: druid.id, resource: "Wild Shape", form: "brown bear" }), "retry", /CR 1\/4 or lower: .*Wolf \(CR 1\/4\).*Offer a form within the limit/);
-  // A beast of its own the table lacks asks for its stat block; it never becomes the Elk inside its name.
-  expect(await ai(world, "use_resource", { characterId: druid.id, resource: "Wild Shape", form: "giant elk" }), "retry", /"giant elk" is not in the beast-form table/);
+  // A beast of its own the table lacks asks for its stat block; it never becomes the Hamster inside its name.
+  expect(await ai(world, "use_resource", { characterId: druid.id, resource: "Wild Shape", form: "giant hamster" }), "retry", /"giant hamster" is not in the beast-form table/);
+  // A giant elk is a form of its own (CR 2), never the Elk inside its name.
+  expect(await ai(world, "use_resource", { characterId: druid.id, resource: "Wild Shape", form: "giant elk" }), "retry", /Giant Elk is CR 2; at level 2 Fern can Wild Shape into beasts of CR 1\/4 or lower/);
   // A fight-only tool with no fight.
   expect(await ai(world, "aoe_damage", { saveAbility: "dex", dc: 12, damage: "2d6", characterIds: [kara.id] }), "retry", /No active encounter/);
   // The DM's own bookkeeping with nothing to act on.

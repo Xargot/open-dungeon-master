@@ -13,7 +13,8 @@ import { freeCastOf, freeCastResourceId, freeCastSpellOf, isFreeCastResource } f
 import { LATE_RESOURCE_DEFS } from "@/lib/srd/class-resources-late";
 import { UNLIMITED_USES } from "@/lib/srd/resource-limits";
 import { tableFeat } from "@/lib/srd/feat-effects";
-import { containsPhrase, textKey } from "@/lib/language/text-logic";
+import { textKey } from "@/lib/language/text-logic";
+import { choiceIn, familyOf, isNamed } from "@/lib/srd/feature-names";
 
 export { isUnlimited, UNLIMITED_USES } from "@/lib/srd/resource-limits";
 
@@ -33,8 +34,8 @@ export type ResourceEffect =
   // (Lay on Hands).
   | { kind: "heal_pool" }
   // Each spent use is one die of healing to the target (Balm of the Summer
-  // Court: a pool of d6s).
-  | { kind: "heal_dice_pool"; die: string }
+  // Court: a pool of d6s), and `tempPerDie` temporary hit points per die.
+  | { kind: "heal_dice_pool"; die: string; tempPerDie?: number }
   // Heals the target for a rolled expression (Healing Light-likes).
   | { kind: "heal_target"; dice: (level: number, abilityMods: Record<string, number>) => string }
   // Grants the spender (or a target) temporary hit points; 5e temp HP never
@@ -81,13 +82,17 @@ export type ResourceEffect =
 
 // The JSON form of an effect, carried on resource rows in resources.json /
 // authored-resources.json. Dice formulas are strings with `level`, `prof`,
-// and ability-mod tokens ("1d8+level", "2d6+wis") resolved at spend time.
+// and ability-mod tokens ("1d8+level", "2d6+wis") resolved at spend time, or
+// a ladder of [class level, formula] steps where the last one reached wins
+// (Drake's Breath: 8d6, then 10d6 from 15th level).
+export type DiceFormula = string | Array<[number, string]>;
+
 export type ResourceFx =
-  | { kind: "heal_self"; dice: string }
+  | { kind: "heal_self"; dice: DiceFormula }
   | { kind: "heal_pool" }
-  | { kind: "heal_dice_pool"; die: string }
-  | { kind: "heal_target"; dice: string }
-  | { kind: "temp_hp"; dice: string }
+  | { kind: "heal_dice_pool"; die: string; tempPerDie?: number }
+  | { kind: "heal_target"; dice: DiceFormula }
+  | { kind: "temp_hp"; dice: DiceFormula }
   | { kind: "condition"; condition: string; rounds: number }
   | {
       kind: "buff";
@@ -95,21 +100,29 @@ export type ResourceFx =
       rounds: number;
       target?: "self" | "ally";
       variants?: string[];
-      tempHp?: string;
+      tempHp?: DiceFormula;
     }
   | { kind: "inspire"; die: string }
-  | { kind: "aoe"; dice: string; save: SaveAbilityId }
-  | { kind: "enemy_save"; save: SaveAbilityId; condition?: string; dice?: string }
+  | { kind: "aoe"; dice: DiceFormula; save: SaveAbilityId }
+  | { kind: "enemy_save"; save: SaveAbilityId; condition?: string; dice?: DiceFormula }
   | { kind: "teleport"; feet: number };
 
 // "1d8+level" at level 5 -> "1d8+5"; "2d6+wis" with WIS +3 -> "2d6+3".
 // Negative modifiers fold into the sign so the dice grammar stays valid.
 export function resolveDiceFormula(
-  formula: string,
+  formula: DiceFormula,
   level: number,
   abilityMods: Record<string, number>,
 ): string {
-  return formula
+  let text = typeof formula === "string" ? formula : (formula[0]?.[1] ?? "0");
+  if (Array.isArray(formula)) {
+    for (const [atLevel, value] of formula) {
+      if (level >= atLevel) {
+        text = value;
+      }
+    }
+  }
+  return text
     // A number of dice equal to the proficiency bonus ("profd4": Healing
     // Hands, MotM).
     .replace(/\bprofd(\d+)\b/g, (_, die) => `${proficiencyBonus(level)}d${die}`)
@@ -138,7 +151,7 @@ export function effectFromFx(fx: ResourceFx | undefined): ResourceEffect {
     case "heal_pool":
       return { kind: "heal_pool" };
     case "heal_dice_pool":
-      return { kind: "heal_dice_pool", die: fx.die };
+      return { kind: "heal_dice_pool", die: fx.die, ...(fx.tempPerDie ? { tempPerDie: fx.tempPerDie } : {}) };
     case "heal_target":
       return {
         kind: "heal_target",
@@ -237,6 +250,13 @@ export type ResourceDef = {
   // Only while the holder has fewer than half their hit points (Unearthly
   // Recovery).
   requires?: "below_half";
+  // The most one use may spend: half the class level (Balm of the Summer
+  // Court's dice) or the Charisma modifier, at least one (Healing Light's).
+  perUse?: "half_level" | "cha";
+  // Spent, it comes back only after this many long rests, rolled (Limited
+  // Wish, Necrotic Husk: 1d4); a marker on the sheet counts them down
+  // (src/lib/dm/rest-logic.ts).
+  recovers?: string;
   // One line of SRD truth handed back to the model in the tool result, so a
   // spend never leaves it guessing what the feature does.
   guidance: string;
@@ -651,6 +671,8 @@ type SubclassResourceRow = {
   action?: ResourceAction;
   fallbackPool?: { id: string; amount: number };
   requires?: "below_half";
+  perUse?: "half_level" | "cha";
+  recovers?: string;
 };
 
 function proficiencyBonus(level: number): number {
@@ -688,6 +710,8 @@ const SUBCLASS_RESOURCE_DEFS: ResourceDef[] = (
   ...(row.action ? { action: row.action } : {}),
   ...(row.fallbackPool ? { fallbackPool: row.fallbackPool } : {}),
   ...(row.requires ? { requires: row.requires } : {}),
+  ...(row.perUse ? { perUse: row.perUse } : {}),
+  ...(row.recovers ? { recovers: row.recovers } : {}),
 }));
 
 // The spells a race casts once a day by nature (a tiefling's hellish rebuke
@@ -720,6 +744,12 @@ export const RESOURCE_DEFS: ResourceDef[] = [
   ...INNATE_RESOURCE_DEFS,
   ...COMBAT_RESOURCE_DEFS,
 ];
+
+// The marker a counter that returns after several long rests leaves on the
+// sheet while it waits: "limited wish recovering (3)".
+export function recoveringPrefix(displayName: string): string {
+  return `${displayName.trim().toLowerCase()} recovering`;
+}
 
 export type ResourceState = { max: number; used: number };
 export type ResourceMap = Record<string, ResourceState>;
@@ -767,25 +797,22 @@ function freeCastDef(id: string): ResourceDef {
 // "Hexblade's Curse" is also written "Hexblades Curse".
 const unquoted = (text: string) => text.replace(/['‘’ʼ´`]/g, "");
 
-// Fuzzy find by id or display/feature name ("rage", "Ki", "sorcery
-// points"...); used by the use_resource tool with model-supplied names.
+// A resource by its id, its display name or a feature name it is spent
+// under, whole, in the formats ODM writes (src/lib/srd/feature-names.ts):
+// "rage", "Ki Points", "Bardic Inspiration (d8)", and a "Family: Choice"
+// spent from its family's pool ("Channel Divinity: Turn Undead"); used by
+// the use_resource tool with model-supplied names. A word of a name is none:
+// "channel" is no Channel Divinity, Persistent Rage no Rage, and the tool
+// lists the sheet's own.
 export function matchResource(term: string): ResourceDef | null {
   const wanted = textKey(term);
   if (!wanted) {
     return null;
   }
-  // A fragment counts as whole words, so "ki" matches "Ki" and "Ki Points"
-  // but never "Skill Versatility" (the half-elf trait that a bare substring
-  // test turns into a monk).
-  const asked = unquoted(term);
-  return (
-    RESOURCE_DEFS.find((def) => textKey(def.id) === wanted) ??
-    RESOURCE_DEFS.find((def) => textKey(def.displayName) === wanted) ??
-    RESOURCE_DEFS.find((def) =>
-      def.match.some((name) => containsPhrase(asked, unquoted(name)) || containsPhrase(unquoted(name), asked)),
-    ) ??
-    null
-  );
+  const named = (written: string) =>
+    RESOURCE_DEFS.find((def) => isNamed(written, def.displayName)) ??
+    RESOURCE_DEFS.find((def) => def.match.some((name) => isNamed(unquoted(written), unquoted(name))));
+  return RESOURCE_DEFS.find((def) => textKey(def.id) === wanted) ?? named(term) ?? named(familyOf(term)) ?? null;
 }
 
 // The level a resource counter scales by, and the class it came from.
@@ -826,8 +853,9 @@ function resourceLevelFor(
 const withoutUses = (name: string) => name.replace(/\s*\((?:\d+|[a-z]+) uses?\)\s*$/i, "");
 
 // Whether a feature on a sheet is the one this counter belongs to: the name
-// matches (exactly for the defs that ask for it, as whole words otherwise),
-// and the class that granted the feature is one the counter was written for.
+// matches (exactly for the defs that ask for it, else whole after a
+// "Prefix:" or with a bracket note, src/lib/srd/feature-names.ts), and the
+// class that granted the feature is one the counter was written for.
 // A feature that names no class (story grants, sheets written before the
 // class was kept) is matched on its name alone.
 function featureHolds(def: ResourceDef, feature: { name: string; classId?: string }): boolean {
@@ -845,7 +873,8 @@ function featureHolds(def: ResourceDef, feature: { name: string; classId?: strin
     if (def.upgrades?.some((upgrade) => textKey(upgrade.match) === name)) {
       return true;
     }
-    return !def.exact && containsPhrase(unquoted(feature.name), unquoted(fragment));
+    // "Channel Divinity: Turn Undead" is spent from Channel Divinity.
+    return !def.exact && (isNamed(unquoted(feature.name), unquoted(fragment)) || choiceIn(feature.name, fragment) !== null);
   });
 }
 

@@ -75,6 +75,17 @@ every check the server does, including the ones a JSON Schema cannot express.
 | `settings` | Fields the admin fills in once |
 | `contributes` | The extension points it adds to: `workshopImporters`, `mapGenerators`, `boardViews` |
 
+An optional `boardViews[].sessionLayout: "stage"` selects the host's native
+session-region layout when that viewer selects the view. It requires
+`needsViewData: false` and handling the no-map `scene` message. See
+[the session stage contract](extension-points.md#optional-session-stage-layout).
+
+Stage views may also supply `sessionTheme: { "surface": "#17212b", "accent": "#7dd3fc" }`.
+These are opaque six-digit hex colors, not CSS. Surface channels must each be
+0–63 (a dark background for native light text). The accent colors decorative
+borders, not text, health, errors or focus indicators. The optional theme applies
+only to selected desktop stage views in night mode; omit it for native styling.
+
 ### runtime
 
 ```json

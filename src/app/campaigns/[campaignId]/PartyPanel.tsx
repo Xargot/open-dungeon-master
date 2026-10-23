@@ -1,6 +1,7 @@
 "use client";
 
 import { TravelFormation } from "@/app/campaigns/[campaignId]/TravelFormation";
+import { PartyStory } from "@/app/campaigns/[campaignId]/PartyStory";
 import type { PartyState } from "@/lib/dm/party-logic";
 import { fieldedOf } from "@/lib/player-characters";
 import { Bot, Check, Crown, Heart, ImagePlus, PawPrint, Save, Sparkles, UserPlus } from "lucide-react";
@@ -22,6 +23,7 @@ import { CharacterNotesDialog } from "@/app/campaigns/[campaignId]/CharacterNote
 import { CharacterSheetDialog } from "@/app/campaigns/[campaignId]/CharacterSheetDialog";
 import { TradeDialog } from "@/app/campaigns/[campaignId]/TradeDialog";
 import { CompanionBuilderDialog } from "@/app/campaigns/[campaignId]/CompanionBuilderDialog";
+import { CompanionCommand } from "@/app/campaigns/[campaignId]/CompanionCommand";
 import { DiceSourcesButton } from "@/app/campaigns/[campaignId]/DiceSourcesDialog";
 import { DiceLookButton } from "@/components/DiceLookEditor";
 import { LeadEditDialog } from "@/app/campaigns/[campaignId]/LeadEditDialog";
@@ -322,6 +324,7 @@ export function PartyPanel({
   onLevelUp,
   party,
   arrangesFormation = false,
+  partyStory,
 }: {
   sheets: CharacterSheet[];
   meUserId: string;
@@ -329,6 +332,9 @@ export function PartyPanel({
   // arranges it (the party lead, or the DM seat where a person runs it).
   party?: PartyState;
   arrangesFormation?: boolean;
+  // Why this party is together (PartyStory.tsx), at a table that plays: who
+  // may write it. Left out (a workshop), no card.
+  partyStory?: { canWrite: boolean };
   // A level-up the experience has earned and nobody has taken yet: the
   // owner's card offers it.
   levelUpLevel?: number | null;
@@ -525,7 +531,7 @@ export function PartyPanel({
                 type="button"
                 onClick={() => setViewingSheetId(sheet.id)}
                 title="View full character sheet"
-                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 motion-press"
+                className="party-card-heading flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 motion-press"
               >
               <CharacterPortrait
                 url={sheet.portrait?.url}
@@ -533,7 +539,7 @@ export function PartyPanel({
                 look={{ race: sheet.race, class: sheet.class, gender: sheet.gender }}
                 alt={sheet.name}
                 size="size-12"
-                className="border-amber-500/30 shadow-glow-gold"
+                className="party-card-portrait border-amber-500/30 shadow-glow-gold"
               />
               <span className="min-w-0">
                 <span className="flex items-center gap-1.5 font-medium">
@@ -753,7 +759,7 @@ export function PartyPanel({
               </div>
             ) : null}
 
-            <div className="mt-2 grid grid-cols-3 gap-1.5 text-center">
+            <div className="party-card-stats mt-2 grid grid-cols-3 gap-1.5 text-center">
               {(
                 [
                   ["AC", String(shape ? shape.beastAc : sheet.ac)],
@@ -859,12 +865,23 @@ export function PartyPanel({
               </KitButton>
             ) : null}
 
+            {campaignId && sheet.isCompanion && !sheet.summon ? (
+              <CompanionCommand
+                campaignId={campaignId}
+                sheet={sheet}
+                sheets={sheets}
+                members={members}
+                meUserId={meUserId}
+                canChoose={steersStory}
+              />
+            ) : null}
+
             {campaignId && steersStory && !sheet.isCompanion && sheet.libraryRole === "companion" ? (
               <HandToDmButton campaignId={campaignId} sheet={sheet} blocked={companionBlock} onOpenSettings={onOpenSettings} />
             ) : null}
 
             {setsPortrait ? (
-              <div className="reveal mt-2 space-y-1.5">
+              <div className="party-card-actions reveal mt-2 space-y-1.5">
                 {/* Hit points are driven by the server rules engines now, so
                     there is no manual HP stepper here; the lead's Adjust
                     dialog remains for corrections. */}
@@ -910,6 +927,19 @@ export function PartyPanel({
           meUserId={meUserId}
           arranges={arrangesFormation}
         />
+      ) : null}
+
+      {partyStory && campaignId && (party?.backstory || partyStory.canWrite) ? (
+        <section className="mt-4 space-y-2">
+          <SectionHead title="Party story" glyph="tab-party" level="h3" />
+          <PartyStory
+            campaignId={campaignId}
+            party={party}
+            canWrite={partyStory.canWrite}
+            hasCharacters={sheets.some((sheet) => !(sheet.isCompanion && sheet.companionKind === "guest"))}
+            inPlay
+          />
+        </section>
       ) : null}
 
       {buildingCompanion && campaignId ? (

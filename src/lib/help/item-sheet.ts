@@ -1,9 +1,8 @@
 import { describeContentEntry } from "@/lib/help";
 import { DAMAGE_TYPE_BLURBS, WEAPON_PROPERTY_BLURBS } from "@/lib/help/terms";
-import { magicItemBonus, matchArmor, type SrdArmor } from "@/lib/srd/armor";
-import { SRD_WEAPONS, type SrdWeapon } from "@/lib/srd/weapons";
-import { textKey } from "@/lib/language/text-logic";
-import { pluralForms } from "@/lib/srd/name-forms";
+import { armorNamed, type SrdArmor } from "@/lib/srd/armor";
+import { magicItemBonus, withoutBonus } from "@/lib/srd/item-row";
+import { weaponNamed, type SrdWeapon } from "@/lib/srd/weapons";
 
 // The ⓘ card for a carried thing. An item's facts are scattered: the Open5e
 // v1 tables give a Longsword's die and a Plate's AC but no prose and (for
@@ -207,25 +206,6 @@ const isPackArmor = (row: Row) => "base_ac" in row || "ac_string" in row;
 const isMagic = (row: Row) => typeof row.rarity === "string" && row.rarity.trim() !== "";
 const isHomebrew = (row: Row) => typeof row.itemKind === "string";
 
-// The bundled weapon a name refers to, only when the weapon's name is the
-// whole name or its tail ("+1 Longsword", "Silvered Dagger"), so a "Pistol
-// Holster" is not read as a pistol. Longest name wins: "Hand Crossbow"
-// before a plain crossbow.
-function matchWeaponTail(name: string): SrdWeapon | null {
-  const wanted = textKey(name)
-    .split(" ")
-    .filter((part) => !/^[+-]/.test(part))
-    .join(" ");
-  if (!wanted) {
-    return null;
-  }
-  const hits = SRD_WEAPONS.filter((weapon) =>
-    pluralForms(textKey(weapon.name)).some((form) => wanted === form || wanted.endsWith(` ${form}`)),
-  );
-  hits.sort((a, b) => b.name.length - a.name.length);
-  return hits[0] ?? null;
-}
-
 // `rows` is every content-pack or homebrew row found for the name, the
 // direct slug hit first. Null when neither the rows nor the bundled tables
 // know anything about it.
@@ -257,15 +237,15 @@ export function buildItemSheet(name: string, rows: Array<Row | undefined | null>
       type = `${type} armor`;
     }
     // The pack's armour rows carry no weight; the bundled table does.
-    srdArmor = matchArmor(str(packArmor, "name") || name);
+    srdArmor = armorNamed(str(packArmor, "name") || name);
   } else if (packWeapon) {
     weapon = weaponFromPack(packWeapon, bonus);
     type = asType(str(packWeapon, "category")) || "Weapon";
-  } else if ((srdArmor = matchArmor(name))) {
+  } else if ((srdArmor = armorNamed(name))) {
     armor = armorFromSrd(srdArmor, bonus);
     type = srdArmor.category === "shield" ? "Shield" : `${capitalize(srdArmor.category)} armor`;
   } else {
-    const srdWeapon = matchWeaponTail(name);
+    const srdWeapon = weaponNamed(withoutBonus(name));
     if (srdWeapon) {
       weapon = weaponFromSrd(srdWeapon, bonus);
       type = `${capitalize(srdWeapon.category)} ${srdWeapon.kind} weapon`;

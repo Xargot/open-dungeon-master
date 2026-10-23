@@ -217,12 +217,12 @@ function fitExtras(extras: Record<string, Json[]>, budget: number): Trimmed[] {
 
 // The campaign snapshot (GET /api/campaigns/[id], built for the browser) as
 // an agent reads it. The state that decides whether and how to act comes
-// first and is never trimmed: the safety pause, the DM's status, this seat's
-// caps, the floor, pending rolls, the encounter, open disputes. Then the
-// party (this player's own sheets whole, the others summarized), then as many
-// of the newest messages as fit, then the smaller lists. Browser-only fields
-// (narration audio, background calls, the blocked list, faces, the sheet
-// audit) are left out.
+// first and is never trimmed: the safety pause, a table break, the DM's
+// status, this seat's caps, the floor, pending rolls, the encounter, open
+// disputes. Then the party (this player's own sheets whole, the others
+// summarized), then as many of the newest messages as fit, then the smaller
+// lists. Browser-only fields (narration audio, background calls, the blocked
+// list, faces, the sheet audit) are left out.
 // What an agent may ask of the snapshot (odm_get_campaign's arguments): a
 // narrower view, only the messages after a seq it has already read, and a
 // smaller reply. Every view keeps the state that decides whether and how to
@@ -265,8 +265,12 @@ export function campaignForAgent(text: string, max = MAX_RESULT_CHARS, options: 
     me,
     activeSheetId: snapshot.activeSheetId ?? "",
     safetyPause: snapshot.safetyPause ?? null,
+    tableBreak: snapshot.tableBreak ?? null,
     dmStatus: snapshot.dmStatus ?? null,
     floor,
+    // Who the DM waits on before its next turn at a table that waits for
+    // everyone; odm_pass answers it without a post.
+    tableWait: snapshot.tableWait ?? null,
     caps: snapshot.caps ?? null,
     pendingRolls: snapshot.pendingRolls ?? [],
     encounter: snapshot.encounter ?? null,
@@ -352,8 +356,10 @@ function statusOf(snapshot: JsonObject, campaign: JsonObject): JsonObject {
     me: isObject(snapshot.me) ? snapshot.me : {},
     activeSheetId: snapshot.activeSheetId ?? "",
     safetyPause: snapshot.safetyPause ?? null,
+    tableBreak: snapshot.tableBreak ?? null,
     dmStatus: snapshot.dmStatus ?? null,
     floor: campaign.floor ?? null,
+    tableWait: snapshot.tableWait ?? null,
     caps: snapshot.caps ?? null,
     pendingRolls: snapshot.pendingRolls ?? [],
     disputes: snapshot.disputes ?? [],
@@ -420,5 +426,5 @@ function narrowCampaignForAgent(text: string, max: number, view: CampaignView, s
       : "odm_get_messages pages older messages: pass before = olderBefore.",
   };
   const textOut = JSON.stringify(out);
-  return textOut.length <= max ? textOut : boundJson(out, max, new Set(["safetyPause", "dmStatus", "floor", "caps", "pendingRolls"]));
+  return textOut.length <= max ? textOut : boundJson(out, max, new Set(["safetyPause", "tableBreak", "dmStatus", "floor", "caps", "pendingRolls"]));
 }

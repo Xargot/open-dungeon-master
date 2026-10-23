@@ -50,6 +50,26 @@ await test("the example addon's manifest reads", () => {
   assert.deepEqual(addonFit(parsed, host), { ok: true });
 });
 
+await test("session layouts are opt-in, bounded, and independent of map data", () => {
+  const view = { id: "session", title: "Session", entry: "ui/board.html" };
+  const parse = (patch) => addonManifestSchema.safeParse({ ...example, contributes: { boardViews: [{ ...view, ...patch }] } });
+  assert.equal(parse({}).data.contributes.boardViews[0].sessionLayout, undefined);
+  assert.equal(parse({ sessionLayout: "stage" }).data.contributes.boardViews[0].sessionLayout, "stage");
+  assert.equal(parse({ sessionLayout: "custom-css" }).success, false);
+  assert.equal(parse({ sessionLayout: "stage", needsViewData: true }).success, false);
+});
+
+await test("session colors are bounded data and require a session layout", () => {
+  const parse = (patch) => addonManifestSchema.safeParse({ ...example, contributes: { boardViews: [{ id: "session", title: "Session", entry: "ui/board.html", sessionLayout: "stage", ...patch }] } });
+  const sessionTheme = { surface: "#17212b", accent: "#40c9ff" };
+  assert.deepEqual(parse({ sessionTheme }).data.contributes.boardViews[0].sessionTheme, sessionTheme);
+  assert.equal(parse({}).data.contributes.boardViews[0].sessionTheme, undefined);
+  assert.equal(parse({ sessionTheme, sessionLayout: undefined }).success, false);
+  assert.equal(parse({ sessionTheme: { ...sessionTheme, surface: "#ffffff" } }).success, false);
+  assert.equal(parse({ sessionTheme: { ...sessionTheme, accent: "url(https://example.com)" } }).success, false);
+  assert.equal(parse({ sessionTheme: { ...sessionTheme, css: "display:none" } }).success, false);
+});
+
 await test("ids, paths and empty addons are refused", () => {
   const bad = (patch) => addonManifestSchema.safeParse({ ...example, ...patch }).success;
   assert.equal(bad({ id: "Hello_Dungeon" }), false);
@@ -270,7 +290,7 @@ await test("catalog entries come from the manifest, and the list is held to its 
   const entry = catalogEntry(manifest, { ...pinned, path: "examples/addons/hello-dungeon" }, { contentSha256: "d".repeat(64), bytes: 4096 }, "tools");
   assert.equal(entry.name, "Hello Dungeon");
   assert.equal(entry.author, "Open Dungeon Master");
-  assert.deepEqual(entry.contributes.boardViews, ["Isometric"]);
+  assert.deepEqual(entry.contributes.boardViews, ["Isometric", "Isometric session"]);
   assert.deepEqual(entry.permissions, ["ai.text"]);
   assert.equal(entry.setupMB, 1);
   const second = { ...entry, id: "another-addon" };
@@ -466,6 +486,31 @@ await test("a snapshot is the viewer's projection, with only this addon's view d
   assert.equal(boardSnapshot(view, "other-addon", { canDirect: false, appearance }).view, null);
 });
 
+await test("character gender is optional and only travels with projected figures", () => {
+  const appearance = { theme: "night", reducedMotion: false };
+  for (const gender of ["Female", "Male", "Nonbinary", ""]) {
+    const looks = new Map([
+      ["c1", { character: { race: "elf", class: "wizard", gender } }],
+      ["unseen", { character: { race: "human", class: "fighter", gender: "Male" } }],
+    ]);
+    const snapshot = boardSnapshot(view, "hello-dungeon", { canDirect: false, appearance, looks });
+    assert.equal(snapshot.tokens[0].character.gender, gender);
+    assert.equal(snapshot.tokens.length, view.tokens.length, "extra looks never reveal unprojected figures");
+    assert.equal(snapshot.tokens.some(token => token.character?.class === "fighter"), false);
+  }
+  const looks = new Map([["c1", { character: { race: "elf", class: "wizard" } }]]);
+  assert.equal(boardSnapshot(view, "hello-dungeon", { canDirect: false, appearance, looks }).tokens[0].character.gender, undefined);
+});
+
+await test("a walk's first tap is named to the view as its aim, and nothing else is", () => {
+  const appearance = { theme: "night", reducedMotion: false };
+  assert.equal(boardSnapshot(view, "hello-dungeon", { canDirect: false, appearance }).moveAim, null);
+  const aimed = boardSnapshot(view, "hello-dungeon", { canDirect: false, appearance, moveAim: { x: 2, y: 1 } });
+  assert.deepEqual(aimed.moveAim, { x: 2, y: 1 });
+  const board = readFileSync(new URL("../src/app/campaigns/[campaignId]/BattleMapPanel.tsx", import.meta.url), "utf8");
+  assert.match(board, /moveAim=\{moveAim\}/, "the table does not tell the view its aim");
+});
+
 await test("a snapshot carries the flat board's layers, only about figures this viewer sees", () => {
   const appearance = { theme: "night", reducedMotion: false };
   const fuller = {
@@ -529,6 +574,8 @@ await test("file requests resolve to the map's own files only", () => {
 });
 
 await test("the frame's messages are read strictly", () => {
+  assert.deepEqual(readViewMessage({ odm: 1, type: "camera-state", x: 2.5, y: 1, zoom: 1.2 }), { type: "camera-state", x: 2.5, y: 1, zoom: 1.2 });
+  for (const bad of [{ x: NaN, y: 1, zoom: 1 }, { x: 1, y: Infinity, zoom: 1 }, { x: 1, y: 1, zoom: 0 }, { x: 1, y: 1, zoom: 9 }, { x: "1", y: 1, zoom: 1 }]) assert.equal(readViewMessage({ odm: 1, type: "camera-state", ...bad }), null);
   assert.deepEqual(readViewMessage({ odm: 1, type: "tile", x: 2, y: 1 }), { type: "tile", x: 2, y: 1 });
   assert.equal(readViewMessage({ odm: 1, type: "tile", x: 1.5, y: 1 }), null);
   assert.equal(readViewMessage({ odm: 2, type: "ready" }), null);

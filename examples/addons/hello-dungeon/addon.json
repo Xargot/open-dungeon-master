@@ -107,6 +107,14 @@
             ]
           }
         ]
+      },
+      {
+        "id": "session",
+        "title": "Isometric session",
+        "description": "The same board with native Party, Chronicle, controls and composer in the session stage layout.",
+        "entry": "ui/board.html",
+        "sessionLayout": "stage",
+        "sessionTheme": { "surface": "#17212b", "accent": "#7dd3fc" }
       }
     ]
   }

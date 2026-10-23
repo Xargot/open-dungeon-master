@@ -1,5 +1,6 @@
-import { COPPER_PER_GOLD, formatCopper, parseCoins } from "@/lib/srd/currency";
+import { COPPER_PER_GOLD, formatPrice, packCostCopper } from "@/lib/srd/currency";
 import { compareNames, textKey } from "@/lib/language/text-logic";
+import { lineNamed } from "@/lib/srd/item-row";
 
 // Shops (docs/vtt-parity-implementation-plan.md 11.1): pure pricing and
 // stocking. Prices come from the content pack's cost strings, marked up by
@@ -17,7 +18,9 @@ export type ShopSize = (typeof SHOP_SIZES)[number];
 export const SHOP_KINDS = ["general", "smith", "apothecary", "outfitter", "curiosities"] as const;
 export type ShopKind = (typeof SHOP_KINDS)[number];
 
-export type StockLine = { itemName: string; qty: number; priceCp: number; note: string };
+// srdName: the SRD or pack row a line named in the table's language is,
+// picked from the catalog, so what is bought is that row.
+export type StockLine = { itemName: string; qty: number; priceCp: number; note: string; srdName?: string };
 
 // The dearest a shelf line may be priced, in copper (a million gold): high
 // enough for any legendary item, low enough that a typed slip cannot put a
@@ -97,7 +100,7 @@ export function haggleDc(size: ShopSize): number {
 
 // A pack cost string ("15 gp", "2 sp", "5,000 gp") in copper, or null.
 export function costToCopper(cost: string): number | null {
-  const parsed = parseCoins(cost);
+  const parsed = packCostCopper(cost);
   return parsed === null || parsed <= 0 ? null : parsed;
 }
 
@@ -111,19 +114,12 @@ export function offerPriceCp(listCp: number): number {
   return Math.max(1, Math.floor(listCp / 2));
 }
 
-// Find a stock line by name, loosely: exact first, then a line that
-// contains the words asked for.
+// A stock line by the names a carried line answers to (lineNamed): its
+// whole name, else the row it is listed as, so "Longsword" buys the "Spada
+// lunga" picked from the catalog. A miss is refused with the shelf listed.
 export function findStockLine(stock: StockLine[], name: string): StockLine | null {
-  const wanted = textKey(name);
-  if (!wanted) {
-    return null;
-  }
-  const exact = stock.find((line) => textKey(line.itemName) === wanted);
-  if (exact) {
-    return exact;
-  }
-  const loose = stock.filter((line) => textKey(line.itemName).includes(wanted) || wanted.includes(textKey(line.itemName)));
-  return loose.length === 1 ? loose[0] : null;
+  const rows = stock.map((line) => ({ name: line.itemName, srdName: line.srdName }));
+  return stock[lineNamed(rows, name)] ?? null;
 }
 
 // Take qty of a line out of the stock, dropping it at zero; null when the
@@ -136,36 +132,75 @@ export function takeStock(stock: StockLine[], itemName: string, qty: number): St
   return stock.map((entry) => (entry === line ? { ...entry, qty: entry.qty - qty } : entry)).filter((entry) => entry.qty > 0);
 }
 
-// Put qty of an item into stock at the keeper's list price, merging by name.
-export function addStock(stock: StockLine[], itemName: string, qty: number, priceCp: number, note = ""): StockLine[] {
+// Put qty of an item into stock at the keeper's list price, merging by name,
+// with the row it is.
+export function addStock(stock: StockLine[], itemName: string, qty: number, priceCp: number, srdName?: string): StockLine[] {
   const existing = stock.find((line) => textKey(line.itemName) === textKey(itemName));
   if (existing) {
     return stock.map((line) => (line === existing ? { ...line, qty: line.qty + qty } : line));
   }
-  return [...stock, { itemName: itemName.slice(0, 80), qty, priceCp: Math.max(1, Math.round(priceCp)), note: note.slice(0, 120) }];
+  return [...stock, { itemName: itemName.slice(0, 80), qty, priceCp: Math.max(1, Math.round(priceCp)), note: "", ...(srdName ? { srdName } : {}) }];
 }
 
-// Stock from a pool of priced items: a fixed count of lines for the size,
-// chosen by the dice handed in, a few of each of the cheap things and one
-// of anything dear.
+// The magic a shelf of this size carries (SRD 5.2, Magic Item Rarity):
+// common items are often sold in towns and cities, uncommon and rare ones
+// usually only in cities, and nothing rarer is for sale. A curiosity shop
+// the DM puts in a village still keeps its commons.
+export const SHELF_RARITIES: Record<ShopSize, readonly string[]> = {
+  hamlet: ["common"],
+  village: ["common"],
+  town: ["common"],
+  city: ["common", "uncommon", "rare"],
+};
+
+// How much of a shelf each rarity takes, by weight, so a city's curiosity
+// shop is mostly things a party might afford beside a few to save for.
+// Goods with no rarity weigh as commons.
+const RARITY_WEIGHT: Record<string, number> = { "": 3, common: 3, uncommon: 2, rare: 1 };
+
+// One of the items left: a rarity by its weight when the pool mixes them,
+// then any item of it.
+function pickIndex(items: ReadonlyArray<{ rarity: string }>, random: () => number): number {
+  const tiers = [...new Set(items.map((item) => item.rarity))];
+  if (tiers.length < 2) {
+    return Math.floor(random() * items.length);
+  }
+  const weights = tiers.map((tier) => RARITY_WEIGHT[tier] ?? 1);
+  let roll = random() * weights.reduce((sum, weight) => sum + weight, 0);
+  const tier = tiers.find((_, index) => (roll -= weights[index]) < 0) ?? tiers[tiers.length - 1];
+  const inTier = items.flatMap((item, index) => (item.rarity === tier ? [index] : []));
+  return inTier[Math.floor(random() * inTier.length)];
+}
+
+// Stock from a pool of priced items: the staples the pool marks first, then
+// a fixed count of lines for the size, chosen by the dice handed in; a few of
+// each of the cheap things and one of anything dear. A magic item comes only
+// in the rarities the size sells.
 export function stockFromPool(
-  pool: Array<{ name: string; cost: string; category?: string }>,
+  pool: Array<{ name: string; cost: string; category?: string; staple?: boolean; rarity?: string }>,
   size: ShopSize,
   random: () => number = Math.random,
 ): StockLine[] {
   const priced = pool
-    .map((item) => ({ name: item.name, cp: costToCopper(item.cost) }))
-    .filter((item): item is { name: string; cp: number } => item.cp !== null);
+    .filter((item) => !item.rarity || SHELF_RARITIES[size].includes(item.rarity))
+    .map((item) => ({ name: item.name, cp: costToCopper(item.cost), staple: Boolean(item.staple), rarity: item.rarity ?? "" }))
+    .filter((item): item is { name: string; cp: number; staple: boolean; rarity: string } => item.cp !== null);
+  const line = (item: { name: string; cp: number }): StockLine => {
+    const qty = item.cp >= 50 * COPPER_PER_GOLD ? 1 : item.cp >= 5 * COPPER_PER_GOLD ? 1 + Math.floor(random() * 3) : 2 + Math.floor(random() * 6);
+    return { itemName: item.name, qty, priceCp: item.cp, note: "" };
+  };
+  const byName = (a: StockLine, b: StockLine) => compareNames(a.itemName, b.itemName);
+  const staples = priced.filter((item) => item.staple).map(line).sort(byName);
   const picked: StockLine[] = [];
-  const remaining = [...priced];
+  const remaining = priced.filter((item) => !item.staple);
   const want = Math.min(SIZE_STOCK_LINES[size], remaining.length);
   while (picked.length < want && remaining.length) {
-    const index = Math.floor(random() * remaining.length);
-    const [item] = remaining.splice(index, 1);
-    const qty = item.cp >= 50 * COPPER_PER_GOLD ? 1 : item.cp >= 5 * COPPER_PER_GOLD ? 1 + Math.floor(random() * 3) : 2 + Math.floor(random() * 6);
-    picked.push({ itemName: item.name, qty, priceCp: item.cp, note: "" });
+    const [item] = remaining.splice(pickIndex(remaining, random), 1);
+    picked.push(line(item));
   }
-  return picked.sort((a, b) => compareNames(a.itemName, b.itemName));
+  // Staples lead, so the twelve lines the prompt and the tool's reply show
+  // always hold them.
+  return [...staples, ...picked.sort(byName)];
 }
 
 // A restock of a prepared shelf: every prepared line back up to its
@@ -182,10 +217,23 @@ export function refillStock(stock: StockLine[], prepared: StockLine[]): StockLin
 }
 
 // The item kinds each shop kind stocks, for the pool the tool draws from.
-export const KIND_POOL: Record<ShopKind, { kinds: Array<"weapon" | "armor" | "gear" | "magic_item">; match?: RegExp }> = {
-  general: { kinds: ["gear"] },
+// staples are what the kind always carries, one line each (the pool marks the
+// first name each one matches: the pack's two editions write "Rations" and
+// "Rations (1 day)"), beside the lines the dice pick. A general store drew
+// ten lines from some 300 pieces of gear, so a torch was on a village shelf
+// about one visit in thirty and "I buy a torch" was refused (2026-10-20).
+// skip names the pack's categories the kind never sells: a general store
+// offered camels, galleys, a cow and Assassin's Blood. Magic items are priced
+// by rarity (src/lib/srd/magic-item-value.ts); an apothecary's are its
+// potions and oils, not a Periapt of Proof against Poison.
+export const KIND_POOL: Record<ShopKind, { kinds: Array<"weapon" | "armor" | "gear" | "magic_item">; match?: RegExp; staples?: RegExp; skip?: readonly string[] }> = {
+  general: {
+    kinds: ["gear"],
+    staples: /^(torch|rations|rope|waterskin|tinderbox|bedroll|backpack|oil(?! of)|candle|blanket)\b/i,
+    skip: ["trade good", "poison", "waterborne vehicle", "land vehicle", "mount", "wondrous item"],
+  },
   smith: { kinds: ["weapon", "armor"] },
-  apothecary: { kinds: ["gear", "magic_item"], match: /potion|antitoxin|healer|herb|oil|vial|acid|poison/i },
+  apothecary: { kinds: ["gear", "magic_item"], match: /potion|antitoxin|healer|herb|oil|vial|acid|poison/i, skip: ["wondrous item", "ammunition"] },
   outfitter: { kinds: ["gear", "armor"], match: /pack|rope|tent|bedroll|rations|torch|lantern|cloak|boots|leather|climber|waterskin|backpack|tinder/i },
   curiosities: { kinds: ["magic_item"] },
 };
@@ -204,9 +252,9 @@ export function renderShopsForPrompt(shops: Array<Shop & { keeperName: string }>
   const lines = shops.slice(0, 4).map((shop) => {
     const shelf = shop.stock
       .slice(0, 12)
-      .map((line) => `${line.itemName} x${line.qty} at ${formatCopper(askingPriceCp(line.priceCp, shop.markup))}`)
+      .map((line) => `${line.itemName} x${line.qty} at ${formatPrice(askingPriceCp(line.priceCp, shop.markup))}`)
       .join("; ");
     return `- ${shop.name}${shop.keeperName ? ` (kept by ${shop.keeperName})` : ""}, ${shop.kind}${shop.buys ? ", buys at half" : ", does not buy"}: ${shelf || "bare shelves"}`;
   });
-  return `SHOPS HERE (prices are the server's; buy_item and sell_item move the coin and the goods, haggle moves the price one step):\n${lines.join("\n")}`;
+  return `SHOPS HERE (prices are the server's; purchase moves the coin and the goods at this shelf's prices, haggle moves the price one step):\n${lines.join("\n")}`;
 }

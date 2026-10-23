@@ -2,12 +2,14 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getDatabase } from "@/lib/db/core";
 import { getCampaignById } from "@/lib/db/campaigns";
-import { getBeat, insertBeat, listBeats, updateBeat } from "@/lib/db/workshop-beats";
+import { landScenes, planBoardExport } from "@/lib/db/world-forge-scenes";
+import { sceneLossLines, type SceneLoss } from "@/lib/worldforge/scenes";
 import { aspectOfBytes, importBridge } from "@/lib/db/atlas-region";
 import { admitUpload, type UploadAccount, type UploadRefusal } from "@/lib/upload-budget";
 import { decodeBundleImage, encodeBundleImage, type BundleImage } from "@/lib/workshop/bundle";
 import { isUploadedImagePath } from "@/lib/uploads";
 import { createRecord, getWorldDoc, nextEntry, saveWorldDoc, worldEntities, worldView, writeRecord, type WorldEntity } from "@/lib/db/world-forge";
+import type { ForgeApplied } from "@/lib/worldforge/forge";
 import { firstSentence, readWorldForge, writeWorldForge, type ExportRecord, type WorldImport } from "@/lib/worldforge/format";
 import { LIMITS, LINK_LABELS, isPlaceBinding, newId, parseRef, readEntry, refOf, remapDoc, type Binding, type Entry, type PlaceBindingKind, type WorldDoc, type WorldType } from "@/lib/worldforge/model";
 import {
@@ -50,10 +52,14 @@ export type WorldImportResult =
       conflicts: string[];
       // Entries in the file matched to one already here by name alone.
       matched: string[];
+      // Cards made before cards remembered their scene, matched by title.
+      scenesMatched: string[];
       events: number;
       secrets: number;
       maps: number;
+      // Storyboard cards made, and cards an earlier import made updated.
       beats: number;
+      beatsUpdated: number;
       skipped: string[];
       // What the file held that did not come in whole, and what came in
       // differently on purpose (src/lib/worldforge/format.ts).
@@ -201,6 +207,10 @@ export function importWorldForge(campaignId: string, account: UploadAccount, raw
   return "error" in parsed ? parsed : applyWorldImport(campaignId, account, parsed);
 }
 
+// The world a file is: the id an ODM export carries, or else its name, the
+// one thing a WorldForge file says about itself.
+export const worldSource = (parsed: Pick<WorldImport, "worldId" | "worldName">) => (parsed.worldId ? `wf:${parsed.worldId}` : `wf:${parsed.worldName}`);
+
 export function applyWorldImport(campaignId: string, account: UploadAccount, parsed: WorldImport): WorldImportResult {
 
   // Pictures are decoded and weighed against the upload budget first, so a
@@ -211,10 +221,8 @@ export function applyWorldImport(campaignId: string, account: UploadAccount, par
   const refusal = admitUpload(account, images.reduce((sum, image) => sum + image.bytes.length, 0), images.length);
   if (refusal) return { error: refusal.error, refusal };
 
-  // The world this file is: the id an ODM export carries, or else its name,
-  // the one thing a WorldForge file says about itself.
   const legacySource = `wf:${parsed.worldName}`;
-  const source = parsed.worldId ? `wf:${parsed.worldId}` : legacySource;
+  const source = worldSource(parsed);
 
   const written: string[] = [];
   try {
@@ -346,6 +354,10 @@ export function applyWorldImport(campaignId: string, account: UploadAccount, par
       settle(doc, [...firstRows.pending, ...rows.pending], (origin, key) => rowValue(doc, origin, key));
       conflicts.push(...merged.conflicts, ...firstRows.conflicts, ...rows.conflicts);
 
+      // The file's scenes, as storyboard cards in each story's order, each
+      // one found again by the scene it came from (world-forge-scenes.ts).
+      const scenes = landScenes(campaignId, doc, source, parsed.beats, refMap);
+
       // The file's top map and the Region map, by the Atlas-to-Region rules
       // (src/lib/db/atlas-region.ts): an undressed Region takes the map, and
       // the places this import made stand where their pins do.
@@ -355,48 +367,22 @@ export function applyWorldImport(campaignId: string, account: UploadAccount, par
       saveWorldDoc(campaignId, doc);
       bridge.finish();
 
-      // The file's scenes, as storyboard cards in each story's order.
-      const titles = new Set(listBeats(campaignId).map((beat) => textKey(beat.title)));
-      const stories = [...new Set(parsed.beats.map((beat) => beat.story))];
-      let beats = 0;
-      for (const [row, story] of stories.entries()) {
-        const ids: string[] = [];
-        for (const beat of parsed.beats.filter((entry) => entry.story === story)) {
-          if (titles.has(textKey(beat.title))) continue;
-          const pov = parseRef(refMap.get(beat.pov));
-          const place = parseRef(refMap.get(beat.place));
-          const made = insertBeat(campaignId, {
-            kind: "event",
-            title: beat.title,
-            body: beat.body,
-            links: { ...(pov?.shelf === "npc" ? { npcId: pov.id } : {}), ...(place?.shelf === "location" ? { locationId: place.id } : {}) },
-            edges: [],
-            routes: {},
-            x: 40 + ids.length * 280,
-            y: 40 + row * 220,
-          });
-          if ("error" in made) break;
-          ids.push(made.id);
-          beats += 1;
-        }
-        ids.slice(0, -1).forEach((id, at) => {
-          updateBeat(campaignId, id, { ...getBeat(id)!, edges: [ids[at + 1]] });
-        });
-      }
       return {
         created,
         updated,
         links: merged.added,
         linksUpdated: merged.updated,
         linksRemoved: merged.removed,
-        conflicts,
+        conflicts: [...conflicts, ...scenes.conflicts],
         matched,
+        scenesMatched: scenes.matched,
         events: mapped.events.length,
         secrets: mapped.secrets.length,
         maps: mapped.maps.length,
-        beats,
-        skipped,
-        losses: parsed.losses,
+        beats: scenes.created,
+        beatsUpdated: scenes.updated,
+        skipped: [...skipped, ...scenes.skipped],
+        losses: [...parsed.losses, ...sceneLossLines(parsed.sceneLosses)],
         notes: [...parsed.notes, ...bridge.notes],
       };
     })();
@@ -457,7 +443,9 @@ export function exportWorldForge(campaignId: string): Record<string, unknown> {
     premise: campaign?.description ?? "",
     records,
     doc,
-    beats: listBeats(campaignId).map((beat) => ({
+    // The board in reading order (src/lib/worldforge/scenes.ts): what that
+    // cannot carry is named by checkWorldForgeExport before the download.
+    beats: planBoardExport(campaignId, new Set(records.map((record) => record.ref))).order.map((beat) => ({
       id: beat.id,
       title: beat.title,
       body: beat.body,
@@ -467,6 +455,15 @@ export function exportWorldForge(campaignId: string): Record<string, unknown> {
     mapImages,
     now: new Date().toISOString(),
   });
+}
+
+// What a WorldForge file of this workshop would not carry, named before it
+// is written (audit WF-19): what each storyboard card loses as a scene. The
+// whole adventure travels in a workshop bundle instead.
+export function checkWorldForgeExport(campaignId: string): { scenes: SceneLoss[]; notes: string[] } {
+  const { entities } = worldView(campaignId);
+  const plan = planBoardExport(campaignId, new Set(entities.map((entity) => entity.ref)));
+  return { scenes: plan.scenes, notes: plan.notes };
 }
 
 // The WorldForge of one campaign copied into another, its refs rewritten to
@@ -560,57 +557,110 @@ export function copyWorldDoc(
 // written: each new entry made on its type's shelf, the links between the
 // new and the old, and the unticked names kept to write later when asked.
 // Add-only, like WorldForge's forge: nothing that exists is rewritten.
-export function applyForge(
-  campaignId: string,
-  input: { entities: unknown; links: unknown; stubs: unknown },
-): { created: number; links: number; stubs: number; skipped: string[] } {
+//
+// The answer says exactly what was and was not applied (audit WF-08): each
+// entry made or refused with its reason, each link written or left out with
+// why (an end that was not added, a link already there, a word WorldForge
+// does not use, a full world), and each name to write. A links-only apply,
+// between entries the world already has, is a whole apply of its own. The
+// world outline (src/lib/dm/world-outline.ts) makes its entries one at a
+// time through this same door, and its links once both ends exist.
+
+export function applyForge(campaignId: string, input: { entities: unknown; links: unknown; stubs: unknown }): ForgeApplied {
   const doc = getWorldDoc(campaignId);
-  const live = new Set(worldEntities(campaignId, doc).map((entity) => entity.ref));
+  const present = worldEntities(campaignId, doc);
+  const live = new Set(present.map((entity) => entity.ref));
+  const names = new Map(present.map((entity) => [entity.ref, entity.name]));
   const refs = new Map<string, string>();
-  const skipped: string[] = [];
+  const made: ForgeApplied["made"] = [];
+  const failed: ForgeApplied["failed"] = [];
   const text = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
   for (const raw of (Array.isArray(input.entities) ? input.entities : []).slice(0, 60)) {
     const row = (raw ?? {}) as Record<string, unknown>;
+    const key = text(row.key, 20);
     const name = text(row.name, 80);
+    if (key) names.set(key, name || "A nameless entry");
     const type = doc.types.find((entry) => entry.id === row.typeId) ?? doc.types[0];
     const summary = text(row.summary, 2_000);
     const short = type.shelf === "npc" || type.shelf === "faction";
-    const made = createRecord(campaignId, type, { name, tagline: short ? firstSentence(summary, type.shelf === "npc" ? 200 : 400) : "", text: short ? "" : summary });
-    if ("error" in made) {
-      skipped.push(`${name || "A nameless entry"}: ${made.error}`);
+    const created = createRecord(campaignId, type, { name, tagline: short ? firstSentence(summary, type.shelf === "npc" ? 200 : 400) : "", text: short ? "" : summary });
+    if ("error" in created) {
+      failed.push({ key, name: name || "A nameless entry", error: created.error });
       continue;
     }
     const aliases = Array.isArray(row.aliases) ? row.aliases.map((alias) => text(alias, 80)).filter(Boolean) : [];
-    writeRecord(campaignId, made.ref, { aliases });
-    doc.entries[made.ref] = nextEntry(doc, made.ref, { typeId: type.id, article: short ? summary : "", hiddenTruth: text(row.hiddenTruth, 1_000), aliases });
-    refs.set(text(row.key, 20), made.ref);
-    live.add(made.ref);
+    writeRecord(campaignId, created.ref, { aliases });
+    doc.entries[created.ref] = nextEntry(doc, created.ref, { typeId: type.id, article: short ? summary : "", hiddenTruth: text(row.hiddenTruth, 1_000), aliases });
+    if (key) refs.set(key, created.ref);
+    names.set(created.ref, name);
+    made.push({ key, name, ref: created.ref });
+    live.add(created.ref);
   }
   const resolve = (value: unknown) => {
     const key = text(value, 120);
     return refs.get(key) ?? (live.has(key) ? key : "");
   };
+  const failedKeys = new Set(failed.map((row) => row.key).filter(Boolean));
   const known = new Set(doc.links.map((link) => `${link.from}|${link.to}|${link.label}`));
+  const linksLeft: ForgeApplied["linksLeft"] = [];
   let linked = 0;
   for (const raw of (Array.isArray(input.links) ? input.links : []).slice(0, 120)) {
     const row = (raw ?? {}) as Record<string, unknown>;
-    const from = resolve(row.from);
-    const to = resolve(row.to);
+    const fromKey = text(row.from, 120);
+    const toKey = text(row.to, 120);
+    // The names the page showed, for a link whose end it did not send.
+    const nameOf = (key: string, shown: unknown) => names.get(key) || text(shown, 80) || "an entry";
+    const said = { from: nameOf(fromKey, row.fromName), to: nameOf(toKey, row.toName), label: text(row.label, 40) };
+    const from = resolve(fromKey);
+    const to = resolve(toKey);
     const label = (LINK_LABELS as readonly string[]).find((entry) => entry === text(row.label, 40).toLowerCase());
-    if (!from || !to || from === to || !label || known.has(`${from}|${to}|${label}`) || doc.links.length >= LIMITS.links) continue;
+    const missing = [!from ? [fromKey, said.from] : null, !to ? [toKey, said.to] : null].filter((end): end is string[] => end !== null);
+    const why = !label
+      ? `“${said.label}” is not a link WorldForge uses`
+      : missing.length
+        ? missing.map(([key, name]) => (failedKeys.has(key) ? `${name} could not be added` : `${name} was not added`)).join(", and ")
+        : from === to
+          ? "it links an entry to itself"
+          : known.has(`${from}|${to}|${label}`)
+            ? "the world has it already"
+            : doc.links.length >= LIMITS.links
+              ? `the world holds ${LIMITS.links} links at most`
+              : "";
+    if (why) {
+      linksLeft.push({ ...said, why });
+      continue;
+    }
     known.add(`${from}|${to}|${label}`);
-    doc.links.push({ id: newId("l"), from, to, label, veracity: "known", oneway: false, rank: "" });
+    doc.links.push({ id: newId("l"), from, to, label: label!, veracity: "known", oneway: false, rank: "" });
     linked += 1;
   }
-  const names = new Set(doc.stubs.map((stub) => textKey(stub.name)));
+  const stubNames = new Set(doc.stubs.map((stub) => textKey(stub.name)));
+  const stubsLeft: ForgeApplied["stubsLeft"] = [];
   let stubs = 0;
   for (const raw of (Array.isArray(input.stubs) ? input.stubs : []).slice(0, 60)) {
     const name = text(raw, 120);
-    if (!name || names.has(textKey(name)) || doc.stubs.length >= LIMITS.stubs) continue;
-    names.add(textKey(name));
+    if (!name) continue;
+    if (stubNames.has(textKey(name))) {
+      stubsLeft.push({ name, why: "already in To write" });
+      continue;
+    }
+    if (doc.stubs.length >= LIMITS.stubs) {
+      stubsLeft.push({ name, why: `To write holds ${LIMITS.stubs} names at most` });
+      continue;
+    }
+    stubNames.add(textKey(name));
     doc.stubs.push({ id: newId("stub"), name, note: "", source: "scan", status: "open" });
     stubs += 1;
   }
   saveWorldDoc(campaignId, doc);
-  return { created: refs.size, links: linked, stubs, skipped };
+  return {
+    created: made.length,
+    links: linked,
+    stubs,
+    skipped: failed.map((row) => `${row.name}: ${row.error}`),
+    made,
+    failed,
+    linksLeft,
+    stubsLeft,
+  };
 }

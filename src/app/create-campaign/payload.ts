@@ -128,6 +128,13 @@ export function campaignPayload(draft: CampaignDraft, { solo, aiNarrates }: Pick
       // table (issue 383). What its prose needs is learned by hearing it on
       // the table's model, so both start as no change at all and live in the
       // settings panel's AI group, where the lead tunes them after a session.
+      // `combatPace` (issue #432) beside them, for the same reason: a table
+      // learns it wants more fights or fewer by playing.
+      //
+      // `waitForTable` and `waitForTableSeconds` (PR #438): whether the AI DM
+      // waits for everyone before it answers is learned once the table plays.
+      // It starts on (a lone player is answered at once) and is the Players
+      // group's Pacing picker.
     },
   };
 }

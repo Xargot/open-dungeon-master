@@ -34,6 +34,7 @@ import { conditionNote, conditionNoteLine } from "@/lib/battlemap/condition-note
 import { matchWeapon } from "@/lib/srd/weapons";
 import { checkRidersOf } from "@/lib/srd/item-check-riders";
 import type { ItemTag } from "@/lib/schemas/item-tags";
+import { magicItemBonus } from "@/lib/srd/item-row";
 
 // ---- hit points ----
 
@@ -183,7 +184,7 @@ export type ItemStatus = {
 export function itemStatus(sheet: CharacterSheet, item: EquipmentItem): ItemStatus {
   const rule = chargeRuleOf(item);
   const charges = rule ? `${chargesLeft(item, rule)}/${chargeMax(rule)} charges` : null;
-  const cursed = Boolean(item.attuned && gearDefFor(item.name, item.slug)?.cursed);
+  const cursed = Boolean(item.attuned && gearDefFor(item)?.cursed);
   const refusal = attunementRefusal(sheet, { [item.name]: { attuned: !(item.attuned || item.attuning) } });
   return { charges, attuning: Boolean(item.attuning), cursed, attuneRefusal: refusal };
 }
@@ -240,12 +241,11 @@ export function isWornGear(item: Pick<EquipmentItem, "name" | "slug" | "srdName"
   if (wearSlotOf(item) !== null) {
     return true;
   }
-  const name = item.srdName ?? item.name;
-  if (item.gear?.armor || item.gear?.weapon || matchArmor(name) || matchWeapon(name) || gearDefFor(name, item.slug)?.base) {
+  if (item.gear?.armor || item.gear?.weapon || matchArmor(item) || matchWeapon(item) || gearDefFor(item)?.base) {
     return true;
   }
-  const magic = item.gear?.magic ?? matchMagicItem(name, item.slug);
-  const riders = item.gear?.checks ? { carried: item.gear.magic?.carried === true } : checkRidersOf(name);
+  const magic = item.gear?.magic ?? matchMagicItem(item);
+  const riders = item.gear?.checks ? { carried: item.gear.magic?.carried === true } : checkRidersOf(item);
   if ((magic && !magic.carried) || (riders && !riders.carried)) {
     return true;
   }
@@ -260,9 +260,9 @@ export function isWornGear(item: Pick<EquipmentItem, "name" | "slug" | "srdName"
 export function wearableGear(equipment: EquipmentItem[]): EquipmentItem[] {
   return equipment.filter(
     (item) =>
-      matchArmor(item.name) !== null ||
-      /\+[123]\b/.test(item.name) ||
-      matchMagicItem(item.name) !== null ||
+      matchArmor(item) !== null ||
+      magicItemBonus(item.name) > 0 ||
+      matchMagicItem(item) !== null ||
       Boolean(item.gear?.magic) ||
       wearSlotOf(item) !== null,
   );

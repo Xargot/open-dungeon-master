@@ -25,7 +25,9 @@ import { summonSteelDefender } from "@/lib/dm/summon-defender";
 import type { CharacterSheet, FullPatchSheetInput } from "@/lib/schemas/sheet";
 import { rollCard, sheetAttacker } from "@/lib/dm/roll-card";
 import { rollAgainst } from "@/lib/roll-labels";
-import type { ToolError } from "@/lib/dm/tool-errors";
+import { namedOption, type ToolError } from "@/lib/dm/tool-errors";
+import { textKey } from "@/lib/language/text-logic";
+import { isConditionNamed, isNamed, nameChoice } from "@/lib/srd/feature-names";
 
 // A spend's damage on one enemy, as the holder's dice card.
 const damageDice = (ctx: SpendContext, enemy: EncounterEnemy, dice: string) =>
@@ -47,8 +49,6 @@ export type SpendContext = {
 
 type Resolution = ToolError | { patch?: FullPatchSheetInput; result: Record<string, unknown> };
 
-const lower = (value: string | undefined | null) => (value ?? "").trim().toLowerCase();
-
 function formula(ctx: SpendContext, value: Parameters<typeof resolveFormula>[0]): string {
   return resolveFormula(value, ctx.held.level, ctx.mods);
 }
@@ -67,10 +67,14 @@ function bardicDie(level: number): string {
   return level >= 15 ? "d12" : level >= 10 ? "d10" : level >= 5 ? "d8" : "d6";
 }
 
-function conditionName(ctx: SpendContext, does: Extract<SpendDoes, { kind: "buff" }>): string {
-  const wanted = lower(ctx.args.variant);
-  const variant = does.variants ? Object.entries(does.variants).find(([key]) => wanted.includes(key))?.[1] : undefined;
-  const base = variant ?? (Array.isArray(does.condition) ? resolveFormula(does.condition, ctx.held.level) : does.condition);
+// The condition a buff lays: its variant's, named whole, when it has
+// variants.
+function conditionName(ctx: SpendContext, does: Extract<SpendDoes, { kind: "buff" }>): string | ToolError {
+  const variant = does.variants ? namedOption(ctx.spend.name, ctx.args.variant, Object.keys(does.variants)) : null;
+  if (variant !== null && typeof variant !== "string") {
+    return variant;
+  }
+  const base = variant !== null && does.variants ? does.variants[variant] : Array.isArray(does.condition) ? resolveFormula(does.condition, ctx.held.level) : does.condition;
   return base.replace("{bardic}", bardicDie(ctx.held.level)).replace("{units}", String(ctx.units));
 }
 
@@ -111,7 +115,7 @@ function damageEnemy(ctx: SpendContext, enemy: EncounterEnemy, amount: number, t
 
 function enemyCondition(ctx: SpendContext, enemy: EncounterEnemy, condition: string, meta: Record<string, unknown>) {
   const fresh = getEnemy(enemy.id) ?? enemy;
-  const kept = fresh.conditions.filter((entry) => lower(entry) !== lower(condition));
+  const kept = fresh.conditions.filter((entry) => textKey(entry) !== textKey(condition));
   patchEnemyConditions(fresh.id, [...kept, condition], {
     ...(fresh.conditionMeta as ConditionMetaMap),
     [condition]: { source: ctx.sheet.id, ...meta },
@@ -121,7 +125,7 @@ function enemyCondition(ctx: SpendContext, enemy: EncounterEnemy, condition: str
 
 function sheetCondition(campaign: Campaign, target: CharacterSheet, condition: string, rounds: number, extra: FullPatchSheetInput = {}) {
   const fresh = getSheetById(target.id) ?? target;
-  const kept = fresh.conditions.filter((entry) => lower(entry) !== lower(condition));
+  const kept = fresh.conditions.filter((entry) => textKey(entry) !== textKey(condition));
   const updated = patchSheet(fresh.id, {
     conditions: [...kept, condition],
     conditionMeta: { ...fresh.conditionMeta, [condition]: { rounds } },
@@ -158,10 +162,9 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
   const { sheet, campaign } = ctx;
   switch (does.kind) {
     case "choose": {
-      const wanted = lower(ctx.args.variant);
-      const option = does.options.find((entry) => wanted && (lower(entry) === wanted || wanted.includes(lower(entry))));
-      if (!option) {
-        return { error: `${ctx.spend.name} takes one option as the variant: ${does.options.join(", ")}. Ask the player which, unless they named one. Nothing was changed.`, retry: true };
+      const option = namedOption(ctx.spend.name, ctx.args.variant, does.options);
+      if (typeof option !== "string") {
+        return option;
       }
       const features = sheet.features.map((feature) =>
         feature.name === ctx.held.name ? { ...feature, name: `${ctx.held.feature} (${option})` } : feature,
@@ -170,7 +173,16 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
     }
     case "buff": {
       const condition = conditionName(ctx, does);
+      if (typeof condition !== "string") {
+        return condition;
+      }
       const lines: string[] = [];
+      // Aimed at a creature with no fight on: it is not on the board, so the
+      // use is paid and the DM narrates it on the creature named (Hexblade's
+      // Curse laid at a parley).
+      if ((does.target === "enemy" || does.quarry) && !getActiveEncounter(campaign.id)) {
+        return { result: { applied: [`${ctx.spend.name}: ${condition}, on the creature the story names. There is no fight, so no creature on the board carries it.`] } };
+      }
       const tempHp = does.tempHp ? Math.max(0, Number(rollCard(ctx.campaign, ctx.turn, sheet.id, "custom", `${ctx.spend.name}: temporary hit points`, formula(ctx, does.tempHp), null).total)) : 0;
       if (does.target === "enemy") {
         const enemy = targetEnemy(ctx);
@@ -204,7 +216,7 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
       }
       let patch: FullPatchSheetInput | undefined;
       if (!does.target || does.target === "self" || (does.target === "ally" && !ctx.args.targetCharacterId)) {
-        const kept = sheet.conditions.filter((entry) => lower(entry) !== lower(condition));
+        const kept = sheet.conditions.filter((entry) => textKey(entry) !== textKey(condition));
         patch = {
           conditions: [...kept, condition],
           conditionMeta: { ...sheet.conditionMeta, [condition]: { rounds: does.rounds, ...(quarry ? { quarry: quarry.id } : {}) } },
@@ -244,15 +256,20 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
       if (does.perUnit && ctx.units < 1) {
         return { error: `${ctx.spend.name} needs at least 1 point spent: pass amount. Nothing was spent.`, retry: true };
       }
+      // A damage type the caster chooses is named whole in the variant.
+      const type = does.typeFromVariant ? namedOption(ctx.spend.name, ctx.args.variant, does.typeFromVariant) : (does.type ?? "");
+      if (typeof type !== "string") {
+        return type;
+      }
       const dc = saveDc(ctx, does.dcAbility);
       const save = rollEnemySave(campaign.id, enemy, does.save, dc, {
         resist: Boolean(does.condition) && bindsWorthResisting([does.condition ?? ""]),
+        against: does.condition,
         record: { turn: ctx.turn ?? undefined, detail: `${enemy.displayName}: ${does.save.toUpperCase()} save against ${ctx.spend.name}` },
       });
       const result: Record<string, unknown> = { target: enemy.displayName, save: save.total, dc, saved: save.success };
       const dice = does.perUnit ? addUnits(does.perUnit, does.perUnit, ctx.units - 1) : does.dice ? formula(ctx, does.dice) : null;
       if (dice) {
-        const type = (does.typeFromVariant ?? []).find((entry) => lower(ctx.args.variant).includes(entry)) ?? does.type ?? "";
         const rolled = damageDice(ctx, enemy, dice);
         const amount = save.success ? (does.half ? Math.floor(rolled / 2) : 0) : rolled;
         Object.assign(result, { rolled: `${dice}: ${rolled}` }, damageEnemy(ctx, getEnemy(enemy.id) ?? enemy, amount, type));
@@ -331,11 +348,11 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
       const die = `1${bardicDie(ctx.held.level)}`;
       const rolled = damageDice(ctx, enemy, die);
       const result: Record<string, unknown> = { rolled: `${die}: ${rolled}`, ...damageEnemy(ctx, enemy, rolled, "") };
-      if (/defen/.test(lower(ctx.args.variant))) {
+      if (isNamed(ctx.args.variant ?? "", "defensive flourish", "defensive")) {
         const condition = `defensive flourish (+${rolled})`;
         return {
           patch: {
-            conditions: [...sheet.conditions.filter((entry) => !/^defensive flourish/i.test(entry)), condition],
+            conditions: [...sheet.conditions.filter((entry) => !isConditionNamed(entry, "defensive flourish")), condition],
             conditionMeta: { ...sheet.conditionMeta, [condition]: { untilTurnOf: sheet.id } },
           },
           result: { ...result, applied: `${condition}: +${rolled} AC until ${sheet.name}'s next turn.` },
@@ -345,9 +362,21 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
     }
     case "storm_aura":
       return stormAura(ctx);
+    case "restore": {
+      const state = sheet.resources[does.pool];
+      if (!state) {
+        return { error: `${sheet.name} has no ${does.pool.replace(/^sub_/, "").replace(/_/g, " ")} to restore. Nothing was spent.`, refused: "rules" };
+      }
+      if (state.used <= 0) {
+        return { error: `${sheet.name}'s ${does.pool.replace(/^sub_/, "").replace(/_/g, " ")} is full; ${ctx.spend.name} has nothing to bring back. Nothing was spent.`, refused: "rules" };
+      }
+      const back = Math.min(does.amount, state.used);
+      const resources = { ...sheet.resources, [does.pool]: { max: state.max, used: state.used - back } };
+      return { patch: { resources }, result: { restored: `${back} ${does.pool.replace(/^sub_/, "").replace(/_/g, " ")} back (${state.max - state.used + back}/${state.max}).` } };
+    }
     case "flames": {
-      const wanted = lower(ctx.args.variant);
-      if (/heal/.test(wanted)) {
+      const wanted = does.healOnly ? "heal" : textKey(ctx.args.variant ?? "");
+      if (wanted === "heal") {
         const rolled = rollCard(ctx.campaign, ctx.turn, sheet.id, "custom", `${ctx.spend.name}: healing`, formula(ctx, does.formula), null).total;
         const ally = ctx.args.targetCharacterId ? getSheetById(ctx.args.targetCharacterId) : sheet;
         if (!ally || ally.deathSaves?.dead) {
@@ -362,7 +391,7 @@ export function resolveSpendEffect(ctx: SpendContext, does: SpendDoes): Resoluti
         }
         return { result: { healed: `${ally.name} regains ${currentHp - ally.currentHp} hit points (${rolled} rolled).` } };
       }
-      if (!/burn|harm|damage/.test(wanted)) {
+      if (wanted !== "burn") {
         return { error: `${ctx.spend.name} takes variant "heal" or "burn". Ask the player which, unless they named one. Nothing was spent.`, retry: true };
       }
       const enemy = targetEnemy(ctx);
@@ -414,6 +443,7 @@ function burst(ctx: SpendContext, spec: NonNullable<Extract<SpendDoes, { kind: "
   for (const enemy of enemies) {
     const save = rollEnemySave(ctx.campaign.id, enemy, spec.save, dc, {
       resist: Boolean(spec.condition) && bindsWorthResisting([spec.condition ?? ""]),
+      against: spec.condition,
       record: { turn: ctx.turn ?? undefined, detail: `${enemy.displayName}: ${spec.save.toUpperCase()} save against ${ctx.spend.name}` },
     });
     if (save.success) {
@@ -428,6 +458,9 @@ function burst(ctx: SpendContext, spec: NonNullable<Extract<SpendDoes, { kind: "
     if (spec.condition) {
       enemyCondition(ctx, enemy, spec.condition, spec.rounds ? { rounds: spec.rounds } : {});
       lines.push(`${enemy.displayName} is ${spec.condition}.`);
+    }
+    if (spec.mark) {
+      enemyCondition(ctx, getEnemy(enemy.id) ?? enemy, spec.mark, spec.rounds ? { rounds: spec.rounds } : {});
     }
   }
   return lines;
@@ -450,15 +483,18 @@ function hasBoard(encounter: Encounter): boolean {
 
 // Storm Aura: the barbarian's environment, chosen by the variant.
 function stormAura(ctx: SpendContext): Resolution {
-  const kind = (["desert", "sea", "tundra"] as const).find((entry) => lower(ctx.args.variant).includes(entry));
+  const chosen = textKey(ctx.held.choice ?? "");
+  const kind = (["desert", "sea", "tundra"] as const).find(
+    (entry) => isNamed(ctx.args.variant ?? "", entry) || textKey(nameChoice(ctx.args.variant ?? "") ?? "") === entry || (!ctx.args.variant && chosen === entry),
+  );
   if (!kind) {
-    return { error: "Storm Aura takes the environment as the variant: desert, sea or tundra, the one chosen when the barbarian took Storm Aura (on their sheet). Nothing was spent.", retry: true };
+    return { error: "Storm Aura takes the environment as the variant: desert, sea or tundra, the one chosen when the barbarian took Storm Aura (use_resource 'Storm Environment' sets it on the sheet). Nothing was spent.", retry: true };
   }
   const encounter = getActiveEncounter(ctx.campaign.id);
   const amount = formula(ctx, STORM_AURA[kind]);
   const condition = `storm aura (${kind})`;
   const patch: FullPatchSheetInput = {
-    conditions: [...ctx.sheet.conditions.filter((entry) => !/^storm aura/i.test(entry)), condition],
+    conditions: [...ctx.sheet.conditions.filter((entry) => !isConditionNamed(entry, "storm aura")), condition],
     conditionMeta: { ...ctx.sheet.conditionMeta, [condition]: { rounds: 10 } },
   };
   if (kind === "sea") {
@@ -481,6 +517,17 @@ function stormAura(ctx: SpendContext): Resolution {
     }
     return { patch, result: { aura: condition, desert: lines.length ? lines : "no creature stands in the aura on the board" } };
   }
+  // Raging Storm (14th): each activation of the tundra makes one creature
+  // in the aura save on Strength or have speed 0 until the barbarian's next
+  // turn.
+  const frozen: Record<string, unknown> = {};
+  if (ctx.args.targetEnemyId && ctx.sheet.features.some((feature) => textKey(feature.name) === "raging storm")) {
+    const resolved = resolveSpendEffect(ctx, { kind: "save_effect", save: "str", dcAbility: "con", condition: "raging storm (tundra)", rounds: 1, rangeFt: 10 });
+    if ("error" in resolved) {
+      return resolved;
+    }
+    Object.assign(frozen, { ragingStorm: resolved.result });
+  }
   const given: string[] = [];
   for (const ally of alliesInReach(ctx, 10, false)) {
     if (Number(amount) > ally.tempHp) {
@@ -491,5 +538,5 @@ function stormAura(ctx: SpendContext): Resolution {
       given.push(ally.name);
     }
   }
-  return { patch, result: { aura: condition, tundra: `${amount} temporary hit points to ${given.join(", ") || "nobody new"}` } };
+  return { patch, result: { aura: condition, tundra: `${amount} temporary hit points to ${given.join(", ") || "nobody new"}`, ...frozen } };
 }

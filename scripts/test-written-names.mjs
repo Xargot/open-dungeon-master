@@ -2,10 +2,10 @@
 // English step (a plural "s", the word "armor", "the", "vial of", "Oath of",
 // "Tasha's") is applied to it. The English rows carry their English
 // spellings instead (src/lib/srd/name-forms.ts, the spell checklist's other
-// names, a subclass's titles), and an article is a leading word of the table
-// language's stop list (src/lib/language/language.ts nameTerms), so "the
-// Grey Wolf", "il Lupo Grigio" and "der Grauwolf" each find their token. A
-// name in another language finds no English row: the rulebook is English.
+// names, a subclass's titles), and a record is its whole name as written,
+// article and all: "the Grey Wolf", "il Lupo Grigio" and "der Grauwolf" are
+// none of the tokens "Grey Wolf", "Lupo Grigio", "Grauwolf". A name in
+// another language finds no English row: the rulebook is English.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -30,8 +30,9 @@ const pack = path.join(dir, "open5e.sqlite");
 process.env.CONTENT_DB_PATH = pack;
 register("./lib/register-alias.mjs", import.meta.url);
 
-const { matchArmor, armorInside, SRD_ARMOR } = await import("../src/lib/srd/armor.ts");
-const { matchWeapon, SRD_WEAPONS } = await import("../src/lib/srd/weapons.ts");
+const { armorNamed, SRD_ARMOR } = await import("../src/lib/srd/armor.ts");
+const { compositeGearNamed } = await import("../src/lib/srd/magic-gear.ts");
+const { weaponNamed, SRD_WEAPONS } = await import("../src/lib/srd/weapons.ts");
 const { matchGear, SRD_GEAR } = await import("../src/lib/srd/adventuring-gear.ts");
 const { buildItemSheet } = await import("../src/lib/help/item-sheet.ts");
 const { itemWeightByName } = await import("../src/lib/content/item-weights.ts");
@@ -44,7 +45,7 @@ const { materialComponents } = await import("../src/lib/dm/cast-materials.ts");
 const { optionAllowed } = await import("../src/lib/srd/starting-kit.ts");
 const { bundledPriceCopper } = await import("../src/lib/srd/starting-wealth.ts");
 const { underwaterSwing } = await import("../src/lib/dm/underwater.ts");
-const { nameTerms, withoutLeadingStopWords } = await import("../src/lib/language/language.ts");
+const { withoutLeadingStopWords } = await import("../src/lib/language/language.ts");
 const { findNamed } = await import("../src/lib/language/text-logic.ts");
 const { normalizeCreatureName } = await import("../src/lib/dm/engine-boundary.ts");
 const { racialNaturalWeapon } = await import("../src/lib/srd/racial-weapons.ts");
@@ -61,7 +62,7 @@ function test(name, fn) {
 const LANGUAGES = ["english", "italian", "french", "spanish", "german"];
 // The same item, weapon, armour and poison named in each table language.
 const TRANSLATED = {
-  english: { sword: "Longsword", swords: "Longswords", shield: "Shield", shields: "Shields", plate: "Plate Armor", torch: "Torches", poison: "Vial of Serpent Venom" },
+  english: { sword: "Longsword", swords: "Longswords", shield: "Shield", shields: "Shields", plate: "Plate Armor", torch: "Torches", poison: "Serpent Venom" },
   italian: { sword: "Spada lunga", swords: "Spade lunghe", shield: "Scudo", shields: "Scudi", plate: "Armatura di piastre", torch: "Torce", poison: "Fiala di veleno di serpente" },
   french: { sword: "Épée longue", swords: "Épées longues", shield: "Bouclier", shields: "Boucliers", plate: "Armure de plaques", torch: "Flambeaux", poison: "Fiole de venin de serpent" },
   spanish: { sword: "Espada larga", swords: "Espadas largas", shield: "Escudo", shields: "Escudos", plate: "Armadura de placas", torch: "Antorchas", poison: "Vial de veneno de serpiente" },
@@ -71,12 +72,12 @@ const TRANSLATED = {
 test("every SRD weapon, armour and gear row is found by its name and its plural", () => {
   for (const weapon of SRD_WEAPONS) {
     for (const form of pluralForms(weapon.name.toLowerCase())) {
-      assert.equal(matchWeapon(form)?.name, weapon.name, form);
+      assert.equal(weaponNamed(form)?.name, weapon.name, form);
     }
   }
   for (const armor of SRD_ARMOR) {
     for (const form of pluralForms(armor.name.toLowerCase())) {
-      assert.equal(matchArmor(form)?.name, armor.name, form);
+      assert.equal(armorNamed(form)?.name, armor.name, form);
     }
   }
   for (const gear of SRD_GEAR) {
@@ -89,25 +90,28 @@ test("every SRD weapon, armour and gear row is found by its name and its plural"
   assert.equal(matchGear("rations")?.name, "Rations (1 day)");
 });
 
-test("the English forms of an armour stay on its row: Plate Armor, Shields, a magic bonus, a suit at the tail", () => {
-  assert.equal(matchArmor("Plate Armor")?.name, "Plate");
-  assert.equal(matchArmor("Plate Armour")?.name, "Plate");
-  assert.equal(matchArmor("Armor, Plate")?.name, "Plate");
-  assert.equal(matchArmor("Shields")?.name, "Shield");
-  assert.equal(matchArmor("+1 Studded Leather Armor")?.name, "Studded Leather");
-  assert.equal(matchArmor("Dwarven Chain Mail")?.name, "Chain Mail");
+test("the English forms of an armour stay on its row: Plate Armor, Shields, a magic bonus; a suit among other words is none", () => {
+  assert.equal(armorNamed("Plate Armor")?.name, "Plate");
+  assert.equal(armorNamed("Plate Armour")?.name, "Plate");
+  assert.equal(armorNamed("Armor, Plate")?.name, "Plate");
+  assert.equal(armorNamed("Shields")?.name, "Shield");
+  assert.equal(armorNamed("+1 Studded Leather Armor")?.name, "Studded Leather");
+  assert.equal(armorNamed("Dwarven Chain Mail"), null);
+  assert.equal(armorNamed("Dinner plate"), null);
   // A Guild Engineer's work leathers are clothing (#113); leathers alone are Leather.
-  assert.equal(matchArmor("work leathers"), null);
-  assert.equal(matchArmor("Leathers")?.name, "Leather");
-  assert.equal(armorInside("Plate Armor of Etherealness")?.name, "Plate");
-  assert.equal(armorInside("Glamoured Padded Leathers of Resistance")?.name, "Padded");
+  assert.equal(armorNamed("work leathers"), null);
+  assert.equal(armorNamed("Leathers")?.name, "Leather");
+  // A magic suit names its base as the SRD composes it.
+  assert.equal(compositeGearNamed("Chain Mail of Fire Resistance")?.def.base?.name, "Chain Mail");
+  assert.equal(compositeGearNamed("Mithral Half Plate")?.def.base?.name, "Half Plate");
+  assert.equal(compositeGearNamed("Glamoured Padded Leathers of Resistance"), null);
   assert.equal(bundledPriceCopper("Plate Armor"), 150_000);
   assert.equal(bundledPriceCopper("Plate"), 150_000);
 });
 
-test("a weapon's tail and its plural reach the item sheet, and under water a weapon is the SRD row it swings as", () => {
+test("a weapon's plural reaches the item sheet, a word of a name does not, and under water a weapon is the SRD row it swings as", () => {
   assert.equal(buildItemSheet("+1 Longswords", [])?.weapon?.damage, "1d8 + 1");
-  assert.equal(buildItemSheet("Silvered Dagger", [])?.weapon?.damage, "1d4");
+  assert.equal(buildItemSheet("Silvered Dagger", []), null);
   for (const weapon of ["Javelins", "Giavellotto", "Javeline", "Jabalina", "Wurfspeer"]) {
     assert.equal(underwaterSwing({ weapon, base: "Javelin", melee: true, swims: false, beyondNormal: false }).disadvantage, false, weapon);
   }
@@ -119,33 +123,34 @@ test("a weapon's tail and its plural reach the item sheet, and under water a wea
 test("a name in each table language is compared as written: it finds no English row, and loses no letter", () => {
   for (const language of LANGUAGES.slice(1)) {
     const names = TRANSLATED[language];
-    assert.equal(matchWeapon(names.sword), null, `${language}: ${names.sword}`);
-    assert.equal(matchWeapon(names.swords), null, `${language}: ${names.swords}`);
-    assert.equal(matchArmor(names.shield), null, `${language}: ${names.shield}`);
-    assert.equal(matchArmor(names.shields), null, `${language}: ${names.shields}`);
-    assert.equal(matchArmor(names.plate), null, `${language}: ${names.plate}`);
+    assert.equal(weaponNamed(names.sword), null, `${language}: ${names.sword}`);
+    assert.equal(weaponNamed(names.swords), null, `${language}: ${names.swords}`);
+    assert.equal(armorNamed(names.shield), null, `${language}: ${names.shield}`);
+    assert.equal(armorNamed(names.shields), null, `${language}: ${names.shields}`);
+    assert.equal(armorNamed(names.plate), null, `${language}: ${names.plate}`);
     assert.equal(matchGear(names.torch), null, `${language}: ${names.torch}`);
     assert.equal(itemWeightByName(names.torch), null, `${language}: ${names.torch}`);
     assert.equal(findPoison(names.poison), null, `${language}: ${names.poison}`);
   }
   const english = TRANSLATED.english;
-  assert.equal(matchWeapon(english.swords)?.name, "Longsword");
-  assert.equal(matchArmor(english.shields)?.name, "Shield");
-  assert.equal(matchArmor(english.plate)?.name, "Plate");
+  assert.equal(weaponNamed(english.swords)?.name, "Longsword");
+  assert.equal(armorNamed(english.shields)?.name, "Shield");
+  assert.equal(armorNamed(english.plate)?.name, "Plate");
   assert.equal(matchGear(english.torch)?.name, "Torch");
   assert.equal(itemWeightByName(english.torch), 1);
   assert.equal(itemWeightByName("Pouches"), 1);
   assert.equal(findPoison(english.poison)?.id, "serpent_venom");
   // A name ending in "s" keeps its letter: the Kris and the Gladius are not a Kri or a Gladiu.
-  assert.equal(matchWeapon("Kris"), null);
+  assert.equal(weaponNamed("Kris"), null);
   assert.equal(matchGear("Pelles"), null);
 });
 
-test("a poison is found by its name, inside a vial's label, and without the words a label adds", () => {
+test("a poison is found by its whole name, its note aside, and a label that holds it or drops a word of it is none", () => {
   assert.equal(findPoison("Essence of Ether")?.id, "essence_of_ether");
-  assert.equal(findPoison("Essence Ether")?.id, "essence_of_ether");
-  assert.equal(findPoison("a dose of Malice")?.id, "malice");
+  assert.equal(findPoison("Essence Ether"), null);
   assert.equal(findPoison("Oil of Taggit (vial)")?.id, "oil_of_taggit");
+  assert.equal(findPoison("a dose of Malice"), null);
+  assert.equal(findPoison("Vial of Serpent Venom"), null);
 });
 
 test("a stored subclass names its subclass with or without a title, and a name in another language is matched whole", () => {
@@ -170,18 +175,17 @@ test("a spell's other checklist names find its rows, with no possessive taken of
   assert.equal(spellMechFor(["Freccia acida di Melf"]), null);
 });
 
-test("an article is a leading stop word of the table language, in every language", () => {
+test("a record is its whole name as written, in every language: an article before it makes another name, and one inside it is part of it", () => {
   const tokens = [{ name: "Grey Wolf" }, { name: "Lupo Grigio" }, { name: "Loup Gris" }, { name: "Lobo Gris" }, { name: "Grauwolf" }, { name: "La Volpe" }];
   const written = { english: ["the Grey Wolf", "Grey Wolf"], italian: ["il Lupo Grigio", "Lupo Grigio"], french: ["le Loup Gris", "Loup Gris"], spanish: ["el Lobo Gris", "Lobo Gris"], german: ["der Grauwolf", "Grauwolf"] };
   for (const language of LANGUAGES) {
     const [withArticle, name] = written[language];
-    assert.equal(findNamed(tokens, nameTerms(withArticle, language), (token) => [token.name])?.name, name, `${language}: ${withArticle}`);
+    assert.equal(findNamed(tokens, withArticle, (token) => [token.name]), null, `${language}: ${withArticle}`);
+    assert.equal(findNamed(tokens, name, (token) => [token.name])?.name, name, `${language}: ${name}`);
   }
-  // A name that starts with a stop word is found whole first.
-  assert.equal(findNamed(tokens, nameTerms("La Volpe", "italian"), (token) => [token.name])?.name, "La Volpe");
-  // An English article is no article at an Italian table, and the reverse.
-  assert.equal(findNamed(tokens, nameTerms("the Lupo Grigio", "italian"), (token) => [token.name]), null);
-  assert.equal(findNamed(tokens, nameTerms("il Grey Wolf", "english"), (token) => [token.name]), null);
+  assert.equal(findNamed(tokens, "La Volpe", (token) => [token.name])?.name, "La Volpe");
+  assert.equal(findNamed(tokens, "Volpe", (token) => [token.name]), null);
+  // The narration guard (prose, not a record) still reads past an article.
   assert.equal(withoutLeadingStopWords("l arco", "italian"), "arco", "an elided article");
 });
 
@@ -194,13 +198,15 @@ test("the narration guard's creature names drop the table language's article and
   assert.equal(normalizeCreatureName("the Ogre", "italian"), "the ogre");
 });
 
-test("a lineage's natural weapon and a beast form are found as written, with the article the table writes", () => {
+test("a lineage's natural weapon and a beast form are found by the whole name only", () => {
   const features = [{ name: "Claws (1d4 slashing unarmed strike)" }];
-  assert.equal(racialNaturalWeapon(features, nameTerms("her claws", "english"))?.srd.name, "Claws");
-  assert.equal(racialNaturalWeapon(features, nameTerms("gli artigli", "italian")), null, "a translated name finds no English trait");
-  assert.equal(findBeastForm("the Brown Bear")?.name, "Brown Bear");
-  assert.equal(findBeastForm("brown bear form")?.name, "Brown Bear");
-  assert.equal(findBeastForm("Orso bruno"), null);
+  assert.equal(racialNaturalWeapon(features, "claws")?.srd.name, "Claws");
+  assert.equal(racialNaturalWeapon(features, "her claws"), null, "a possessive makes another name");
+  assert.equal(racialNaturalWeapon(features, "gli artigli"), null, "a translated name finds no English trait");
+  assert.equal(findBeastForm("brown bear")?.name, "Brown Bear");
+  for (const written of ["the Brown Bear", "brown bear form", "Orso bruno", "l'Orso bruno", "l'Ours brun", "el Oso pardo", "der Braunbär"]) {
+    assert.equal(findBeastForm(written), null, written);
+  }
 });
 
 test("a genre token's picture is found with or without its The, and a name in another language finds none", () => {

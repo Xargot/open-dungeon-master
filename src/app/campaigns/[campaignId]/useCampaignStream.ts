@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { CampaignMember, SessionUser } from "@/lib/campaign-types";
 import type { CoordinationPhase } from "@/lib/dm/coordination-logic";
+import type { TableWaitView } from "@/lib/dm/table-wait-logic";
 import { coalesceRefresh } from "@/app/campaigns/[campaignId]/coalesce";
 import { createStreamWatchdog } from "@/app/campaigns/[campaignId]/streamWatchdog";
 import {
@@ -43,6 +44,9 @@ import { navigateTo } from "@/lib/navigation";
 import { registerBrowserSpecies } from "@/lib/srd/race-id";
 import { registerBrowserSubclassExtras, type SubclassExtras } from "@/lib/srd/subclass-tables";
 import { registerBrowserTableFeats } from "@/lib/srd/feat-effects";
+import type { TableBreak } from "@/lib/dm/table-break-logic";
+import { registerWorkshopClasses } from "@/lib/classes/workshop-registry";
+import type { WorkshopClass } from "@/lib/homebrew/class-data";
 
 export type DmStatus =
   | "idle"
@@ -65,7 +69,7 @@ export type MediaStatus = {
 // from mediaStatus: both are keyed by message id, and a passage can be
 // waiting on its picture and its voice at once (issue 88).
 export type NarrationStatus = {
-  state: "queued" | "generating" | "failed";
+  state: "queued" | "generating" | "failed" | "skipped";
   reason?: string;
 };
 
@@ -162,6 +166,9 @@ export type CampaignState = {
   campaign: Campaign | null;
   // The plan the party is coordinating, while it drafts (issue 254).
   coordination: CoordinationPhase | null;
+  // Who the DM is waiting on before its next turn, at a table that waits
+  // for everyone (src/lib/dm/table-wait.ts); null when it is not waiting.
+  tableWait: TableWaitView | null;
     // The table holds a story arc AI Story Setup has not built on yet (the
   // lobby's warning, issue 249); false for anyone who does not steer.
   prepArc: boolean;
@@ -263,6 +270,8 @@ export type CampaignState = {
   handout: HandoutShown | null;
   // Someone raised the X-card and the table is paused; nobody is named.
   safetyPause: { at: number; reason: "x_card" } | null;
+  // A table break: who paused and since when (src/lib/dm/table-break.ts).
+  tableBreak: TableBreak | null;
   narrationAudio: Record<string, string>;
   // `live` marks a passage offered while it is still being rendered
   // (tts_stream): heard now, by whoever is at the table now.
@@ -328,6 +337,7 @@ const initialState: CampaignState = {
   campaign: null,
   prepArc: false,
   coordination: null,
+  tableWait: null,
   // A plain player until the snapshot says otherwise: the safe default is
   // the one that shows the fewest controls and no secrets.
   caps: capsForRole("player", "ai"),
@@ -377,6 +387,7 @@ const initialState: CampaignState = {
   camera: null,
   handout: null,
   safetyPause: null,
+  tableBreak: null,
   narrationAudio: {},
   latestTts: null,
   latestRoll: null,
@@ -690,6 +701,16 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
         case "safety_resumed":
           next.safetyPause = null;
           return next;
+        case "table_paused":
+          next.tableBreak = {
+            at: Number(payload.at ?? Date.now()),
+            userId: String(payload.userId ?? ""),
+            name: String(payload.name ?? "Someone"),
+          };
+          return next;
+        case "table_resumed":
+          next.tableBreak = null;
+          return next;
         case "location_map_ready":
           next.locations = state.locations.map((location) =>
             location.id === payload.locationId
@@ -919,6 +940,9 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
         case "coordination_updated":
           next.coordination = (payload.phase as CoordinationPhase | null) ?? null;
           return next;
+        case "table_wait":
+          next.tableWait = (payload.wait as TableWaitView | null) ?? null;
+          return next;
         case "floor_changed":
           next.campaign = state.campaign
             ? { ...state.campaign, floor: payload.floor as Campaign["floor"] }
@@ -1059,6 +1083,8 @@ const PERSISTED_EVENTS = [
   "handout_dismissed",
   "x_card",
   "safety_resumed",
+  "table_paused",
+  "table_resumed",
   // Each of these has a case above and was published for the table, but was
   // never listened for, so it only showed after a reload: the party record
   // (purse, pack, travel formation), a painted NPC portrait, the Director's
@@ -1078,6 +1104,9 @@ const EPHEMERAL_EVENTS = [
   "cast_updated",
   "tts_stream",
   "dm_status",
+  // Who the DM waits on before its next turn (src/lib/dm/table-wait.ts).
+  // The whole view each time, and the snapshot carries it for a reload.
+  "table_wait",
   "dm_job",
   "utility_calls",
   "dm_delta",
@@ -1231,6 +1260,8 @@ export function useCampaignStream(campaignId: string) {
       for (const [classId, tables] of Object.entries((data.subclasses ?? {}) as SubclassExtras)) {
         registerBrowserSubclassExtras(classId, tables);
       }
+      // The table's workshop classes (src/lib/classes/workshop-registry.ts).
+      registerWorkshopClasses((data.classes ?? []) as WorkshopClass[]);
       // The table's whole list: a feat its DM forgot leaves with it.
       registerBrowserTableFeats(data.feats ?? {}, campaignId, { replace: true });
       dispatch({
@@ -1240,6 +1271,7 @@ export function useCampaignStream(campaignId: string) {
           campaign: data.campaign,
           prepArc: Boolean(data.prepArc),
           coordination: (data.coordination as CoordinationPhase | null) ?? null,
+          tableWait: (data.tableWait as TableWaitView | null) ?? null,
           caps: data.caps ?? capsForRole("player", "ai"),
           me: data.me,
           members: data.members,
@@ -1276,6 +1308,7 @@ export function useCampaignStream(campaignId: string) {
           activeSheetId: data.activeSheetId ?? "",
           handout: data.handout ?? null,
           safetyPause: data.safetyPause ?? null,
+          tableBreak: data.tableBreak ?? null,
           titleCard: data.titleCard ?? null,
           titleCardQueue: [],
           lastSeq,

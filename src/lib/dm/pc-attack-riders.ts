@@ -11,12 +11,13 @@ import type { Campaign } from "@/lib/db/campaigns";
 import type { PendingAttack } from "@/lib/db/dm-turns";
 import { getActiveEncounter, getEnemy, patchEnemyConditions, type EncounterEnemy } from "@/lib/db/encounters";
 import { rollEnemySave } from "@/lib/dm/forced-save";
+import type { CreatureOnHit } from "@/lib/srd/creature-attacks";
 import { resourceLeft } from "@/lib/dm/attack-rules";
 import type { ManeuverPick } from "@/lib/dm/pc-attack-plan";
 import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
 import { isIncapacitated, removeConditions, type ConditionMeta } from "@/lib/dm/condition-logic";
-import { sizeRank } from "@/lib/bestiary/statblock";
+import { sizeRank } from "@/lib/bestiary/enemy-numbers";
 import { publishEncounter } from "@/lib/dm/enemy-damage";
 import { applyDmMutation } from "@/lib/dm/mutations";
 import { GRAPPLING_STRIKE, MANEUVERED, maneuverDieFor, maneuverUse, offSwingRefusal, type ManeuverUse } from "@/lib/dm/maneuver-rules";
@@ -26,13 +27,14 @@ import { optionsOfKind } from "@/lib/srd/options";
 import { textKey } from "@/lib/language/text-logic";
 import type { WeaponMaterial } from "@/lib/dm/damage-logic";
 import { ammoKindForWeapon } from "@/lib/srd/ammunition";
+import { isNamed } from "@/lib/srd/feature-names";
 
 // The condition a maneuver's rider save decides, when it has one.
-export const MANEUVER_RIDERS: Array<{ match: RegExp; condition: string; save: "str" | "wis" }> = [
-  { match: /trip/i, condition: "prone", save: "str" },
-  { match: /menacing/i, condition: "frightened", save: "wis" },
-  { match: /disarm/i, condition: "disarmed", save: "str" },
-  { match: /goading/i, condition: "goaded", save: "wis" },
+export const MANEUVER_RIDERS: Array<{ maneuver: string; condition: string; save: "str" | "wis" }> = [
+  { maneuver: "Trip Attack", condition: "prone", save: "str" },
+  { maneuver: "Menacing Attack", condition: "frightened", save: "wis" },
+  { maneuver: "Disarming Attack", condition: "disarmed", save: "str" },
+  { maneuver: "Goading Attack", condition: "goaded", save: "wis" },
 ];
 
 // A Battle Master maneuver named on the swing: known, with a Superiority Die
@@ -49,14 +51,10 @@ export function pickManeuver(
   if (!weaponAttack) {
     return { refused: { error: "Maneuvers ride weapon attacks, not spells. Ask the player whether to cast it without the maneuver.", retry: true } };
   }
-  const term = asked.trim().toLowerCase();
   const picks = sheet.features
     .map((feature) => feature.name)
     .filter((name) => textKey(name).startsWith("maneuver"));
-  const known = picks.some((name) => {
-    const bare = textKey(name.replace(/^maneuver:\s*/i, ""));
-    return bare.includes(textKey(asked)) || textKey(asked).includes(bare);
-  });
+  const known = picks.some((name) => isNamed(name, asked));
   if (!known) {
     const theirs = picks.length ? ` Their maneuvers: ${picks.join(", ")}.` : " They have no maneuver picks.";
     // A maneuver the rules know that they did not pick rides an attack they
@@ -86,9 +84,9 @@ export function pickManeuver(
     maneuver: {
       name: asked.trim(),
       die: maneuverDieFor(sheet),
-      precision: /precision/i.test(term),
-      rider: MANEUVER_RIDERS.find((entry) => entry.match.test(term)) ?? null,
-      use: maneuverUse(term),
+      precision: isNamed(asked, "Precision Attack"),
+      rider: MANEUVER_RIDERS.find((entry) => isNamed(asked, entry.maneuver)) ?? null,
+      use: maneuverUse(asked),
     },
   };
 }
@@ -136,6 +134,8 @@ export type ParkedAttack = PendingAttack & {
     hurl?: boolean;
     poison?: boolean;
     tempHp?: { amount: number; feature: string };
+    // A creature's natural attack's rider (src/lib/dm/natural-onhit.ts).
+    creature?: CreatureOnHit;
   };
 };
 
@@ -292,7 +292,7 @@ export function stunningStrikeSave(
     return `Stunning Strike: ${barred} The ki is spent.`;
   }
   // A stun is what a legendary creature keeps its resistances for.
-  const save = rollEnemySave(campaign.id, fresh, "con", dc, { resist: true });
+  const save = rollEnemySave(campaign.id, fresh, "con", dc, { resist: true, against: "stunned" });
   if (save.success) {
     return `Stunning Strike: ${fresh.displayName} holds (CON save ${save.total ?? "failed outright"} vs DC ${dc}${save.legendaryResistance ? ", Legendary Resistance" : ""}); no stun.`;
   }

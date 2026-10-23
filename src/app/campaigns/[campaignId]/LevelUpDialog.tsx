@@ -1,13 +1,23 @@
 "use client";
 
-import { classFeaturesFor, isThievesTools, subclassCastingProfileFor, THIEVES_TOOLS } from "@/lib/srd/features";
+import {
+  classFeaturesFor,
+  isThievesTools,
+  subclassCastingProfileFor,
+  THIEVES_TOOLS,
+  subclassExpandedSpellsFor,
+  subclassSpellListsFor,
+} from "@/lib/srd/features";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Dices, Loader2, Sparkles, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronDown, Dices, Loader2, Search, Sparkles, X } from "lucide-react";
+import { useId, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { InfoButton, InfoChipList } from "@/components/ui/InfoDialog";
 import { describeFeature, describeSkill } from "@/lib/help";
 import { useClassFeatureText } from "@/lib/classes/use-feature-text";
+import { settingClassIds, splitBySetting } from "@/lib/classes";
+import type { Genre } from "@/lib/schemas/game-settings";
+import { ui } from "@/lib/ui";
 import {
   findOptionByFeatureName,
   openOptionSlots,
@@ -44,8 +54,8 @@ import {
   subclassSpellsFor,
 } from "@/lib/srd/features";
 import {
-  FIGHTING_STYLES,
   chosenFightingStyles,
+  fightingStyleChoices,
   fightingStyleFeatureName,
   fightingStyleSlots,
   type FightingStyleId,
@@ -61,16 +71,19 @@ import {
   thirdCasterPickRefusal,
 } from "./level-up-preview";
 import { SpellBook, type SpellTile } from "@/components/sheet/SpellBook";
-import { useSpellPool } from "@/components/sheet/useSpellPool";
+import { useWiderSpellPool } from "@/components/sheet/useSpellPool";
 import AsiFeatEditor from "@/app/characters/builder/AsiFeatEditor";
 import { useFeatDescs } from "@/app/characters/builder/useFeatDescs";
 import { authoredFeatDesc, featAbilityIncrease } from "@/lib/srd/feat-effects";
 import { featGrantSpec, featOwed, type FeatChoices, type FeatPicks } from "@/lib/srd/feat-grants";
-import { subclassGrants } from "@/lib/srd/subclass-training";
+import { grantsForHeldTraining, subclassGrants } from "@/lib/srd/subclass-training";
 import FeatChoicesFields from "@/app/characters/builder/FeatChoicesFields";
-import { useArchetypes } from "@/app/characters/builder/useBuilderOptions";
+import { useArchetypeOptions, useWorldPack } from "@/app/characters/builder/useBuilderOptions";
+import { TableScopeNote } from "@/app/characters/builder/TableScopeNote";
 import type { AsiChoice, CharacterSheet } from "@/lib/schemas/sheet";
 import { textKey } from "@/lib/language/text-logic";
+import { featChoice, withFeatChoice } from "@/lib/schemas/sheet";
+import { workshopClassList } from "@/lib/classes/workshop-registry";
 
 
 // Guided level-up, one level at a time. The dialog gathers the CHOICES the
@@ -86,6 +99,8 @@ export function LevelUpDialog({
   sheet,
   multiclassAllowed = true,
   hpMethod = "average",
+  genre,
+  worldPack,
   onDone,
 }: {
   campaignId: string;
@@ -98,6 +113,11 @@ export function LevelUpDialog({
   multiclassAllowed?: boolean;
   // The table's hit point method (a campaign setting).
   hpMethod?: HpMethod;
+  // The campaign's genre and world pack: the new classes its setting offers
+  // lead the multiclass list, the rest fold under "Other settings" (issue
+  // #433). Absent: one list.
+  genre?: Genre;
+  worldPack?: string;
   onDone: () => void;
 }) {
   // Held from the moment the dialog opens: the sheet the server sends back
@@ -122,7 +142,7 @@ export function LevelUpDialog({
   const [featChoices, setFeatChoices] = useState<FeatChoices>({});
   const featsPicked = asiChoices.flatMap((choice) => (choice?.mode === "feat" ? [choice.feat] : []));
   const featDescs = useFeatDescs(featsPicked);
-  const featDescOf = (name: string) => featDescs[name.trim().toLowerCase()] ?? authoredFeatDesc(name) ?? "";
+  const featDescOf = (name: string) => featDescs[textKey(name)] ?? authoredFeatDesc(name) ?? "";
   const featSpecOf = (name: string) => featGrantSpec(featDescOf(name));
   // A half-feat with a choice of score raises the first it offers when the
   // player left the choice (a content pack feat's text arrives after the
@@ -135,15 +155,15 @@ export function LevelUpDialog({
     return from.length > 1 ? { ...choice, ability: from[0] } : choice;
   };
   const setFeatPicks = (feat: string, picks: FeatPicks) =>
-    setFeatChoices((current) => ({ ...current, [feat.trim().toLowerCase()]: picks }));
+    setFeatChoices((current) => withFeatChoice(current, feat, picks));
   // The feats' picks, and those of a subclass grant arriving now (both are
   // keyed by name in featChoices).
   const picksSentFor = (names: string[]) => Object.fromEntries(
     names
-      .map((feat) => [feat.trim().toLowerCase(), featChoices[feat.trim().toLowerCase()]] as const)
+      .map((feat) => [feat, featChoice(featChoices, feat)] as const)
       .filter((entry): entry is readonly [string, FeatPicks] => Boolean(entry[1])),
   );
-  const featPicksOpen = featsPicked.some((feat) => featOwed(feat, featSpecOf(feat), featChoices[feat.trim().toLowerCase()]));
+  const featPicksOpen = featsPicked.some((feat) => featOwed(feat, featSpecOf(feat), featChoice(featChoices, feat)));
   const [subclassChoice, setSubclassChoice] = useState("");
   const [expertisePicks, setExpertisePicks] = useState<string[]>([]);
   const [spellPicks, setSpellPicks] = useState<string[]>([]);
@@ -190,13 +210,33 @@ export function LevelUpDialog({
     if (!multiclassAllowed || classList.length >= MULTICLASS_CAP) {
       return [];
     }
-    return ALL_CLASSES.filter(
+    // The table's workshop classes beside the rest (the campaign snapshot's).
+    return [...ALL_CLASSES, ...workshopClassList().map((def) => def.klass)].filter(
       (candidate) => !classList.some((entry) => entry.id.toLowerCase() === candidate.id),
     )
       .map((candidate) => ({ option: candidate, check: canMulticlassInto(sheet, candidate.id) }))
       .sort((a, b) => Number(b.check.ok) - Number(a.check.ok));
   }, [classList, sheet, multiclassAllowed]);
   const needsClassStep = classList.length > 1 || newClassOptions.some((entry) => entry.check.ok);
+  // The setting's classes first, the rest folded; a search looks through
+  // both (issue #433). The same rule keeps AI companions in setting
+  // (src/lib/classes/index.ts settingClassIds).
+  const pack = useWorldPack(worldPack || undefined);
+  const [classQuery, setClassQuery] = useState("");
+  const [otherOpen, setOtherOpen] = useState(false);
+  const classGroups = useMemo(() => {
+    const ids = genre ? settingClassIds(genre, (pack?.classes ?? []).map((entry) => entry.id)) : [];
+    const query = textKey(classQuery.trim());
+    const matching = query
+      ? newClassOptions.filter(({ option }) => textKey(option.name).includes(query))
+      : newClassOptions;
+    const split = splitBySetting(
+      matching.map((entry) => ({ ...entry, id: entry.option.id })),
+      ids,
+    );
+    return { ...split, label: pack?.classes.length ? `Callings of ${pack.name}` : "Recommended for this setting", query };
+  }, [genre, pack, classQuery, newClassOptions]);
+  const classListId = useId();
 
   // Some multiclass grants include one class-skill pick (rogue, ranger,
   // bard); offered right in the class step and validated server-side.
@@ -282,13 +322,13 @@ export function LevelUpDialog({
   // Fighting styles: the class grants the slot, the player picks which one,
   // and the pick is stored as a "choice"-sourced feature the regrant keeps.
   // Independent of the subclass, so it can be resolved before one is chosen.
-  const styleSlots = fightingStyleSlots(
-    populateFeaturesForClasses(sheet.features, nextClasses, sheet.race),
-  );
+  // A Swords bard's slot allows only some styles (fightingStyleChoices).
+  const featuresAfter = populateFeaturesForClasses(sheet.features, nextClasses, sheet.race);
+  const styleSlots = fightingStyleSlots(featuresAfter);
   const currentStyles = chosenFightingStyles(sheet.features);
   const stylesToPick = Math.max(0, styleSlots - currentStyles.length);
   const needsStyle = stylesToPick > 0;
-  const styleOptions = FIGHTING_STYLES.filter(
+  const styleOptions = fightingStyleChoices(featuresAfter).filter(
     (style) => !currentStyles.some((name) => textKey(name) === textKey(style.name)),
   );
 
@@ -304,8 +344,8 @@ export function LevelUpDialog({
   // Fetched for the class levelled either way: a workshop or pack subclass
   // the sheet already holds has its features in these rows, and the preview
   // below grants them from here (src/lib/srd/features.ts browser extras).
-  const fetchedArchetypes = useArchetypes(entrySubclass.trim() || needsSubclass ? classChoice : "");
-  const archetypes = needsSubclass ? fetchedArchetypes : [];
+  const subclassList = useArchetypeOptions(entrySubclass.trim() || needsSubclass ? classChoice : "");
+  const archetypes = needsSubclass ? subclassList.archetypes : [];
   // The subclasses with real feature tables come first; content-pack
   // archetypes are prose only and fill in behind them.
   const subclassOptions = [...builtInSubclasses];
@@ -386,14 +426,16 @@ export function LevelUpDialog({
   // fixed grants are said; the picks are asked for, and the server refuses
   // the level without them.
   const trainingBefore = useMemo(
-    () => new Set(subclassGrants(classList).map((grant) => `${grant.classId}|${grant.name.toLowerCase()}`)),
+    () => new Set(subclassGrants(classList).map((grant) => `${grant.classId}|${textKey(grant.name)}`)),
     [classList],
   );
-  const freshTraining = subclassGrants(classesAfter).filter(
-    (grant) => !trainingBefore.has(`${grant.classId}|${grant.name.toLowerCase()}`),
+  // A skill or language already held becomes a pick (Royal Envoy).
+  const freshTraining = grantsForHeldTraining(
+    subclassGrants(classesAfter).filter((grant) => !trainingBefore.has(`${grant.classId}|${textKey(grant.name)}`)),
+    sheet.proficiencies,
   );
   const trainingOpen = freshTraining.some((grant) =>
-    featOwed(grant.name, grant.spec, featChoices[grant.name.trim().toLowerCase()]),
+    featOwed(grant.name, grant.spec, featChoice(featChoices, grant.name)),
   );
   const steps = [
     ...(needsClassStep ? ["class"] : []),
@@ -429,10 +471,20 @@ export function LevelUpDialog({
   // The class's whole list up to what it can now cast (the old search
   // stopped at sixty rows, cantrips first, which could leave a wizard with
   // nothing but cantrips to look at).
-  const { pool: spellPool, loading: poolLoading } = useSpellPool(
+  // What the subclass adds to the list: a warlock patron's expanded spells
+  // (a genie's kind's by the sheet's choice), a Divine Soul's cleric list.
+  const spellWider = useMemo(
+    () => ({
+      spells: subclassExpandedSpellsFor(classChoice, effectiveSubclass, classLevelAfter, undefined, sheet.features),
+      lists: subclassSpellListsFor(classChoice, effectiveSubclass),
+    }),
+    [classChoice, effectiveSubclass, classLevelAfter, sheet.features],
+  );
+  const { pool: spellPool, loading: poolLoading } = useWiderSpellPool(
     caster.list,
     maxCastable ?? 0,
     step === "spells",
+    spellWider,
   );
 
   // A wizard learns into the spellbook: two spells a level (a whole starting
@@ -494,11 +546,11 @@ export function LevelUpDialog({
   const grantedFree = useMemo(
     () =>
       new Set(
-        subclassSpellsFor(classChoice, effectiveSubclass, classLevelAfter).map((name) =>
+        subclassSpellsFor(classChoice, effectiveSubclass, classLevelAfter, undefined, sheet.features).map((name) =>
           textKey(name),
         ),
       ),
-    [classChoice, effectiveSubclass, classLevelAfter],
+    [classChoice, effectiveSubclass, classLevelAfter, sheet.features],
   );
   const heldSpells = [...new Set([...knownList, ...pendingList].map((name) => textKey(name)))].filter(
     (name) => !grantedFree.has(name),
@@ -886,43 +938,92 @@ export function LevelUpDialog({
                         A new class starts at level 1 with SOME of its training: no saving
                         throws, and only the proficiencies the multiclass rules grant.
                       </p>
-                      <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
-                        {newClassOptions.map(({ option, check }) => {
-                          const picked = classChoice.toLowerCase() === option.id.toLowerCase();
-                          return (
-                            <button
-                              key={option.id}
-                              type="button"
-                              disabled={!check.ok}
-                              onClick={() => {
-                                if (!picked) {
-                                  setClassChoice(option.id);
-                                  resetClassPicks();
-                                }
-                              }}
-                              className={cn(
-                                "block w-full rounded-lg border px-3 py-2 text-left",
-                                picked
-                                  ? "border-amber-600 bg-stone-900 text-amber-100"
-                                  : "border-stone-700 hover:border-amber-800 hover:bg-stone-900",
-                                !check.ok && "cursor-not-allowed opacity-50 hover:border-stone-700 hover:bg-transparent",
-                              )}
-                            >
-                              <span className="flex items-center justify-between text-sm">
-                                <span>{option.name}</span>
-                                <span className="text-xs text-stone-500">d{option.hitDie}</span>
-                              </span>
-                              <span className="block text-xs text-stone-400">
-                                {check.ok
-                                  ? `Grants: ${describeGrant(multiclassGrantsFor(option.id))}`
-                                  : check.error}
-                              </span>
-                              <span className="block text-[11px] text-stone-600">
-                                Requires {describePrereq(option.id)}
-                              </span>
-                            </button>
-                          );
-                        })}
+                      <label className="relative block">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-stone-500" aria-hidden="true" />
+                        <input
+                          type="search"
+                          value={classQuery}
+                          onChange={(event) => setClassQuery(event.target.value)}
+                          placeholder={`Search ${newClassOptions.length} classes`}
+                          aria-label="Search classes"
+                          aria-describedby={`${classListId}-hint`}
+                          className={cn(ui.input, "pl-8")}
+                        />
+                        <span id={`${classListId}-hint`} className="sr-only" aria-live="polite">
+                          {classGroups.query
+                            ? `${classGroups.setting.length + classGroups.other.length} ${classGroups.setting.length + classGroups.other.length === 1 ? "class matches" : "classes match"}.`
+                            : "Searches the class names."}
+                        </span>
+                      </label>
+                      <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                        {classGroups.other.length && classGroups.setting.length ? (
+                          <p className="text-[11px] uppercase tracking-wide text-stone-500">{classGroups.label}</p>
+                        ) : null}
+                        {classGroups.setting.map(({ option, check }) => (
+                          <NewClassButton
+                            key={option.id}
+                            option={option}
+                            check={check}
+                            chosen={classChoice}
+                            onPick={() => {
+                              setClassChoice(option.id);
+                              resetClassPicks();
+                            }}
+                          />
+                        ))}
+                        {classGroups.other.length ? (
+                          classGroups.query || !classGroups.setting.length ? (
+                            <>
+                              {classGroups.setting.length ? (
+                                <p className="pt-1 text-[11px] uppercase tracking-wide text-stone-500">Other settings</p>
+                              ) : null}
+                              {classGroups.other.map(({ option, check }) => (
+                                <NewClassButton
+                                  key={option.id}
+                                  option={option}
+                                  check={check}
+                                  chosen={classChoice}
+                                  onPick={() => {
+                                    setClassChoice(option.id);
+                                    resetClassPicks();
+                                  }}
+                                />
+                              ))}
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                aria-expanded={otherOpen}
+                                aria-controls={`${classListId}-other`}
+                                onClick={() => setOtherOpen((open) => !open)}
+                                className="flex min-h-10 w-full items-center justify-between rounded-lg border border-dashed border-stone-700 px-3 text-left text-xs text-stone-400 hover:border-amber-800 hover:text-stone-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+                              >
+                                <span>Other settings ({classGroups.other.length})</span>
+                                <ChevronDown className={cn("size-3.5 transition-transform duration-200", otherOpen && "rotate-180")} aria-hidden="true" />
+                              </button>
+                              {otherOpen ? (
+                                <div id={`${classListId}-other`} className="reveal space-y-1.5">
+                                  {classGroups.other.map(({ option, check }) => (
+                                    <NewClassButton
+                                      key={option.id}
+                                      option={option}
+                                      check={check}
+                                      chosen={classChoice}
+                                      onPick={() => {
+                                        setClassChoice(option.id);
+                                        resetClassPicks();
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                              ) : null}
+                            </>
+                          )
+                        ) : null}
+                        {classGroups.query && !classGroups.setting.length && !classGroups.other.length ? (
+                          <p className="reveal text-xs text-stone-500">No class by that name.</p>
+                        ) : null}
                       </div>
                     </>
                   ) : null}
@@ -1165,6 +1266,10 @@ export function LevelUpDialog({
                               (entry) => textKey(entry) === textKey(name),
                             ) ? (
                               <span className="text-xs text-stone-500">full features</span>
+                            ) : archetype?.workshop ? (
+                              // A workshop subclass is granted feature by
+                              // feature as its author wrote it.
+                              <span className="text-xs text-stone-500">Homebrew, its features as written</span>
                             ) : (
                               <span className="text-xs text-stone-600">description only</span>
                             )}
@@ -1186,6 +1291,7 @@ export function LevelUpDialog({
                       </p>
                     ) : null}
                   </div>
+                  <TableScopeNote noun="subclasses" unadmitted={subclassList.unadmitted} failed={subclassList.failed} onRetry={subclassList.retry} />
                 </>
               ) : null}
 
@@ -1199,7 +1305,7 @@ export function LevelUpDialog({
                       key={grant.name}
                       feat={grant.name}
                       spec={grant.spec}
-                      picks={featChoices[grant.name.trim().toLowerCase()]}
+                      picks={featChoice(featChoices, grant.name)}
                       known={{
                         languages: sheet.proficiencies.languages,
                         skills: sheet.proficiencies.skills,
@@ -1368,5 +1474,51 @@ export function LevelUpDialog({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+// One class a level could start: its hit die, what the multiclass rules
+// grant, and its prerequisite; greyed with the reason when the character
+// does not meet it.
+function NewClassButton({
+  option,
+  check,
+  chosen,
+  onPick,
+}: {
+  option: { id: string; name: string; hitDie: number };
+  check: ReturnType<typeof canMulticlassInto>;
+  // The class id picked so far; class ids fold to lower case.
+  chosen: string;
+  onPick: () => void;
+}) {
+  const picked = chosen.toLowerCase() === option.id.toLowerCase();
+  return (
+    <button
+      type="button"
+      disabled={!check.ok}
+      aria-pressed={picked}
+      onClick={() => {
+        if (!picked) {
+          onPick();
+        }
+      }}
+      className={cn(
+        "block w-full rounded-lg border px-3 py-2 text-left",
+        picked
+          ? "border-amber-600 bg-stone-900 text-amber-100"
+          : "border-stone-700 hover:border-amber-800 hover:bg-stone-900",
+        !check.ok && "cursor-not-allowed opacity-50 hover:border-stone-700 hover:bg-transparent",
+      )}
+    >
+      <span className="flex items-center justify-between text-sm">
+        <span>{option.name}</span>
+        <span className="text-xs text-stone-500">d{option.hitDie}</span>
+      </span>
+      <span className="block text-xs text-stone-400">
+        {check.ok ? `Grants: ${describeGrant(multiclassGrantsFor(option.id))}` : check.error}
+      </span>
+      <span className="block text-[11px] text-stone-600">Requires {describePrereq(option.id)}</span>
+    </button>
   );
 }

@@ -12,9 +12,10 @@
 // Pure, so the sheet, the engines and the test scripts read the same tags.
 
 import { catalogName } from "@/lib/srd/adventuring-gear";
-import { matchArmor } from "@/lib/srd/armor";
+import { rowArmor } from "@/lib/srd/armor";
 import { matchMagicItem } from "@/lib/srd/magic-items";
-import { matchWeapon } from "@/lib/srd/weapons";
+import { rowWeapon } from "@/lib/srd/weapons";
+import { rowName } from "@/lib/srd/item-row";
 import { findPoison } from "@/lib/srd/afflictions";
 import itemTagsJson from "@/lib/classes/item-tags.json";
 import { textKey } from "@/lib/language/text-logic";
@@ -64,6 +65,9 @@ function index(row: ItemRow) {
     }
   }
 }
+// The SRD's Potions of Healing, by kind: the rows a healing potion names.
+export const HEALING_POTIONS = TABLE.potions.filter(([, , kind]) => kind.heals).map(([name]) => name);
+
 // The potions' kinds first: "Potion of Healing" is the kind its table gives
 // the dice of.
 for (const [name, tags, potion] of TABLE.potions) {
@@ -84,34 +88,36 @@ function rowNamed(name: string): ItemRow | null {
   return BY_KEY.get(rowKey(name)) ?? BY_KEY.get(rowKey(name.replace(/\s*\([^)]*\)\s*$/, ""))) ?? null;
 }
 
-// The row an item names: by its slug, else by its name as the tables spell
-// it, else by the weapon, armor or poison its name is ("+1 Longsword"). Null
-// for a name no table knows.
+// The row an item names: by its slug, else by its row's name
+// (src/lib/srd/item-row.ts) as the tables spell it, else by the weapon,
+// armor or poison that name is ("+1 Longsword"). Null for a name no table
+// knows.
 export function itemRow(item: Pick<TaggedItem, "name" | "slug" | "srdName">): ItemRow | null {
   const bySlug = item.slug ? BY_SLUG.get(item.slug) : undefined;
   if (bySlug) {
     return bySlug;
   }
-  if (item.srdName) {
-    return itemRow({ name: item.srdName });
-  }
-  const spelled = matchMagicItem(item.name, item.slug)?.name ?? catalogName(item.name) ?? item.name;
-  const found = rowNamed(spelled) ?? rowNamed(item.name);
+  const name = rowName(item);
+  const spelled = matchMagicItem(item)?.name ?? catalogName(name) ?? name;
+  const found = rowNamed(spelled) ?? rowNamed(name);
   if (found) {
     return found;
   }
-  const named = matchWeapon(item.name)?.name ?? matchArmor(item.name)?.name ?? findPoison(item.name)?.name;
+  const named = rowWeapon(item)?.name ?? rowArmor(item)?.name ?? findPoison(name)?.name;
   return named ? (rowNamed(named) ?? { name: named, tags: [] }) : null;
 }
 
-// An item's tags: its own when it carries them, a homebrew item's entry's,
-// else its row's. An unidentified item has none: its name is the party's
+// An item's tags: its row's, with its own when it carries them or a
+// homebrew item's entry's (a silvered Longsword is the Longsword's and
+// "silvered"). An unidentified item has none: its name is the party's
 // description and its secret is never written on the sheet.
 export function itemTags(item: TaggedItem): readonly ItemTag[] {
   if (item.identified === false) {
     return [];
   }
-  return item.tags ?? item.gear?.tags ?? itemRow(item)?.tags ?? [];
+  const own = item.tags ?? item.gear?.tags ?? [];
+  const row = itemRow(item)?.tags ?? [];
+  return own.length ? [...new Set([...row, ...own])] : row;
 }
 
 export function hasItemTag(item: TaggedItem, tag: ItemTag): boolean {

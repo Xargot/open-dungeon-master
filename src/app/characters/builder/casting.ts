@@ -74,6 +74,12 @@ export function builderSpellAdvice(
   if (!casting.casts || !casting.ability) {
     return null;
   }
+  // No slot to cast a levelled spell with yet (a setting half caster at
+  // level 1 that borrows a full caster's list): nothing to hold, so nothing
+  // to ask for. The spell step offers no level 1 spell until there is a slot.
+  if (casting.maxSpellLevel === 0) {
+    return null;
+  }
   if (casting.third) {
     return spellCapOf(
       {
@@ -109,4 +115,24 @@ export function preparedFormula(ability: "int" | "wis" | "cha", mod: number, lis
   const levelWords = levelPart === level ? `level (${level})` : `half your level, rounded down (${levelPart})`;
   const sum = `${ABILITY_NAMES[ability]} modifier (${formatModifier(mod)}) + ${levelWords}`;
   return mod + levelPart < 1 ? `${sum}, and never fewer than 1` : sum;
+}
+
+// The slots the sheet is saved with, {level: {max, used}}: the preview, the
+// build math table and the save all read this one (submit.ts), so the slots
+// shown are the slots stored.
+export function builderSpellSlots(
+  klass: CastingClass | undefined | null,
+  subclass: string | undefined | null,
+  level: number,
+): Record<string, { max: number; used: number }> {
+  if (!klass) {
+    return {};
+  }
+  const casting = builderCasting(klass, subclass, level);
+  return Object.fromEntries(
+    Object.entries(spellSlotsFor(klass.id, level, subclass, casting.profile)).map(([slotLevel, max]) => [
+      slotLevel,
+      { max, used: 0 },
+    ]),
+  );
 }

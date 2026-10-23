@@ -1,14 +1,14 @@
 import { subclassSpellsFor } from "@/lib/srd/features";
 import { FEAT_ONLY_SPEED } from "@/lib/srd/feature-effects";
-import { formSees } from "@/lib/srd/shape-rules";
+import { formSees } from "@/lib/srd/form-sees";
 import { hasMediumArmorMaster } from "@/lib/srd/feat-combat";
 import backgroundsJson from "@/lib/srd/backgrounds.json";
 import classesJson from "@/lib/srd/classes.json";
 import racesJson from "@/lib/srd/races.json";
 import skillsJson from "@/lib/srd/skills.json";
 import spellSlotsJson from "@/lib/srd/spell-slots.json";
-import { CUSTOM_CLASSES } from "@/lib/classes";
-import { computeArmorClass, matchArmor, unarmoredFormulaFor, type AcBreakdown } from "@/lib/srd/armor";
+import { CUSTOM_CLASSES, findCustomClass } from "@/lib/classes";
+import { computeArmorClass, unarmoredFormulaFor, type AcBreakdown } from "@/lib/srd/armor";
 import { conditionAcRiders } from "@/lib/srd/condition-effects";
 import { combatRiders, defenseRiders, halfProficiencyCovers } from "@/lib/srd/feature-effects";
 import { featureSaveProficiencies } from "@/lib/srd/trait-rules";
@@ -46,8 +46,9 @@ const SLOT_TABLES = spellSlotsJson as unknown as {
 // SRD classes first, then the setting-specific custom catalog.
 export const ALL_CLASSES: SrdClass[] = [...SRD_CLASSES, ...CUSTOM_CLASSES];
 
-export function findClass(id: string) {
-  return ALL_CLASSES.find((entry) => entry.id === id) ?? null;
+// A workshop class is registered at run time (src/lib/classes/index.ts).
+export function findClass(id: string): SrdClass | null {
+  return ALL_CLASSES.find((entry) => entry.id === id) ?? findCustomClass(id);
 }
 
 export function findRace(id: string) {
@@ -301,7 +302,7 @@ export function speedFor(
     campaignId: source.campaignId,
   });
   const breakdown = acBreakdownFor({ ...source, features, equipment });
-  const worn = breakdown.armor ?? (breakdown.armorName ? matchArmor(breakdown.armorName) : null);
+  const worn = breakdown.armor;
   // One feature's tiers replace each other; different features add up.
   const bySource = new Map<object | undefined, number>();
   for (const entry of riders.speedBonuses) {
@@ -309,6 +310,10 @@ export function speedFor(
       continue;
     }
     if (entry.gate === "armor_or_shield" && (worn || breakdown.shieldName)) {
+      continue;
+    }
+    // Raging, and not in heavy armor (Totem Spirit: Elk).
+    if (entry.gate === "raging" && (!(source.conditions ?? []).some((name) => name.trim().toLowerCase() === "raging") || worn?.category === "heavy")) {
       continue;
     }
     bySource.set(entry.source, Math.max(bySource.get(entry.source) ?? 0, entry.amount));
@@ -401,9 +406,12 @@ export function computeSheetDerived(
   },
 ): SheetDerived {
   // A Polymorph's beast is its own creature: none of the character's
-  // proficiencies, features, feats or gear (shape-rules.ts formSees).
+  // proficiencies, features, feats or gear (form-sees.ts).
   sheet = formSees(sheet);
-  const pb = proficiencyBonus(sheet.level);
+  // A creature Polymorph, Animal Shapes or True Polymorph made has the
+  // proficiency bonus its challenge rating carries, not the character's.
+  const shape = sheet.wildShape;
+  const pb = shape?.kind === "polymorph" && !shape.keepsTraining && shape.cr !== undefined ? proficiencyBonus(Math.max(1, shape.cr)) : proficiencyBonus(sheet.level);
   // Ability-setting magic items raise the scores every other number reads.
   const withItems = sheet.equipment
     ? effectiveAbilities(sheet.abilities, sheet.equipment, sheet)

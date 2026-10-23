@@ -1,3 +1,4 @@
+import { settleDroppedOnFightEnd } from "@/lib/db/dropped-items";
 import { getFloor, setFloor, type Campaign } from "@/lib/db/campaigns";
 import { silencedImmunity } from "@/lib/dm/zone-rules";
 import { burnWebUnder } from "@/lib/dm/zone-cast";
@@ -34,7 +35,7 @@ import { publishFx, tokenPosition } from "@/lib/dm/fx";
 import { dismissGuestCompanions } from "@/lib/dm/companion-tools";
 import { followCombatAmbience } from "@/lib/dm/ambience-tools";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
-import type { ToolResult } from "@/lib/dm/tool-errors";
+import { unknownRef, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
 import { textKey } from "@/lib/language/text-logic";
 
 // The single server-side path for damage landing on an enemy. Used by the
@@ -66,6 +67,13 @@ export function resolveEnemyRef(encounterId: string, ref: string): EncounterEnem
   );
 }
 
+// The refusal of an enemy ref resolveEnemyRef found nothing for, listing the
+// enemies still standing in the fight.
+export function unknownEnemyRef(encounterId: string, field: string, ref: string | undefined, tail = ""): ToolError {
+  const living = listEnemies(encounterId).filter((enemy) => enemy.status === "alive");
+  return unknownRef(field, ref, living.map((enemy) => ({ id: enemy.id, name: enemy.displayName })), tail);
+}
+
 export function finishEncounter(
   campaign: Campaign,
   turn: DmTurn,
@@ -86,13 +94,16 @@ export function finishEncounter(
   endEncounter(encounter.id, outcome);
   // A frenzy outliving its rage costs its level of exhaustion (frenzy.ts).
   settleFrenzies(campaign);
+  // What was dropped stays where it fell; what a fallen enemy held lies with
+  // it (src/lib/db/dropped-items.ts, issue #424).
+  const itemsLeft = settleDroppedOnFightEnd(campaign.id, encounter.id);
 
   // Half the ammunition spent in the fight is recovered from the field
   // (PHB). Only ever non-empty when the `ammunition` variant rule is on, so
   // a table that never asked for it pays nothing here.
   const ammoRecovered: Record<string, number> = {};
-  for (const [key, spent] of Object.entries(encounter.ammoSpent)) {
-    const back = recoveredAmmo(spent);
+  for (const [key, entry] of Object.entries(encounter.ammoSpent)) {
+    const back = recoveredAmmo(typeof entry === "object" ? entry.spent : entry);
     if (back <= 0) {
       continue;
     }
@@ -104,10 +115,12 @@ export function finishEncounter(
       continue;
     }
     const index = owner.equipment.findIndex((item) => item.name === itemName);
+    // A spent-out quiver comes back as the line it was (an Italian "Frecce"
+    // listed as Arrows stays arrows).
     const equipment =
       index >= 0
         ? withAmmoCount(owner.equipment, index, ammoCount(owner.equipment[index]) + back)
-        : [...owner.equipment, { name: itemName, qty: back }];
+        : withAmmoCount([...owner.equipment, typeof entry === "object" ? entry.line : { name: itemName, qty: back }], owner.equipment.length, back);
     patchSheet(sheetId, { equipment });
     ammoRecovered[`${owner.name}: ${itemName}`] = back;
   }
@@ -187,6 +200,9 @@ export function finishEncounter(
   return {
     encounterOver: true,
     ...(Object.keys(ammoRecovered).length ? { ammoRecovered } : {}),
+    ...(itemsLeft.length
+      ? { itemsLeft: `On the ground after the fight: ${itemsLeft.join("; ")}. The party can collect them (handle_item pick_up).` }
+      : {}),
     outcome,
     ...(guestsGone.length
       ? {
@@ -247,6 +263,11 @@ export function applyEnemyDamage(
     // A silvered or adamantine weapon (damage-logic.ts weaponMaterial).
     silvered?: boolean;
     adamantine?: boolean;
+    // A spell's damage, or a weapon a good creature wields: the defences
+    // that name them (an archmage's "damage from spells", a rakshasa's
+    // vulnerability, damage-logic.ts BlowSource).
+    spell?: boolean;
+    goodWielder?: boolean;
     // Elemental Adept: the creature's resistance to this type does not
     // count (src/lib/srd/feat-combat.ts).
     ignoreResistance?: boolean;
@@ -283,7 +304,7 @@ export function applyEnemyDamage(
         // Inside Silence, thunder does nothing (zone-rules.ts).
         `${enemy.stats.immune ?? ""}${silencedImmunity(campaign.id, enemy.id)}`,
         enemy.stats.vulnerable,
-        { magical: options?.magical === true, resistAll: resistsAllDamage(enemy.conditions), silvered: options?.silvered, adamantine: options?.adamantine },
+        { magical: options?.magical === true, resistAll: resistsAllDamage(enemy.conditions), silvered: options?.silvered, adamantine: options?.adamantine, spell: options?.spell, goodWielder: options?.goodWielder },
       );
   if (adjusted.amount <= 0) {
     return {

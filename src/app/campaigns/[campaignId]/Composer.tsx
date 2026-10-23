@@ -11,6 +11,7 @@ import { MODE_GLYPHS } from "@/app/campaigns/[campaignId]/sessionGlyphs";
 import { useLingeringEncounter } from "@/app/campaigns/[campaignId]/useLingeringEncounter";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { FloorBanners } from "@/app/campaigns/[campaignId]/FloorBanners";
+import { TableWaitBanner } from "@/app/campaigns/[campaignId]/TableWaitBanner";
 import { Hand as CombatHand } from "@/app/campaigns/[campaignId]/Hand";
 import { MonsterHand } from "@/app/campaigns/[campaignId]/MonsterHand";
 import { NewAdventurerBanner } from "@/app/campaigns/[campaignId]/NewAdventurerBanner";
@@ -27,6 +28,7 @@ import type { CastMember } from "@/lib/dm/cast";
 import type { Speaker } from "@/lib/dm/speech";
 import type { BeatCadence } from "@/lib/dm/beat-cadence";
 import type { TargetEdge } from "@/lib/battlemap/view-tactics";
+import type { PlayerMapView } from "@/lib/battlemap/view-types";
 import type { CampaignState } from "@/app/campaigns/[campaignId]/useCampaignStream";
 
 import type { InputKind } from "@/lib/campaign-types";
@@ -71,6 +73,7 @@ function ComposerInner({
   pendingRolls,
   members,
   floor,
+  tableWait,
   spotlighted,
   heldSpotlightNames,
   encounter,
@@ -86,6 +89,8 @@ function ComposerInner({
   composerRef,
   trackAmmo,
   edges,
+  drops,
+  mounts,
   highlight = false,
   directorArm,
   storyCadence,
@@ -115,6 +120,7 @@ function ComposerInner({
   // For the pending cards: who holds their own rolls (shake to roll).
   members: CampaignState["members"];
   floor: Parameters<typeof FloorBanners>[0]["floor"];
+  tableWait?: CampaignState["tableWait"];
   spotlighted: CampaignState["sheets"];
   heldSpotlightNames: string[];
   encounter: CampaignState["encounter"];
@@ -138,6 +144,9 @@ function ComposerInner({
   // The board's cover and flanking from this character to each enemy, for
   // the Hand's hit preview (src/lib/battlemap/view-tactics.ts).
   edges?: Record<string, TargetEdge>;
+  // What lies on the board and who rides what, for the Hand's gear cards.
+  drops?: PlayerMapView["drops"];
+  mounts?: PlayerMapView["mounts"];
   // A gold pulse on the frame: the board says it is this player's turn.
   highlight?: boolean;
   directorArm: CampaignState["directorArm"];
@@ -159,7 +168,8 @@ function ComposerInner({
   const tooLong = length > maxChars;
   return (
     <form onSubmit={onSubmit} className="glass session-desk cine-desk border-t border-stone-700/40 px-3 pb-3 pt-2.5">
-      <div className="mx-auto max-w-3xl sm:px-3">
+      <div className="session-desk-body mx-auto max-w-3xl sm:px-3">
+        <div className="session-compose-notices">
         {pendingRolls.map((pending) => (
           <PendingRollCard
             // Inspiration rewrites the parked roll's dice: the card starts
@@ -183,6 +193,15 @@ function ComposerInner({
           meUserId={meUserId}
           onRelease={onReleaseFloor}
         />
+        {floor.mode === "open" && dmStatus === "idle" ? (
+          <TableWaitBanner
+            campaignId={campaignId}
+            wait={tableWait ?? null}
+            meUserId={meUserId}
+            steersStory={steersStory}
+            onGoOn={onReleaseFloor}
+          />
+        ) : null}
         <DirectorArmedBanner campaignId={campaignId} steersStory={steersStory} armed={directorArm} />
         <StoryNudge
           cadence={storyCadence}
@@ -198,6 +217,8 @@ function ComposerInner({
             onDismiss={joinBanner.onDismiss}
           />
         ) : null}
+        </div>
+        <div className="session-compose-hand">
         {/* The Hand (docs/visual-overhaul-plan.md 5.2): a player's combat options
             as cards, only while a fight is on. It adds to everything below and
             takes nothing away: the pills, the box, the mic and the send button
@@ -229,8 +250,12 @@ function ComposerInner({
             composerRef={composerRef}
             trackAmmo={trackAmmo}
             edges={edges}
+            drops={drops}
+            mounts={mounts}
           />
         ) : null}
+        </div>
+        <div className="session-compose-entry">
         <div data-pill-group="" className="mb-2 flex flex-wrap items-center gap-1.5" data-tour="composer-modes">
           {/* The DM authors and talks out of character; they have no
               character to act or speak as, and the story directions exist to
@@ -352,6 +377,7 @@ function ComposerInner({
         </div>
         <LengthNote id={noteId} length={length} max={maxChars} from={0.8} className="mt-1" />
         {error ? <p className="motion-shake mt-1.5 text-sm text-red-400">{error}</p> : null}
+        </div>
       </div>
     </form>
   );

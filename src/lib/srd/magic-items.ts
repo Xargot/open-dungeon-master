@@ -25,6 +25,9 @@ import { countsAsWorn } from "@/lib/srd/wear-slots";
 import type { Ability } from "@/lib/schemas/sheet";
 import type { ItemTag } from "@/lib/schemas/item-tags";
 import { textKey } from "@/lib/language/text-logic";
+import { rowName, type RowItem } from "@/lib/srd/item-row";
+import { compositeGearNamed } from "@/lib/srd/magic-gear";
+import { isNamed } from "@/lib/srd/feature-names";
 
 // The minimal item shape the magic-item engine reads: a name and its worn
 // state. The full EquipmentItem satisfies this. `gear.magic` is a homebrew
@@ -34,6 +37,7 @@ import { textKey } from "@/lib/language/text-logic";
 export type WornMagicItem = {
   name: string;
   slug?: string;
+  srdName?: string;
   equipped?: boolean;
   attuned?: boolean;
   // Waiting on the short rest attuning takes; holds one of the three places.
@@ -111,19 +115,27 @@ for (const item of MAGIC_ITEMS) {
   }
 }
 
-// The magic item a sheet entry names, if any: by its pack slug, or by its
-// whole name, case and spacing aside. A "+1" in front and a note in brackets
-// behind ("Ring of Protection (spare)") are the owner's words about the
-// item and not part of its name. Nothing matches on a fragment.
-export function matchMagicItem(name: string, slug?: string | null): MagicItemDef | null {
-  if (slug) {
-    const known = bySlug.get(slug.trim().toLowerCase());
+// The magic item a sheet entry is, if any: by its pack slug, or by its row's
+// name (src/lib/srd/item-row.ts).
+export function matchMagicItem(item: RowItem): MagicItemDef | null {
+  if (item.slug) {
+    const known = bySlug.get(item.slug.trim().toLowerCase());
     if (known) {
       return known;
     }
   }
+  return magicItemNamed(rowName(item));
+}
+
+// The magic item a name names, if any: its whole name, case and spacing
+// aside, or a composite the magic gear table knows ("Chain Mail of Fire
+// Resistance" is Armor of Fire Resistance, src/lib/srd/magic-gear.ts). A "+1"
+// in front and a note in brackets behind ("Ring of Protection (spare)") are
+// the owner's words about the item and not part of its name. Nothing matches
+// on a fragment.
+export function magicItemNamed(name: string): MagicItemDef | null {
   const bare = name.trim().replace(/^\+\d\s+/, "");
-  const whole = byKey.get(textKey(bare));
+  const whole = byKey.get(textKey(bare)) ?? byKey.get(textKey(compositeGearNamed(bare)?.def.name ?? ""));
   if (whole) {
     return whole;
   }
@@ -142,8 +154,6 @@ export type MagicItemRiders = {
   sources: string[];
 };
 
-const lower = (value: string | undefined | null) => (value ?? "").trim().toLowerCase();
-
 function isSpellcaster(wearer: Wearer): boolean {
   return Boolean(wearer.spellcasting);
 }
@@ -154,9 +164,9 @@ export function mayAttune(def: Pick<MagicItemDef, "attunedBy">, wearer: Wearer):
   if (!rule) {
     return true;
   }
-  const device = (wearer.features ?? []).some((f) => /^use magic device\b/i.test(f.name.trim()));
+  const device = (wearer.features ?? []).some((f) => isNamed(f.name, "Use Magic Device"));
   if (rule.classes?.length && !device) {
-    const held = [lower(wearer.class), ...(wearer.classes ?? []).map((entry) => lower(entry.id))];
+    const held = [textKey(wearer.class ?? ""), ...(wearer.classes ?? []).map((entry) => textKey(entry.id))];
     if (!rule.classes.some((name) => held.includes(name))) {
       return false;
     }
@@ -164,10 +174,10 @@ export function mayAttune(def: Pick<MagicItemDef, "attunedBy">, wearer: Wearer):
   if (rule.spellcaster && !device && !isSpellcaster(wearer)) {
     return false;
   }
-  if (rule.alignment && !lower(wearer.alignment).includes(rule.alignment)) {
+  if (rule.alignment && !textKey(wearer.alignment ?? "").includes(rule.alignment)) {
     return false;
   }
-  if (rule.race && !device && !lower(wearer.race).replace(/_/g, " ").includes(rule.race)) {
+  if (rule.race && !device && !textKey(wearer.race ?? "").includes(rule.race)) {
     return false;
   }
   return true;
@@ -176,7 +186,7 @@ export function mayAttune(def: Pick<MagicItemDef, "attunedBy">, wearer: Wearer):
 function defOf(item: WornMagicItem): MagicItemDef | null {
   return item.gear?.magic
     ? { name: item.name, match: `homebrew ${textKey(item.name)}`, ...item.gear.magic }
-    : matchMagicItem(item.name, item.slug);
+    : matchMagicItem(item);
 }
 
 // An item's effect counts when the item is worn (or, for the few whose text

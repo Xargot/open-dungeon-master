@@ -3,12 +3,12 @@
 // encounter-tools.ts, which dispatches to it and whose auto-act fallback
 // calls it for the enemies a turn skipped. Must not import encounter-tools.
 
-import { matchWeapon } from "@/lib/srd/weapons";
+import { weaponNamed } from "@/lib/srd/weapons";
 import { readiedHolder } from "@/lib/dm/readied-release";
 import { martialAdvantageDice, surpriseAttackDice } from "@/lib/dm/monster-traits";
 import { tilesBetween } from "@/lib/dm/attack-spatial";
 import { incapacitatedBy } from "@/lib/dm/condition-logic";
-import { listEnemies } from "@/lib/db/encounters";
+import { listEnemies, patchEnemyConditions, type EncounterEnemy } from "@/lib/db/encounters";
 import { mirrorImageDecoy, sanctuaryRefusal } from "@/lib/dm/spell-defenses";
 import { enfeebledBlow, spellRetort, spendEnemyRiders } from "@/lib/dm/spell-retort";
 import { z } from "zod";
@@ -30,22 +30,24 @@ import type { EnemyAttack } from "@/lib/bestiary/statblock";
 import { planAttackFx } from "@/lib/battlemap/fx-plan";
 import { acWithEffects } from "@/lib/dm/ac-effects";
 import { coverFor } from "@/lib/dm/attack-spatial";
-import { canEnemyAct, markEnemyActed } from "@/lib/dm/can-act";
+import { canEnemyAct, enemyActedThisRound, enemyBonusThisRound, markEnemyActed, markEnemyBonus } from "@/lib/dm/can-act";
 import { spellAttackHold } from "@/lib/dm/spell-planes";
 import { reachThroughProblem } from "@/lib/dm/zone-rules";
 import { critDamageExpression } from "@/lib/dm/encounter-logic";
 import { wornArmorTurnsCrits } from "@/lib/srd/armor";
-import { resolveEnemyRef } from "@/lib/dm/enemy-damage";
+import { resolveEnemyRef, unknownEnemyRef } from "@/lib/dm/enemy-damage";
 import { approachTarget, spendEnemyAction, standUpIfProne } from "@/lib/dm/enemy-approach";
 import { blowByType, resolveOnHit, scaledParts } from "@/lib/dm/enemy-hit";
 import { applyPcDamage } from "@/lib/dm/pc-damage";
 import { effectOutcome } from "@/lib/dm/effect-tools";
-import { charmedBy, enemyAttackProfile, plannedSwings, swingMode, type EnemyAttackProfile } from "@/lib/dm/enemy-profile";
+import { alternativeBlow, attackNamed, charmedBy, enemyAttackProfile, plannedSwings, swingMode, type EnemyAttackProfile } from "@/lib/dm/enemy-profile";
 import { publishFx, tokenPosition } from "@/lib/dm/fx";
 import { hasTrait } from "@/lib/dm/monster-abilities";
 import { enemySwingOdds, hasFeatureNamed } from "@/lib/dm/enemy-swing-odds";
 import { openLastHit } from "@/lib/dm/last-hit";
-import { authoredAfterHit } from "@/lib/dm/authored-hooks";
+import { authoredAfterHit, authoredIncomingAttack, WARD_WITHSTOOD } from "@/lib/dm/authored-hooks";
+import { rollEnemySave } from "@/lib/dm/forced-save";
+import type { ConditionMetaMap } from "@/lib/dm/condition-logic";
 import { releaseGrapplesOutOfReach } from "@/lib/dm/grapple";
 import { sanctuaryWard } from "@/lib/dm/enemy-conditions";
 import { naturesSanctuaryRefusal } from "@/lib/dm/srd-defenses";
@@ -53,9 +55,10 @@ import { conditionRollRiders, conditionTurnShape } from "@/lib/srd/condition-eff
 import { isImmersed, underwaterSwing } from "@/lib/dm/underwater";
 import { swimsFrom } from "@/lib/battlemap/types";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
-import { invalidArguments, toolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { invalidArguments, noneNamed, toolError, type ToolResult } from "@/lib/dm/tool-errors";
 import { textKey } from "@/lib/language/text-logic";
 import { ADVANTAGE_SOURCES } from "@/lib/dm/pc-attack-options";
+import { unknownSheetRef } from "@/lib/dm/rolls";
 
 const attackArgsSchema = z.object({
   enemyId: z.string(),
@@ -115,13 +118,20 @@ export function handleEnemyAttack(
   const args = parsed.data;
   const found = resolveEnemyRef(encounter.id, args.enemyId);
   if (!found) {
-    return { error: "Unknown enemyId; use one from GAME STATE.", retry: true };
+    return unknownEnemyRef(encounter.id, "enemyId", args.enemyId);
   }
+  // An attack the block prints among its Bonus Actions is the creature's
+  // bonus action: one swing, beside its action, once a round.
+  const bonus = Boolean(args.attack && attackNamed(found.stats.attacks, args.attack)?.bonusAction);
   // One guard for the enemy side (src/lib/dm/can-act.ts): the dead, the
   // incapacitated and the surprised do nothing, and an action is one a round.
-  const allowed = canEnemyAct({ enemy: found, encounter, kind: "action" });
+  const allowed = canEnemyAct({ enemy: found, encounter, kind: bonus ? "bonus" : "action" });
   if (!allowed.ok) {
     return toolError(allowed);
+  }
+  // Slow: an action or a bonus action on its turn, not both (SRD 5.1).
+  if (conditionTurnShape(found.conditions).slowed && (bonus ? enemyActedThisRound(encounter, found.id) : enemyBonusThisRound(encounter, found.id))) {
+    return { error: `${found.displayName} is slowed: it takes an action or a bonus action this turn, not both, and it has taken its ${bonus ? "action" : "bonus action"}.`, retry: true };
   }
   const staleTarget =
     sheetsById.get(args.targetCharacterId.trim()) ??
@@ -130,7 +140,7 @@ export function handleEnemyAttack(
     );
   const target = staleTarget ? getSheetById(staleTarget.id) : null;
   if (!target) {
-    return { error: "Unknown targetCharacterId; use one from GAME STATE.", retry: true };
+    return unknownSheetRef("targetCharacterId", args.targetCharacterId, sheets);
   }
   // SRD 5.1, Charmed: a charmed creature cannot attack its charmer.
   if (charmedBy(found.conditions, found.conditionMeta, target.id)) {
@@ -155,13 +165,32 @@ export function handleEnemyAttack(
   if (natures) {
     return natures;
   }
-  const attacks = found.stats.attacks.length ? found.stats.attacks : synthesizeStats(found.cr).attacks;
+  // A legendary action that bought an attack printed only among the legendary
+  // actions (an ankheg queen's Acid Glob) may swing it, and only then.
+  const owed = (encounter.legendary.strikes ?? []).includes(found.id);
+  const attacks = [
+    ...(found.stats.attacks.length ? found.stats.attacks : synthesizeStats(found.cr).attacks),
+    ...(owed ? (found.stats.legendaryAttacks ?? []) : []),
+  ];
   if (!attacks.length) {
     return { error: `${found.displayName} has no usable attacks; narrate a different action.`, retry: true };
   }
+  const asked = args.attack ? attackNamed(attacks, args.attack) : null;
+  if (args.attack && !asked) {
+    return noneNamed(`${found.displayName} has no attack called`, args.attack, attacks.map((attack) => attack.name));
+  }
+  // The action's attacks: a bonus action's is never one of its swings.
+  const actionAttacks = attacks.filter((attack) => !attack.bonusAction);
+  if (!asked && !actionAttacks.length) {
+    return { error: `${found.displayName}'s attacks are bonus actions: name one in attack (${attacks.map((attack) => attack.name).join(", ")}).`, retry: true };
+  }
   // Slow: no more than one attack on its turn, Multiattack or not (SRD 5.1).
-  const single = takeLegendaryStrike(campaign.id, found.id) || conditionTurnShape(found.conditions).slowed;
-  const planned = plannedSwings(found.stats, attacks, args.attack, { single });
+  // A bonus action's attack is one swing, and spends no legendary strike.
+  const single = bonus || takeLegendaryStrike(campaign.id, found.id) || conditionTurnShape(found.conditions).slowed;
+  if (single && !asked && actionAttacks.length > 1) {
+    return { error: `${found.displayName} makes one attack this turn: name it in attack (${actionAttacks.map((attack) => attack.name).join(", ")}).`, retry: true };
+  }
+  const planned = plannedSwings(found.stats, bonus ? attacks : actionAttacks, asked, { single });
   const profiles = planned.map((attack) => enemyAttackProfile(attack, found.stats.traits ?? []));
   // Antilife Shell: no melee reaches through it (zone-rules.ts).
   const shell = leadProfile(profiles).melee ? reachThroughProblem(encounter.id, found.id, target.id, found.stats.type, found.displayName) : null;
@@ -230,13 +259,25 @@ export function handleEnemyAttack(
   // The action is spent by taking it, hit or miss. Read fresh: the walk up
   // to the target may have spent a character's reaction on this same row.
   const live = getActiveEncounter(campaign.id) ?? encounter;
-  // An attack a legendary action bought is not a turn of the creature's.
-  if (single) {
+  // An attack a legendary action bought is not a turn of the creature's,
+  // and a bonus action's is its bonus action.
+  if (bonus) {
+    markEnemyBonus(live, enemy.id);
+  } else if (single) {
     markEnemyActed(live, enemy.id);
   } else {
     spendEnemyAction(live, enemy.id);
   }
   saveEncounter(live);
+  // Among the Dead: an undead saves before it may attack this warlock, and on
+  // a failure the attack is lost (src/lib/dm/authored-hooks.ts).
+  const warded = authoredWardSave(campaign, turn, standing, target);
+  if (warded.lost) {
+    return { ok: true, attack: planned[0].name, target: target.name, swings: [], hit: false, note: warded.lost };
+  }
+  if (warded.note) {
+    notes.push(warded.note);
+  }
   const hitLog = openLastHit(campaign.id, target.id);
 
   // The routine executes in this ONE call, each swing its own to-hit and
@@ -253,7 +294,8 @@ export function handleEnemyAttack(
   // after a miss.
   let previousHit = false;
   const attackerSubmerged = isImmersed(campaign.id, enemy.id);
-  planned.forEach((attack: EnemyAttack, index) => {
+  planned.forEach((plannedAttack: EnemyAttack, index) => {
+    let attack = plannedAttack;
     if (dropped) {
       return;
     }
@@ -268,10 +310,13 @@ export function handleEnemyAttack(
       return;
     }
     const ranged = mode.ranged;
+    // What the block deals instead at half its hit points or at range (a
+    // swarm's weaker bite, a spear thrown), from here on the swing's blow.
+    attack = alternativeBlow(plannedAttack, { ranged, bloodied: standing.currentHp <= standing.maxHp / 2 });
     // Under the water (underwater.ts): a shot past normal range misses, and
     // weapons not made for the water swing at disadvantage.
     const underwater = attackerSubmerged
-      ? underwaterSwing({ weapon: attack.name, base: matchWeapon(attack.name)?.name, melee: !ranged, swims: swimsFrom(standing.stats.speed), beyondNormal: mode.longRange, spell: attack.spellAttack })
+      ? underwaterSwing({ weapon: attack.name, base: weaponNamed(attack.name)?.name, melee: !ranged, swims: swimsFrom(standing.stats.speed), beyondNormal: mode.longRange, spell: attack.spellAttack })
       : null;
     if (underwater?.misses) {
       swings.push({ attack: attack.name, skipped: underwater.note });
@@ -408,10 +453,13 @@ export function handleEnemyAttack(
       amount: Math.min(dealt, 200),
       ...(blow.type ? { type: blow.type } : {}),
       ...(blow.parts ? { parts: scaledParts(blow.parts, dealt) } : {}),
-      // Magic Weapons: its weapon attacks are magical.
-      ...(hasTrait(standing.stats, "magicWeapons") ? { magical: true } : {}),
+      // Magic Weapons: its weapon attacks are magical; so is a spell attack,
+      // and a blow the block prints as magical ("magical bludgeoning").
+      ...(hasTrait(standing.stats, "magicWeapons") || attack.spellAttack || attack.magical ? { magical: true } : {}),
       // Crits against a dying target count double death-save failures.
       ...(crit ? { crit: true } : {}),
+      // Emissary of Redemption holds nothing against a creature the paladin attacked.
+      ...(authored.spurned.length ? { exceptFeatures: authored.spurned } : {}),
       reason: `${enemy.displayName}'s ${attack.name}`,
     });
     totalDamage += dealt;
@@ -480,7 +528,7 @@ export function handleEnemyAttack(
     type: (closing?.attack ?? planned[0]).type,
     ranged: closing?.ranged ?? false,
   });
-  notes.push(...authoredAfterHit(campaign, { encounter, attacker: standing, target, dealt: totalDamage }));
+  notes.push(...authoredAfterHit(campaign, { encounter, attacker: standing, target, dealt: totalDamage, ranged: (lastSwing as { ranged: boolean } | null)?.ranged ?? false }));
 
   const names = [...new Set(planned.map((attack) => attack.name))];
   return {
@@ -532,4 +580,32 @@ function traitDice(
     dice.push(surprise);
   }
   return { dice, martial };
+}
+
+// Among the Dead (the Undying warlock): an undead that targets the warlock
+// with an attack first saves on Wisdom against their spell save DC. On a
+// failure the attack is lost; on a success the creature is immune for 24
+// hours.
+function authoredWardSave(
+  campaign: Campaign,
+  turn: DmTurn,
+  attacker: EncounterEnemy,
+  target: CharacterSheet,
+): { lost: string | null; note: string | null } {
+  const ward = authoredIncomingAttack({ campaignId: campaign.id, encounterId: "", attacker, target }).ward;
+  if (!ward) {
+    return { lost: null, note: null };
+  }
+  const save = rollEnemySave(campaign.id, attacker, ward.save as "wis", ward.dc, {
+    magical: true,
+    record: { turn, detail: `${attacker.displayName}: ${ward.save.toUpperCase()} save against ${ward.feature}` },
+  });
+  if (!save.success) {
+    return { lost: `${ward.feature}: ${attacker.displayName} fails its ${ward.save.toUpperCase()} save (DC ${ward.dc}) and cannot bring itself to attack ${target.name}; the attack is lost.`, note: null };
+  }
+  patchEnemyConditions(attacker.id, [...attacker.conditions.filter((entry) => textKey(entry) !== textKey(WARD_WITHSTOOD)), WARD_WITHSTOOD], {
+    ...(attacker.conditionMeta as ConditionMetaMap),
+    [WARD_WITHSTOOD]: { source: target.id, rounds: 14400 },
+  } as typeof attacker.conditionMeta);
+  return { lost: null, note: `${ward.feature}: ${attacker.displayName} makes its ${ward.save.toUpperCase()} save (DC ${ward.dc}) and is immune to it for 24 hours.` };
 }

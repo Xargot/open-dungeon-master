@@ -108,9 +108,9 @@ await test("Conjure Animals refuses, before the slot, a beast above challenge ra
   assert.equal(unnamed.ok, false);
   assert.match(unnamed.error, /needs the creature in variant: .*Wolf \(CR 1\/4\).*Brown Bear \(CR 1\).*Ask the player which/);
   assert.doesNotMatch(unnamed.error, /Giant Ape|Skeleton/);
-  const elk = await world.invoke("cast_buff", { characterId: druid.id, spell: "Conjure Animals", level: 3, variant: "giant elk" });
-  assert.equal(elk.ok, false);
-  assert.match(elk.error, /no stat block here for "giant elk"; it calls: .*Wolf/);
+  const hamster = await world.invoke("cast_buff", { characterId: druid.id, spell: "Conjure Animals", level: 3, variant: "giant hamster" });
+  assert.equal(hamster.ok, false);
+  assert.match(hamster.error, /no stat block here for "giant hamster"; it calls: .*Wolf.*Giant Elk \(CR 2\)/);
   assert.equal(slotsLeft(world, druid.id, 3), 2, "no slot spent");
   assert.equal(summonsOf(world).length, 0);
 });
@@ -138,7 +138,7 @@ await test("A summoned wolf attacks with its bite's own numbers: +4 to hit and 2
 
 await test("A summoned creature with Multiattack makes that many attacks with its Attack action (a giant scorpion: three).", async () => {
   const { world, sheets: [druid], enemies: [goblin] } = await board([DRUID(["Giant Insect"], 7)], { 0: { x: 3, y: 4 }, e0: { x: 10, y: 4 } });
-  const cast = await world.invoke("cast_buff", { characterId: druid.id, spell: "Giant Insect", level: 4, variant: "scorpion" });
+  const cast = await world.invoke("cast_buff", { characterId: druid.id, spell: "Giant Insect", level: 4, variant: "giant scorpion" });
   assert.equal(cast.ok, true, cast.error);
   const [scorpion] = summonsOf(world, "Giant Insect");
   place(world, scorpion.id, 9, 4);
@@ -212,7 +212,7 @@ await test("Animate Dead raises one undead from a 3rd level slot and three from 
 
 await test("Giant Insect makes three giant spiders (or ten centipedes, five wasps, one scorpion).", async () => {
   const { world, sheets: [druid] } = await board([DRUID(["Giant Insect"], 7)], [{ x: 3, y: 4 }]);
-  const cast = await world.invoke("cast_buff", { characterId: druid.id, spell: "Giant Insect", level: 4, variant: "spider" });
+  const cast = await world.invoke("cast_buff", { characterId: druid.id, spell: "Giant Insect", level: 4, variant: "giant spider" });
   assert.equal(cast.ok, true, cast.error);
   const spiders = summonsOf(world, "Giant Insect");
   assert.equal(spiders.length, 3);
@@ -233,7 +233,7 @@ await test("Find Steed makes one steed with an Intelligence of 6; casting it aga
 
 await test("Animate Objects animates ten Tiny objects (20 hit points, AC 18, a slam at +8 for 1d4+4) or five Medium ones.", async () => {
   const { world, sheets: [wizard] } = await board([WIZARD(["Animate Objects"])], [{ x: 3, y: 4 }]);
-  const cast = await world.invoke("cast_buff", { characterId: wizard.id, spell: "Animate Objects", level: 5, variant: "tiny" });
+  const cast = await world.invoke("cast_buff", { characterId: wizard.id, spell: "Animate Objects", level: 5, variant: "Animated Object (Tiny)" });
   assert.equal(cast.ok, true, cast.error);
   const objects = summonsOf(world, "Animate Objects");
   assert.equal(objects.length, 10);
@@ -253,7 +253,7 @@ await test("A summoned creature keeps its stat block's damage immunities (a fire
 
 await test("Conjured creatures stay while the spell lasts: the end of a fight does not send them away, the end of the duration does.", async () => {
   const { world, sheets: [druid] } = await board([DRUID(["Giant Insect"], 7)], [{ x: 3, y: 4 }]);
-  await world.invoke("cast_buff", { characterId: druid.id, spell: "Giant Insect", level: 4, variant: "wasp" });
+  await world.invoke("cast_buff", { characterId: druid.id, spell: "Giant Insect", level: 4, variant: "giant wasp" });
   assert.equal(summonsOf(world, "Giant Insect").length, 5);
   await world.invoke("end_encounter", { outcome: "victory" });
   assert.equal(summonsOf(world, "Giant Insect").length, 5, "still here after the fight");
@@ -410,6 +410,9 @@ await test("Each summoned creature's stat block matches the content pack's SRD b
   const { SUMMON_FORMS } = await import("../src/lib/srd/summon-forms.ts");
   const content = await import("../src/lib/content/index.ts");
   const { parseMonster } = await import("../src/lib/bestiary/statblock.ts");
+  // Where the pack's row says otherwise than the SRD 5.1 text, the table
+  // keeps the SRD's number (scripts/lib/srd-creature-overlay.mjs).
+  const { CORRECTIONS } = await import("./lib/srd-creature-overlay.mjs");
   let compared = 0;
   for (const form of SUMMON_FORMS) {
     const slug = form.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -421,12 +424,12 @@ await test("Each summoned creature's stat block matches the content pack's SRD b
     const data = entry.data;
     assert.deepEqual(
       [form.ac, form.hp, form.cr, form.abilities.str, form.abilities.dex, form.abilities.con, form.abilities.int, form.abilities.wis, form.abilities.cha],
-      [stats.ac, stats.maxHp, data.cr, data.strength, data.dexterity, data.constitution, data.intelligence, data.wisdom, data.charisma],
+      [CORRECTIONS[form.name]?.ac ?? stats.ac, CORRECTIONS[form.name]?.hp ?? stats.maxHp, CORRECTIONS[form.name]?.cr ?? data.cr, data.strength, data.dexterity, data.constitution, data.intelligence, data.wisdom, data.charisma],
       form.name,
     );
     compared += 1;
   }
-  assert.ok(compared >= 30, `only ${compared} blocks compared`);
+  assert.ok(compared >= 110, `only ${compared} blocks compared`);
 });
 
 closeTables();

@@ -12,9 +12,10 @@
 // Nothing magical and nothing without a listed price can be bought at
 // creation: such things are found or granted in play.
 import { gearPriceCopper } from "@/lib/srd/adventuring-gear";
-import { parseCoins } from "@/lib/srd/currency";
-import { matchMagicItem } from "@/lib/srd/magic-items";
+import { formatPrice, packCostCopper } from "@/lib/srd/currency";
+import { magicItemNamed } from "@/lib/srd/magic-items";
 import { textKey } from "@/lib/language/text-logic";
+import { magicItemBonus } from "@/lib/srd/item-row";
 
 export const STARTING_WEALTH_METHODS = ["equipment", "rolled"] as const;
 export type StartingWealthMethod = (typeof STARTING_WEALTH_METHODS)[number];
@@ -93,7 +94,11 @@ const PRICES_GP: Record<string, number> = Object.fromEntries(Object.entries({
   "scrap plate": 50, "ballistic shield": 10,
 }).flatMap(([name, gold]) => [[textKey(name), gold], [`${textKey(name)} armor`, gold]]));
 
-const key = (name: string) => textKey(name.replace(/\(\s*\d+\s*\)\s*$/, ""));
+// The key the purse matches gear by: the Unicode text key, without a
+// trailing count ("Arrows (20)" is arrows). The builder's receipt counts
+// free copies by the same key (src/app/characters/builder/receiptMath.ts).
+export const gearNameKey = (name: string) => textKey(name.replace(/\(\s*\d+\s*\)\s*$/, ""));
+const key = gearNameKey;
 
 export function bundledPriceCopper(name: string): number | null {
   const wanted = key(name);
@@ -113,11 +118,7 @@ export type PriceLookup = (name: string) => ItemPrice;
 // Whether a name reads as a magic item: a bonus in the name, or one of the
 // items the magic item engine knows by that name.
 export function looksMagical(name: string): boolean {
-  if (/(^|\s)\+\d/.test(name)) {
-    return true;
-  }
-  const known = matchMagicItem(name);
-  return Boolean(known) && key(name).includes(textKey(known!.match));
+  return magicItemBonus(name) > 0 || magicItemNamed(name) !== null;
 }
 
 // The price lookup with no content pack behind it.
@@ -133,7 +134,7 @@ export function packRowPrice(row: { kind: string; cost: string }): ItemPrice {
   if (row.kind === "magic_item") {
     return { copper: null, magic: true };
   }
-  const copper = parseCoins(row.cost ?? "");
+  const copper = packCostCopper(row.cost ?? "");
   return { copper: copper === null || copper <= 0 ? null : copper, magic: false };
 }
 
@@ -162,10 +163,6 @@ export type GearVerdict = {
   spentCopper: number;
 };
 
-const gp = (copper: number) => {
-  const gold = copper / 100;
-  return `${Number.isInteger(gold) ? gold : gold.toFixed(2)} gp`;
-};
 
 // Holds a new character's pack to what its coin could buy. `freeKit` is the
 // gear that costs nothing (the class's and the background's, under
@@ -215,7 +212,7 @@ export function judgeStartingGear(input: {
   }
   if (!problems.length && spentCopper > input.coinCopper) {
     problems.push(
-      `That gear costs ${gp(spentCopper)} beyond the starting kit and the character has ${gp(input.coinCopper)} to spend; remove ${gp(spentCopper - input.coinCopper)} of it.`,
+      `That gear costs ${formatPrice(spentCopper)} beyond the starting kit and the character has ${formatPrice(input.coinCopper)} to spend; remove ${formatPrice(spentCopper - input.coinCopper)} of it.`,
     );
   }
   return { problems, spentCopper };

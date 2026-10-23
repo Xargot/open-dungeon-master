@@ -20,8 +20,8 @@ import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { ALL_CLASSES, SRD_SKILLS, XP_THRESHOLDS, findClass, levelForXp } from "@/lib/srd";
 import { asiOwed } from "@/lib/srd/asi-ledger";
 import {
-  FIGHTING_STYLES,
   chosenFightingStyles,
+  fightingStyleChoices,
   fightingStyleFeatureName,
   fightingStyleSlots,
 } from "@/lib/srd/feature-effects";
@@ -39,7 +39,7 @@ import {
   spellbookAllowance,
   spellbookOf,
 } from "@/lib/srd/spell-prep";
-import { subclassGrants } from "@/lib/srd/subclass-training";
+import { grantsForHeldTraining, subclassGrants } from "@/lib/srd/subclass-training";
 import type { SubclassExtras } from "@/lib/srd/subclass-tables";
 import { textKey } from "@/lib/language/text-logic";
 
@@ -58,6 +58,10 @@ export type LevelUpOptionsContext = {
   // Cantrips the race gave, known on top of the class's (free-cantrips.ts).
   freeCantrips: number;
   subclassExtras?: SubclassExtras;
+  // The classes the campaign's setting offers (src/lib/classes/index.ts
+  // settingClassIds); empty for a world that takes them all. A class of
+  // another setting is listed after them and says so (issue #434).
+  settingClassIds?: string[];
 };
 
 type ClassRow = { id: string; subclass: string; level: number };
@@ -81,7 +85,7 @@ export type LevelUpOptions = {
   // The subclass the picks below are counted under: the one held, or the
   // one asked about; null before either.
   countedUnderSubclass: string | null;
-  otherClasses: Array<{ id: string; allowed: boolean; reason?: string }>;
+  otherClasses: Array<{ id: string; allowed: boolean; reason?: string; fromAnotherSetting?: true }>;
   hitPoints: {
     die: string;
     method: HpMethod;
@@ -158,12 +162,19 @@ export function levelUpOptions(sheet: CharacterSheet, context: LevelUpOptionsCon
     .filter((entry) => entry.id.toLowerCase() !== classId)
     .map((entry) => ({ id: entry.id, allowed: true }));
   if (context.multiclassAllowed && classList.length < MULTICLASS_CAP) {
-    for (const candidate of ALL_CLASSES) {
-      if (candidate.id === classId || classList.some((entry) => entry.id.toLowerCase() === candidate.id)) {
-        continue;
-      }
+    const setting = new Set(context.settingClassIds ?? []);
+    const offered = (id: string) => !setting.size || setting.has(id);
+    const candidates = ALL_CLASSES.filter(
+      (candidate) => candidate.id !== classId && !classList.some((entry) => entry.id.toLowerCase() === candidate.id),
+    ).sort((a, b) => Number(offered(b.id)) - Number(offered(a.id)));
+    for (const candidate of candidates) {
       const check = canMulticlassInto(sheet, candidate.id);
-      otherClasses.push(check.ok ? { id: candidate.id, allowed: true } : { id: candidate.id, allowed: false, reason: check.error });
+      otherClasses.push({
+        id: candidate.id,
+        allowed: check.ok,
+        ...(check.ok ? {} : { reason: check.error }),
+        ...(offered(candidate.id) ? {} : { fromAnotherSetting: true as const }),
+      });
     }
   }
 
@@ -219,12 +230,13 @@ export function levelUpOptions(sheet: CharacterSheet, context: LevelUpOptionsCon
   // then invocations, maneuvers, metamagic and the rest (src/lib/srd/options.ts).
   const featurePicks: NonNullable<LevelUpOptions["choices"]["featurePicks"]> = [];
   const styles = chosenFightingStyles(sheet.features);
-  const styleSlots = fightingStyleSlots(populateFeaturesForClasses(sheet.features, classesAfter, sheet.race));
+  const featuresAfter = populateFeaturesForClasses(sheet.features, classesAfter, sheet.race);
+  const styleSlots = fightingStyleSlots(featuresAfter);
   if (styleSlots > styles.length) {
     featurePicks.push({
       label: "Fighting Style",
       count: styleSlots - styles.length,
-      options: FIGHTING_STYLES.filter((style) => !styles.some((name) => textKey(name) === textKey(style.name))).map((style) =>
+      options: fightingStyleChoices(featuresAfter).filter((style) => !styles.some((name) => textKey(name) === textKey(style.name))).map((style) =>
         fightingStyleFeatureName(style.id),
       ),
     });
@@ -266,8 +278,10 @@ export function levelUpOptions(sheet: CharacterSheet, context: LevelUpOptionsCon
   // the weighed subclass's own (a Lore bard's three skills). Picks are keyed
   // in featChoices by the grant's name.
   const trainedBefore = new Set(subclassGrants(classList, context.subclassExtras).map((grant) => `${grant.classId}|${textKey(grant.name)}`));
-  const training = subclassGrants(classesAfter, context.subclassExtras)
-    .filter((grant) => !trainedBefore.has(`${grant.classId}|${textKey(grant.name)}`))
+  const training = grantsForHeldTraining(
+    subclassGrants(classesAfter, context.subclassExtras).filter((grant) => !trainedBefore.has(`${grant.classId}|${textKey(grant.name)}`)),
+    sheet.proficiencies,
+  )
     .flatMap((grant) => {
       const picks = featPicksOwed(grant.name, grant.spec, undefined);
       return picks ? [{ name: grant.name, picks }] : [];

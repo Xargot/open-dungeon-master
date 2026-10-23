@@ -1,6 +1,7 @@
 "use client";
 
 import { playingSheet, turnFromEncounter, turnHudBudget } from "@/lib/battlemap/hand-table";
+import { initiativeCharacter } from "@/lib/player-characters";
 import { BookMarked, BookOpen, Flag, Heart, History, ListChecks, ScrollText, ShoppingBag, Users } from "lucide-react";
 import { Suspense, useMemo, useState, type ReactNode } from "react";
 import type { CampaignMessage } from "@/lib/db/messages";
@@ -41,9 +42,11 @@ import type { MapPing } from "@/lib/dm/board-logic";
 import { companionSlotsFree, lastingCompanionBlock, resolveCompanionMode } from "@/lib/schemas/game-settings";
 import { hasHumanDm, partySlotCount } from "@/lib/dm/viewer";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
+import type { MarketRequest } from "@/lib/dm/table-tabs";
 import type { LeadPanel as LeadPanelComponent } from "@/app/campaigns/[campaignId]/LeadPanel";
 import type { SessionSettings as SessionSettingsComponent } from "@/app/campaigns/[campaignId]/SessionSettings";
 import { PanelLoading, panels } from "@/app/campaigns/[campaignId]/side-panel-loaders";
+import { mayWritePartyBackstory } from "@/lib/dm/party-story";
 
 // Every panel but the party roster (the tab a table opens on) is its own
 // download, fetched when its tab is first opened or, sooner, when the
@@ -162,6 +165,8 @@ export type SidePanelRouterProps = {
   // Bumped on lore_updated, so the lore list reads itself again.
   loreVersion?: number;
   shopsVersion?: number;
+  // A Browse wares pressed in the chat: open the Market on that shop.
+  marketRequest?: MarketRequest | null;
   coins?: { characterId: string; direction: "in" | "out"; amountCp: number; at: number } | null;
   activeSheetId?: string;
   questsVersion: number;
@@ -239,6 +244,7 @@ export function SidePanelRouter({
   worldVersion = 0,
   loreVersion = 0,
   shopsVersion = 0,
+  marketRequest = null,
   coins = null,
   activeSheetId = "",
   questsVersion,
@@ -258,6 +264,13 @@ export function SidePanelRouter({
   // this panel reads or sets them.
   const [partySection, setPartySection] = useState<PartySection>("party");
   const [storySection, setStorySection] = useState<StorySection>("story");
+  // A Browse wares from the chat turns Party to its Market, once per press.
+  // State-from-props during render, as useSessionTabs takes a chat target.
+  const [seenMarketAt, setSeenMarketAt] = useState(0);
+  if (marketRequest && marketRequest.at !== seenMarketAt) {
+    setSeenMarketAt(marketRequest.at);
+    setPartySection("market");
+  }
 
   const partySubTabs: SubTabDef<PartySection>[] = [
     ["party", "Roster", Users],
@@ -384,6 +397,8 @@ export function SidePanelRouter({
 
               refreshKey={shopsVersion}
               coins={coins}
+              focus={marketRequest}
+              onAskKeeper={onCompose}
             />
             </Suspense>
           ) : (
@@ -406,6 +421,17 @@ export function SidePanelRouter({
                 meUserId={meUserId}
                 party={campaign?.party}
                 arrangesFormation={isLead || adjudicates}
+                partyStory={
+                  campaign?.gameSettings
+                    ? {
+                        canWrite: mayWritePartyBackstory({
+                          isLead,
+                          holdsDmSeat: meUserId === campaign.dmUserId || meUserId === campaign.assistantDmUserId,
+                          hasCharacter: sheets.some((sheet) => sheet.userId === meUserId && !sheet.isCompanion),
+                        }),
+                      }
+                    : undefined
+                }
                 spotlightUserIds={spotlightUserIds}
                 onlineUserIds={onlineUserIds}
                 steersStory={steersStory}
@@ -476,7 +502,9 @@ export function SidePanelRouter({
     );
   }
   if (tab === "battle" && battleMap) {
-    const playing = playingSheet(sheets, meUserId, activeSheetId);
+    // The turn's character when it is this player's (their own, or a
+    // companion they command), else the one being played.
+    const playing = initiativeCharacter(sheets, meUserId, encounter?.acting?.id) ?? playingSheet(sheets, meUserId, activeSheetId);
     return (
       // board-dock: the side panel and the phone hold the board in a fixed
       // window too, so its header and footer stay on screen (issue 87).
@@ -499,7 +527,7 @@ export function SidePanelRouter({
           // count is the main board's (SessionView.tsx): drawn from the
           // turn's start, before anything is spent, with a spent reaction
           // from reactionsUsed and an action Haste or Action Surge leave.
-          playing && !playing.isCompanion && encounter
+          playing && encounter
             ? turnHudBudget(turnFromEncounter(encounter, playing, { myTurn: encounter.turn?.ownerId === playing.id }))
             : null
         }

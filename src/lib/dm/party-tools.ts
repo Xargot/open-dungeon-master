@@ -7,7 +7,7 @@ import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted, publishWithSeq } from "@/lib/events";
 import { addPartyItem, removePartyItem, splitBankedXp } from "@/lib/dm/party-logic";
 import { grantItemMath, removeItemMath } from "@/lib/dm/mutation-math";
-import { addCopper, formatCopper, parseCoins, purseCopper, unreadCoins } from "@/lib/srd/currency";
+import { addCopper, formatCopper, formatPrice, parseCoins, purseCopper, unreadCoins } from "@/lib/srd/currency";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import type { ToolResult } from "@/lib/dm/tool-errors";
 import { notCarried } from "@/lib/dm/item-logic";
@@ -133,7 +133,7 @@ export function handlePartyStash(
       }
       const { srdName, tags, worth, spell } = taken.item;
       const added = addPartyItem(getParty(campaign.id).inventory, {
-        name,
+        name: taken.item.name,
         qty: taken.removed,
         weight: taken.item.weight,
         identified: taken.item.identified,
@@ -148,8 +148,8 @@ export function handlePartyStash(
       patchSheet(fresh.id, { equipment: taken.equipment });
       const party = updateParty(campaign.id, (current) => ({ ...current, inventory: added.inventory }));
       publishParty(campaign.id, party);
-      tableNote(campaign, `${fresh.name} puts ${name}${taken.removed > 1 ? ` x${taken.removed}` : ""} in the party's pack.`, "cue-bell");
-      return { ok: true, stowed: name, qty: taken.removed };
+      tableNote(campaign, `${fresh.name} puts ${taken.item.name}${taken.removed > 1 ? ` x${taken.removed}` : ""} in the party's pack.`, "cue-bell");
+      return { ok: true, stowed: taken.item.name, qty: taken.removed };
     }
 
     const party = getParty(campaign.id);
@@ -168,8 +168,8 @@ export function handlePartyStash(
     patchSheet(fresh.id, { equipment: granted.equipment });
     const next = updateParty(campaign.id, (current) => ({ ...current, inventory: taken.inventory }));
     publishParty(campaign.id, next);
-    tableNote(campaign, `${fresh.name} takes ${name}${taken.removed > 1 ? ` x${taken.removed}` : ""} from the party's pack.`, "cue-bell");
-    return { ok: true, took: name, qty: taken.removed };
+    tableNote(campaign, `${fresh.name} takes ${taken.item.name}${taken.removed > 1 ? ` x${taken.removed}` : ""} from the party's pack.`, "cue-bell");
+    return { ok: true, took: taken.item.name, qty: taken.removed };
   }
 
   // Money. Coins win over the whole-gold amount when both are sent, for the
@@ -198,8 +198,8 @@ export function handlePartyStash(
       copper: current.copper + copper,
     }));
     publishParty(campaign.id, party);
-    tableNote(campaign, `${fresh.name} puts ${formatCopper(copper)} in the common purse.`, "cue-coin");
-    return { ok: true, deposited: formatCopper(copper), purse: formatCopper(party.copper) };
+    tableNote(campaign, `${fresh.name} puts ${formatPrice(copper)} in the common purse.`, "cue-coin");
+    return { ok: true, deposited: formatPrice(copper), purse: formatCopper(party.copper) };
   }
 
   const party = getParty(campaign.id);
@@ -213,12 +213,12 @@ export function handlePartyStash(
     copper: Math.max(0, current.copper - copper),
   }));
   publishParty(campaign.id, next);
-  tableNote(campaign, `${fresh.name} takes ${formatCopper(copper)} from the common purse.`, "cue-coin");
-  return { ok: true, withdrew: formatCopper(copper), purse: formatCopper(next.copper) };
+  tableNote(campaign, `${fresh.name} takes ${formatPrice(copper)} from the common purse.`, "cue-coin");
+  return { ok: true, withdrew: formatPrice(copper), purse: formatCopper(next.copper) };
 }
 
 // Handing out what the party banked. Not an adjudication: the DM decides when
-// a session's experience is divided, and the AI has award_xp for everything
+// a session's experience is divided, and the AI has party_award for everything
 // it should be doing on its own.
 export function payOutBankedXp(
   campaign: Campaign,

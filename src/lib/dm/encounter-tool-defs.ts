@@ -70,7 +70,7 @@ export const startEncounterTool: ToolDef = {
           type: "integer",
           minimum: 5,
           description:
-            "How far the nearest enemy stands from the party as the fight opens, in feet, whenever the story has already said: 5 for a foe at arm's length, 10 for one two paces off, 30 across a room. The battle map places them there. Omit it and the sides open across the field from each other.",
+            "How far the nearest enemy stands from the party as the fight opens, in feet, whenever the story has already said: 5 for a foe at arm's length, 10 for one two paces off, 30 across a room. The battle map places them there. Omit it and an ambush or a fight indoors opens 30 feet apart, anything else across the field.",
         },
         lair: {
           type: "boolean",
@@ -84,43 +84,6 @@ export const startEncounterTool: ToolDef = {
         },
       },
       required: ["enemies"],
-    },
-  },
-};
-
-export const damageEnemyTool: ToolDef = {
-  type: "function",
-  function: {
-    name: "damage_enemy",
-    description:
-      "Deal damage to an enemy from a hazard or the environment (a falling chandelier, burning oil, a collapsing floor): never from an attack or a spell. For a character's or companion's blow, use pc_attack; for a spell, cast_at_enemy or aoe_damage; an ally who fights is recruited with add_companion and attacks with pc_attack. The enemy dies only when the result says dead: true.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        enemyId: { type: "string", description: "Exact enemyId from GAME STATE." },
-        amount: { type: "integer", minimum: 1, maximum: 200, description: "A damage total the server rolled this turn; omit it for a fall (fallFeet) or dice." },
-        dice: { type: "string", description: "Dice the server rolls for the damage ('4d10'). Instead of amount." },
-        fallFeet: {
-          type: "integer",
-          minimum: 1,
-          maximum: 1000,
-          description: "A fall, instead of amount: how far the creature falls. The server rolls 1d6 bludgeoning per 10 feet (at most 20d6) and lays it prone.",
-        },
-        type: { type: "string", description: "Damage type (slashing, fire)." },
-        magical: {
-          type: "boolean",
-          description:
-            "True when the hazard is magical, so resistance to nonmagical attacks does not apply.",
-        },
-        source: {
-          type: "string",
-          enum: ["hazard", "environment"],
-          description: "What deals it: 'hazard' (a trap, a falling object) or 'environment' (fire, lava, acid); anything else is refused.",
-        },
-        reason: { type: "string", description: "Short in-fiction cause." },
-      },
-      required: ["enemyId"],
     },
   },
 };
@@ -147,13 +110,13 @@ export const enemyAttackTool: ToolDef = {
         advantage: {
           type: "string",
           enum: ["none", "advantage", "disadvantage"],
-          description: "Situational advantage the server cannot see; counts only with advantageSource 'other' and advantageReason. Conditions, light, cover, range, flanking and Pack Tactics are the server's already.",
+          description: "Situational advantage the server cannot see; counts only with advantageSource 'other' and advantageReason. Conditions, light, cover, range, flanking, spells and Pack Tactics are the server's already.",
         },
         advantageSource: {
           type: "string",
           enum: [...ADVANTAGE_SOURCES],
           description:
-            "Where the advantage or disadvantage comes from. Only 'other', a circumstance of the fiction the server cannot see (named in advantageReason), counts: the server applies conditions, cover, light, range, Help, flanking, spells, Inspiration and features itself.",
+            "Where the advantage or disadvantage comes from; only 'other' counts.",
         },
         advantageReason: { type: "string", description: "The circumstance behind advantage, in a few words." },
       },

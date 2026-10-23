@@ -8,12 +8,14 @@
 // callback, so it must not be imported by mutations.ts.
 
 import { randomUUID } from "node:crypto";
+import { authoredSummonHitPoints } from "@/lib/srd/authored-effects-more";
 import type { Campaign } from "@/lib/db/campaigns";
 import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import { computeSheetDerived, spellAttackFor } from "@/lib/srd";
 import { activeAuthored } from "@/lib/srd/authored-effects";
 import { summonPlan, type SummonSpell } from "@/lib/srd/summon-spells";
 import type { SummonForm } from "@/lib/srd/summon-forms";
+import { attackSummary } from "@/lib/srd/creature-attacks";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { removeSummon, spawnSummons, summonsOf } from "@/lib/dm/summon-store";
 import { SUMMONED, summonRecord } from "@/lib/dm/summon-rules";
@@ -83,7 +85,7 @@ export function castSummon(
   const slotLevel = Math.max(spell.level, args.level ?? spell.level);
   // Animate Dead, Create Undead: a casting may reassert control over the
   // undead it already made, rather than making new ones.
-  if (spell.reassert && /\b(?:reassert|renew|control)\b/i.test(args.variant ?? "")) {
+  if (spell.reassert && textKey(args.variant ?? "") === "reassert control") {
     return reassertControl(campaign, args, slotLevel, cast);
   }
   const plan = summonPlan(spell, slotLevel, args.variant ?? "", args.count);
@@ -124,6 +126,9 @@ export function castSummon(
   // makes arrives with 30 temporary hit points.
   const durableHp = authoredSummonTempHp(fresh, spell.school);
   const durable = durableHp > 0;
+  // Mighty Summoner (Circle of the Shepherd 6): a beast or fey arrives with
+  // 2 more hit points per Hit Die.
+  const mighty = authoredSummonHitPoints(fresh, form);
   const record = summonRecord(form, {
     spell: castAs,
     casterId: caster.id,
@@ -145,11 +150,10 @@ export function castSummon(
     overrides: {
       ...(spell.minInt ? { int: spell.minInt } : {}),
       ...(spell.speed ? { speed: spell.speed } : {}),
+      ...(mighty ? { hp: form.hp + mighty.hp } : {}),
     },
   });
-  const attacks = form.attacks.length
-    ? form.attacks.map((attack) => `${attack.name} +${attack.toHit} (${attack.damage} ${attack.type}${(attack.riders ?? []).map((rider) => ` + ${rider.dice} ${rider.type}`).join("")})`).join(", ")
-    : "none: it cannot attack";
+  const attacks = form.attacks.length ? form.attacks.map(attackSummary).join(", ") : "none: it cannot attack";
   return {
     ok: true,
     spell: castAs,

@@ -4,8 +4,9 @@ import subclassesJson from "@/lib/srd/subclasses.json";
 import racesJson from "@/lib/srd/races.json";
 import classesJson from "@/lib/srd/classes.json";
 import { CUSTOM_CLASS_FEATURES, findCustomClass } from "@/lib/classes";
+import { workshopClassDef } from "@/lib/classes/workshop-registry";
 import type { SheetFeature } from "@/lib/schemas/sheet";
-import { chosenFightingStyles, fightingStyleSlots } from "@/lib/srd/feature-effects";
+import { chosenFightingStyles, fightingStyleChoices, fightingStyleSlots } from "@/lib/srd/feature-effects";
 import { findOptionByFeatureName, isOptionName, optionSlotsFor } from "@/lib/srd/options";
 import { featOptionSlots } from "@/lib/srd/feat-combat";
 import { srdRaceId } from "@/lib/srd/race-id";
@@ -23,9 +24,25 @@ export type SubclassTable = {
   aliases?: string[];
   levels: Record<string, string[]>;
   // Always-prepared spells the subclass hands out, keyed by the class level
-  // they arrive at (domain, circle, oath, patron and Arcanum lists). They do
+  // they arrive at (domain, circle and oath lists, a learned cantrip). They do
   // not count against a caster's known/prepared ceiling.
   spells?: Record<string, string[]>;
+  // A warlock patron's expanded list: added to the spells the class may
+  // learn from that level, never granted (SRD 5.1, The Fiend; the Sage
+  // Advice Compendium). Learned, they count against spells known.
+  expanded?: Record<string, string[]>;
+  // Spells that hang off the option chosen for one of the subclass's
+  // features ("Circle Spells (Forest)", "Genie's Vessel (Efreeti)"), free or
+  // expanded as `expanded` says.
+  choiceSpells?: ChoiceSpells;
+  // Other classes' lists the subclass may learn from (Divine Soul: cleric).
+  spellLists?: string[];
+};
+
+export type ChoiceSpells = {
+  feature: string;
+  expanded?: boolean;
+  options: Record<string, Record<string, string[]>>;
 };
 
 type ClassFeatureTable = {
@@ -72,6 +89,9 @@ const AUTHORED_SUBCLASSES: Record<string, SubclassTable[]> = Object.fromEntries(
           ...(entry.aliases ? { aliases: entry.aliases } : {}),
           levels,
           ...(entry.spells ? { spells: entry.spells } : {}),
+          ...(entry.expanded ? { expanded: entry.expanded } : {}),
+          ...(entry.choiceSpells ? { choiceSpells: entry.choiceSpells } : {}),
+          ...(entry.spellLists ? { spellLists: entry.spellLists } : {}),
         };
       }),
     ],
@@ -106,7 +126,7 @@ export function subclassFeatureDescription(
   featureName: string,
   extras?: SubclassExtras,
 ): string | null {
-  const table = CLASS_FEATURES[classId];
+  const table = featureTableOf(classId);
   const chosen = table ? findSubclass(table, subclass) : null;
   if (!chosen) {
     // A workshop or pack subclass carries its features' own text.
@@ -145,6 +165,12 @@ const CLASS_FEATURES: Record<string, ClassFeatureTable> = {
   ...CUSTOM_CLASS_FEATURES,
 };
 
+// A class's table: the bundled or setting one, or a workshop class's,
+// registered at run time (src/lib/classes/index.ts registerWorkshopClasses).
+function featureTableOf(classId: string): ClassFeatureTable | undefined {
+  return CLASS_FEATURES[classId] ?? workshopClassDef(classId)?.features;
+}
+
 function clampLevel(level: number) {
   return Math.max(1, Math.min(20, Math.floor(level)));
 }
@@ -152,7 +178,7 @@ function clampLevel(level: number) {
 // The character level at which a class picks its subclass; null for classes
 // outside the SRD table (custom/homebrew classes).
 export function subclassLevelFor(classId: string): number | null {
-  return CLASS_FEATURES[classId]?.subclassLevel ?? null;
+  return featureTableOf(classId)?.subclassLevel ?? null;
 }
 
 // Whether a class may pick its subclass at this level: `locked` with the
@@ -198,7 +224,7 @@ export function expertiseSlotsFor(classId: string, level: number): number {
 // Empty for unknown classes. The character builder and the level-up dialog
 // merge these with whatever the content pack offers.
 export function subclassNamesFor(classId: string): string[] {
-  return (CLASS_FEATURES[classId]?.subclasses ?? []).map((entry) => entry.name);
+  return (featureTableOf(classId)?.subclasses ?? []).map((entry) => entry.name);
 }
 
 function leveledNames(levels: Record<string, string[]>, level: number): SheetFeature[] {
@@ -289,7 +315,7 @@ function findSubclass(table: ClassFeatureTable, stored: string): SubclassTable |
 // the creation check ask it "is this one of the class's subclasses", where
 // the loose match above would answer yes to half a name.
 export function bundledSubclassName(classId: string, subclass: string): string | null {
-  const table = CLASS_FEATURES[classId];
+  const table = featureTableOf(classId);
   const wanted = textKey(subclass);
   if (!table || !wanted) {
     return null;
@@ -330,7 +356,7 @@ export function classFeaturesFor(
   // table's workshop subclasses and the content pack's prose archetypes.
   extras?: SubclassExtras,
 ): SheetFeature[] {
-  const table = CLASS_FEATURES[classId];
+  const table = featureTableOf(classId);
   if (!table) {
     return [];
   }
@@ -347,30 +373,90 @@ export function classFeaturesFor(
 // feature names by level and its always-prepared spells. Null for a
 // subclass the tables do not carry.
 export function subclassTableFor(classId: string, stored: string): SubclassTable | null {
-  const table = CLASS_FEATURES[classId];
+  const table = featureTableOf(classId);
   return table ? findSubclass(table, stored) : null;
 }
 
-// The always-prepared spells a subclass has granted by `level`: domain,
-// circle, oath and patron lists. Callers add these to the sheet's prepared
-// list; they are free and never count against the known/prepared ceiling.
-export function subclassSpellsFor(classId: string, subclass: string, level: number, extras?: SubclassExtras): string[] {
-  const table = CLASS_FEATURES[classId];
-  if (!table) {
-    return [];
-  }
-  const chosen = findSubclass(table, subclass) ?? extraTableNamed(classId, subclass, extras);
-  if (!chosen?.spells) {
-    return [];
-  }
-  const clamped = clampLevel(level);
-  const granted: string[] = [];
-  for (const [levelKey, spells] of Object.entries(chosen.spells)) {
-    if (Number(levelKey) <= clamped) {
-      granted.push(...spells);
+function spellsBy(table: Record<string, string[]> | undefined, level: number): string[] {
+  const out: string[] = [];
+  for (const [levelKey, spells] of Object.entries(table ?? {})) {
+    if (Number(levelKey) <= clampLevel(level)) {
+      out.push(...spells);
     }
   }
-  return [...new Set(granted)];
+  return out;
+}
+
+// The option a sheet chose for a feature: "Forest" of "Circle Spells
+// (Forest)". Null when the feature carries none.
+export function featureChoiceOf(features: ReadonlyArray<{ name: string }> | undefined, feature: string): string | null {
+  const wanted = textKey(feature);
+  for (const held of features ?? []) {
+    const parts = /^(.*?)\s*\(([^)]+)\)\s*$/.exec(held.name.trim());
+    if (parts && textKey(parts[1]) === wanted) {
+      return parts[2].trim();
+    }
+  }
+  return null;
+}
+
+// The choice's list, for the option the sheet's features name.
+function choiceSpellsBy(chosen: SubclassTable, features: ReadonlyArray<{ name: string }> | undefined, level: number, expanded: boolean): string[] {
+  const choice = chosen.choiceSpells;
+  if (!choice || Boolean(choice.expanded) !== expanded) {
+    return [];
+  }
+  const option = featureChoiceOf(features, choice.feature);
+  const table = option ? Object.entries(choice.options).find(([name]) => textKey(name) === textKey(option))?.[1] : undefined;
+  return spellsBy(table, level);
+}
+
+function subclassTableOf(classId: string, subclass: string, extras?: SubclassExtras): SubclassTable | null {
+  const table = featureTableOf(classId);
+  return table ? (findSubclass(table, subclass) ?? extraTableNamed(classId, subclass, extras)) : null;
+}
+
+// The spells a subclass has granted by `level`, always prepared or known and
+// free: domain, circle and oath lists, a learned cantrip, and the list of the
+// option chosen for a feature when `features` name it (a Land druid's
+// terrain, a Divine Soul's affinity). Callers add these to the sheet's
+// lists; they never count against the known/prepared ceiling. A warlock
+// patron's list is not one of them (subclassExpandedSpellsFor).
+export function subclassSpellsFor(
+  classId: string,
+  subclass: string,
+  level: number,
+  extras?: SubclassExtras,
+  features?: ReadonlyArray<{ name: string }>,
+): string[] {
+  const chosen = subclassTableOf(classId, subclass, extras);
+  if (!chosen) {
+    return [];
+  }
+  return [...new Set([...spellsBy(chosen.spells, level), ...choiceSpellsBy(chosen, features, level, false)])];
+}
+
+// The spells a subclass adds to those its class may learn by `level`, not
+// granting them: a warlock patron's expanded list (and a genie's kind's
+// part of it, read from `features`).
+export function subclassExpandedSpellsFor(
+  classId: string,
+  subclass: string,
+  level: number,
+  extras?: SubclassExtras,
+  features?: ReadonlyArray<{ name: string }>,
+): string[] {
+  const chosen = subclassTableOf(classId, subclass, extras);
+  if (!chosen) {
+    return [];
+  }
+  return [...new Set([...spellsBy(chosen.expanded, level), ...choiceSpellsBy(chosen, features, level, true)])];
+}
+
+// Other classes' spell lists a subclass may learn from (Divine Soul: the
+// cleric's), lowercased class ids.
+export function subclassSpellListsFor(classId: string, subclass: string, extras?: SubclassExtras): string[] {
+  return (subclassTableOf(classId, subclass, extras)?.spellLists ?? []).map((entry) => textKey(entry));
 }
 
 const RACES = (racesJson as { races: Array<{ id: string; traits: string[] }> }).races;
@@ -415,6 +501,26 @@ export function populateFeaturesForClasses(
         classId: entry.id,
       })),
     );
+  }
+  // A feature whose option the player chose keeps it ("Totem Spirit (Bear)",
+  // "Genie's Vessel (Efreeti)": src/lib/srd/authored-effects.ts renames the
+  // feature), where the regrant would write the bare name back and lose it.
+  // A table name with its own parentheses ("Extra Attack (2)") is a grant,
+  // never a choice.
+  const tableNames = exactFeatureNames(extras);
+  for (let index = 0; index < granted.length; index += 1) {
+    const feature = granted[index];
+    const chosen = existing.find(
+      (held) =>
+        held.source === "class" &&
+        (!held.classId || !feature.classId || held.classId === feature.classId) &&
+        held.name.replace(/\s*\([^()]*\)\s*$/, "") !== held.name &&
+        textKey(held.name.replace(/\s*\([^()]*\)\s*$/, "")) === textKey(feature.name) &&
+        !tableNames.has(textKey(held.name)),
+    );
+    if (chosen) {
+      granted[index] = { ...feature, name: chosen.name };
+    }
   }
   const racialTraits = racialTraitsFor(raceId);
   granted.push(...racialTraits);
@@ -465,6 +571,8 @@ function pruneChoiceFeatures(
 ): SheetFeature[] {
   const styleSlots = fightingStyleSlots(granted);
   const styles = new Set(chosenFightingStyles(features).map((name) => textKey(name)));
+  // A style the slots do not allow (Archery on a Swords bard) is not kept.
+  const allowedStyles = new Set(fightingStyleChoices(granted).map((style) => textKey(style.name)));
   let stylesKept = 0;
   const perKind = new Map<string, number>();
   return features.filter((feature) => {
@@ -498,7 +606,7 @@ function pruneChoiceFeatures(
     }
     const bare = chosenFightingStyles([feature])[0];
     if (bare !== undefined && styles.has(textKey(bare))) {
-      if (stylesKept >= styleSlots) {
+      if (stylesKept >= styleSlots || !allowedStyles.has(textKey(bare))) {
         return false;
       }
       stylesKept += 1;
@@ -506,6 +614,26 @@ function pruneChoiceFeatures(
     }
     return true;
   });
+}
+
+// Every feature name the class and subclass tables grant, exactly as written
+// (parentheses kept), with the workshop's and the pack's subclasses.
+let tableFeatureNames: Set<string> | null = null;
+function exactFeatureNames(extras?: SubclassExtras): Set<string> {
+  if (!tableFeatureNames) {
+    tableFeatureNames = new Set(
+      Object.values(CLASS_FEATURES)
+        .flatMap((table) => [
+          ...Object.values(table.levels).flat(),
+          ...table.subclasses.flatMap((subclass) => Object.values(subclass.levels).flat()),
+        ])
+        .map(textKey),
+    );
+  }
+  const extra = Object.values(extras ?? browserSubclassExtras())
+    .flat()
+    .flatMap((entry) => Object.values(entry.levels).flat().map((row) => textKey(row.n)));
+  return extra.length ? new Set([...tableFeatureNames, ...extra]) : tableFeatureNames;
 }
 
 // Single-class shape, kept so the many existing call sites stay unchanged;

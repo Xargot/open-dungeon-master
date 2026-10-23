@@ -1,13 +1,14 @@
 import { getEntryDetail, spellMechanicsFor } from "@/lib/content";
 import { packRaceOptions } from "@/lib/content/race-options";
-import { armorInside, magicItemBonus, matchArmor, SRD_ARMOR, type SrdArmor } from "@/lib/srd/armor";
-import { checkRidersOf } from "@/lib/srd/item-check-riders";
+import { armorNamed } from "@/lib/srd/armor";
+import { magicItemBonus } from "@/lib/srd/item-row";
+import { checkRidersNamed } from "@/lib/srd/item-check-riders";
 import { itemSpellsOf } from "@/lib/srd/item-spells";
-import { gearBaseName, gearDefFor } from "@/lib/srd/magic-gear";
-import { matchMagicItem } from "@/lib/srd/magic-items";
+import { gearDefNamed } from "@/lib/srd/magic-gear";
+import { magicItemNamed } from "@/lib/srd/magic-items";
 import { rowSlot } from "@/lib/srd/wear-slots";
 import { isWornPlace } from "@/lib/srd/worn-places";
-import { matchWeapon, SRD_WEAPONS, type SrdWeapon } from "@/lib/srd/weapons";
+import { weaponNamed } from "@/lib/srd/weapons";
 import type { SpellMech } from "@/lib/srd/spell-mech-types";
 import { subclassFeatureDescription, subclassLevelFor, subclassTableFor } from "@/lib/srd/features";
 import { subclassLevelsFromProse, type SubclassFeatureRow } from "@/lib/srd/subclass-tables";
@@ -20,6 +21,7 @@ import { traitParagraphs } from "@/lib/workshop/species-traits";
 import type { RulebookPage } from "@/lib/rulebook/types";
 import { textKey } from "@/lib/language/text-logic";
 import { thirdCasterProfileForPackSubclass } from "@/lib/srd/third-caster";
+import { classMechanicsOf } from "@/lib/workshop/class-catalog";
 
 // What the engine runs for a published row, handed to the workshop's "start
 // from" pickers (src/app/workshop/homebrew/CatalogStart.tsx) beside the row
@@ -42,11 +44,6 @@ export function spellMechanicsOf(row: Row): SpellMech | null {
   return spellMechanicsFor({ spell: row.name })?.mech ?? null;
 }
 
-const exactWeapon = (name: string): SrdWeapon | null =>
-  SRD_WEAPONS.find((weapon) => textKey(weapon.name) === textKey(name)) ?? null;
-const exactArmor = (name: string): SrdArmor | null =>
-  SRD_ARMOR.find((armor) => textKey(armor.name) === textKey(name)) ?? null;
-
 // The fields a homebrew item's data blob takes (src/lib/homebrew/item-data.ts)
 // for a published item, or null for one the engine reads nothing from.
 export function itemMechanicsOf(row: Row): Record<string, unknown> | null {
@@ -54,26 +51,17 @@ export function itemMechanicsOf(row: Row): Record<string, unknown> | null {
     return null;
   }
   const name = row.name;
-  const worn = matchMagicItem(name);
-  const named = matchWeapon(name);
-  const def = gearDefFor(name, undefined, named?.name ?? matchArmor(name)?.name ?? null);
-  const checks = checkRidersOf(name);
+  const worn = magicItemNamed(name);
+  const named = weaponNamed(name);
+  const def = gearDefNamed(name);
+  const checks = checkRidersNamed(name);
   const spells = itemSpellsOf(name);
   const magic = Boolean(worn || def || checks || spells.length || row.kind === "magic_item");
   const out: Record<string, unknown> = {};
-  // The mundane block a magic weapon or suit is built on, or the item itself.
-  // A name that ends in a weapon or a suit swings or is worn as that one
-  // ("Anointing Mace", "Animated Chain Mail"), as the engine reads it.
-  const weapon = def?.base?.kind === "weapon" ? (named ?? exactWeapon(gearBaseName(def, "weapon") ?? "")) : def?.base ? null : named;
-  const inside = matchArmor(name) ?? armorInside(name);
-  const armor =
-    def?.base?.kind === "armor"
-      ? (inside ?? exactArmor(gearBaseName(def, "armor") ?? ""))
-      : def?.base || weapon
-        ? null
-        : magic && !def?.armor
-          ? matchArmor(name)
-          : inside;
+  // The mundane block a magic weapon or suit is built on (its entry's base,
+  // or the one its composite name names), or the item itself.
+  const weapon = def?.base?.kind === "weapon" ? weaponNamed(def.base.name) : def?.base ? null : named;
+  const armor = def?.base?.kind === "armor" ? armorNamed(def.base.name) : def?.base || weapon ? null : armorNamed(name);
   out.itemKind = magic ? "magic_item" : weapon ? "weapon" : armor ? "armor" : "gear";
   if (weapon) {
     out.weapon = weapon;
@@ -378,6 +366,12 @@ function withMechanicsOnly(kind: string, results: unknown[], params: { classSlug
   if (kind === "archetypes") {
     return results.map((row) => {
       const table = archetypeMechanicsOf(row as Row, String(params.classSlug ?? "").toLowerCase());
+      return table ? { ...(row as Row), table } : row;
+    });
+  }
+  if (kind === "classes") {
+    return results.map((row) => {
+      const table = classMechanicsOf(row as Row & { slug?: string });
       return table ? { ...(row as Row), table } : row;
     });
   }

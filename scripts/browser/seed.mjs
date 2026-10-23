@@ -170,6 +170,18 @@ const [goblin] = world.enemies();
 kit.place(tavi.id, 2, 2);
 kit.place(goblin.id, 3, 2);
 kit.giveTurn(tavi.id);
+// A handaxe knocked loose lies beside Tavi (issue #424): the board draws it
+// within reach, and the Hand offers to pick it up.
+const { insertDroppedItem } = await import("../../src/lib/db/dropped-items.ts");
+insertDroppedItem({
+  campaignId: world.campaignId,
+  mapId: kit.map().id,
+  x: 2,
+  y: 3,
+  place: "",
+  item: { name: "Handaxe", qty: 1 },
+  droppedBy: "Goblin 1",
+});
 
 // A campaign still in its lobby, for the lobby pages and the cover dialog.
 const lobby = campaigns.createCampaign(world.owner.id, {
@@ -245,6 +257,27 @@ messages.insertCampaignMessage({
   speech: [],
   content: "The ford is quiet. Across the water a lantern swings on the ferryman's hut, and the rope bridge creaks in the wind.",
 });
+
+// A table one person plays with an AI storyteller and a party companion who
+// takes their orders in fights (src/lib/dm/companion-command.ts): the "In
+// fights" picker on the companion's Party card.
+const COMMAND_TITLE = "Command Table";
+const commandTable = campaigns.createCampaign(world.owner.id, {
+  title: COMMAND_TITLE,
+  description: "A long road, one traveller and a friend who came along.",
+  theme: "high-fantasy",
+  maxPlayers: 6,
+  startingLevel: 3,
+  difficulty: "normal",
+  gameSettings: { ttsEnabled: false },
+});
+campaigns.setCampaignStatus(commandTable.id, "active");
+sheets.createSheet(commandTable.id, world.owner.id, 3, heroInput({ name: "Kell Brand", class: "fighter", level: 3 }));
+const { createCompanionUser } = await import("../../src/lib/db/users.ts");
+const pipBot = createCompanionUser("Pip Thistle");
+const pip = sheets.createSheet(commandTable.id, pipBot.id, 3, heroInput({ name: "Pip Thistle", class: "rogue", level: 3 }));
+sheets.markSheetAsCompanion(pip.id, "party", "Quick, cheerful, and never far from a joke.");
+sheets.setCompanionCommander(pip.id, world.owner.id);
 
 // The seeded turn below, so lore-trace can tell its trace from one a later
 // scenario's turn on the quiet table left.
@@ -458,6 +491,40 @@ for (const viewport of ["desktop", "phone"]) {
   wardrobe[viewport] = table.id;
 }
 
+// A table at a village whose smithy the DM just opened (shops in play):
+// the "is open" line that opening wrote, whose Browse wares opens the
+// Market on the shop. Its own table, so no other scenario's chat or atlas
+// gains a line or a place.
+const MARKET_TITLE = "Market Table";
+const MARKET_SHOP = "Brann's Forge";
+const marketTable = campaigns.createCampaign(world.owner.id, {
+  title: MARKET_TITLE,
+  description: "A village forge with its doors open.",
+  theme: "high-fantasy",
+  maxPlayers: 4,
+  startingLevel: 3,
+  difficulty: "normal",
+  gameSettings: { ttsEnabled: false },
+});
+campaigns.setCampaignStatus(marketTable.id, "active");
+sheets.createSheet(marketTable.id, world.owner.id, 3, heroInput({ name: "Wren Ashby", class: "fighter", level: 3 }));
+{
+  const { upsertCurrentLocation } = await import("../../src/lib/db/locations.ts");
+  const { handleOpenShop } = await import("../../src/lib/dm/shop-tools.ts");
+  upsertCurrentLocation({ campaignId: marketTable.id, name: "Oakhollow" });
+  messages.insertCampaignMessage({
+    campaignId: marketTable.id,
+    seq: campaigns.allocateSeq(marketTable.id),
+    authorType: "dm",
+    speech: [],
+    content: "Heat rolls out of the forge. Brann looks up from a half-finished axe head and nods at the racks along the wall.",
+  });
+  const opened = handleOpenShop(campaigns.getCampaignById(marketTable.id), JSON.stringify({ name: MARKET_SHOP, kind: "smith", size: "village" }));
+  if (!opened.ok) {
+    throw new Error(`could not open ${MARKET_SHOP}: ${JSON.stringify(opened)}`);
+  }
+}
+
 for (const user of [world.owner, player, ...tourAccounts]) {
   setUserPassword(user.id, await hashPassword(PASSWORD), false);
 }
@@ -504,8 +571,78 @@ const sable = createCharacter(world.owner.id, 4, {
   notes: "",
 });
 
+// A high fantasy table whose fighter has earned level 4 (issues 433, 434):
+// the level-up dialog's multiclass list leads with the setting's own
+// classes, folds the rest under Other settings, and can be searched.
+const levelTable = campaigns.createCampaign(world.owner.id, {
+  title: "Level Table",
+  description: "A quiet road after a hard fight.",
+  theme: "high-fantasy",
+  maxPlayers: 6,
+  startingLevel: 3,
+  difficulty: "normal",
+  gameSettings: { ttsEnabled: false, genre: "high_fantasy" },
+});
+campaigns.setCampaignStatus(levelTable.id, "active");
+const leveller = sheets.createSheet(
+  levelTable.id,
+  world.owner.id,
+  3,
+  heroInput({ name: "Rook Ashvale", class: "fighter", level: 3, abilities: { str: 15, dex: 13, con: 14, int: 13, wis: 13, cha: 13 } }),
+);
+getDatabase().prepare(`UPDATE character_sheets SET xp = ? WHERE id = ?`).run(2700, leveller.id);
+messages.insertCampaignMessage({
+  campaignId: levelTable.id,
+  seq: campaigns.allocateSeq(levelTable.id),
+  authorType: "dm",
+  speech: [],
+  content: "The road is quiet now. Rook wipes the blade clean and feels steadier for it.",
+});
+
 // The lead runs the server too, for the admin settings (issue 255).
 setUserAdmin(world.owner.id, true);
+
+// A table a person runs, with a goblin on its board, per viewport (issue
+// #471): the DM's token menu sets a condition, deals damage and teleports
+// through the one tool each of those intents has.
+const directed = {};
+{
+  const { invokeEngine } = await import("../../src/lib/dm/invoke.ts");
+  const maps = await import("../../src/lib/db/battle-maps.ts");
+  const encounterRows = await import("../../src/lib/db/encounters.ts");
+  for (const viewport of ["desktop", "phone"]) {
+    const table = campaigns.createCampaign(world.owner.id, {
+      title: `Directed Table (${viewport})`,
+      description: "A table whose storyteller is a person at the table.",
+      theme: "high-fantasy",
+      maxPlayers: 6,
+      startingLevel: 3,
+      difficulty: "normal",
+      gameSettings: { ttsEnabled: false, dmMode: "human" },
+    });
+    campaigns.setCampaignStatus(table.id, "active");
+    campaigns.joinByInviteCode(player.id, campaigns.getCampaignById(table.id).inviteCode);
+    sheets.createSheet(table.id, player.id, 3, heroInput({ name: "Ilse Marr", class: "fighter", level: 3 }));
+    const started = await invokeEngine(campaigns.getCampaignById(table.id), { kind: "human", userId: world.owner.id }, {
+      name: "start_encounter",
+      args: { enemies: [{ monster: "goblin", count: 1 }] },
+    });
+    if (!started.ok) {
+      throw new Error(`the directed table's fight did not start: ${started.error}`);
+    }
+    // An open field, the goblin and the hero apart from each other.
+    const encounter = encounterRows.getActiveEncounter(table.id);
+    const board = maps.getBattleMapForEncounter(encounter.id);
+    maps.setBattleMapTerrain(board.id, ".".repeat(board.width * board.height));
+    getDatabase().prepare("UPDATE battle_maps SET doors_json = '{}' WHERE id = ?").run(board.id);
+    const [goblin] = encounterRows.listEnemies(encounter.id);
+    // Clear of the initiative strip along the board's top edge.
+    for (const [token, x] of maps.listTokens(board.id).map((entry) => [entry, entry.refId === goblin.id ? 6 : 2])) {
+      maps.moveToken(token.id, x, 6, 0);
+    }
+    directed[viewport] = { id: table.id, goblin: goblin.id };
+  }
+}
 
 const ids = {
   lead: world.owner.username,
@@ -530,6 +667,8 @@ const ids = {
   offerId: offer.id,
   offerSummary: offer.summary,
   quietId: quiet.id,
+  marketTableId: marketTable.id,
+  marketShop: MARKET_SHOP,
   quietTitle: QUIET_TITLE,
   quietLoreTurnId,
   tourTableId: tourTable.id,
@@ -543,17 +682,25 @@ const ids = {
   closing,
   stopTables,
   wardrobe,
+  directed,
+  levelTableId: levelTable.id,
+  commandTableId: commandTable.id,
+  pip: pip.id,
   // Every campaign a scenario opens, by id, for the app's home tiles.
   titles: {
+    [levelTable.id]: "Level Table",
+    [commandTable.id]: COMMAND_TITLE,
     [world.campaignId]: TITLE,
     [lobby.id]: LOBBY_TITLE,
     [quiet.id]: QUIET_TITLE,
+    [marketTable.id]: MARKET_TITLE,
     [prepared.id]: PREP_TITLE,
     [tourTable.id]: TOUR_TITLE,
     [prepSource.id]: PREP_SOURCE_TITLE,
     ...Object.fromEntries(Object.entries(closing).map(([viewport, id]) => [id, `Closing Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(stopTables).map(([viewport, id]) => [id, `Stop Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(wardrobe).map(([viewport, id]) => [id, `Wardrobe (${viewport})`])),
+    ...Object.fromEntries(Object.entries(directed).map(([viewport, table]) => [table.id, `Directed Table (${viewport})`])),
   },
   systemLine,
   oocQuestion,

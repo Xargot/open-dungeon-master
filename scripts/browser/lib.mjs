@@ -177,6 +177,21 @@ export async function signIn(context, base, username, password) {
   }
 }
 
+// Records every tour as finished on the signed-in account, at the version
+// the registry holds now (src/lib/tours/registry.ts). The browser's old
+// per-tour flags (newContext) only ever carry version 1, so a tour revised
+// to a higher version opened again over every scenario's first click. A
+// scenario that marks a tour finished at version 1 changes nothing: the
+// account keeps the higher version (mergeLedgers).
+export async function seeAllTours(request, base) {
+  const { TOUR_IDS, tourVersion } = await import("../../src/lib/tours/registry.ts");
+  const finished = TOUR_IDS.map((id) => ({ id, version: tourVersion(id), how: "ended" }));
+  const response = await request.post(`${base}/api/profile/tours`, { data: { finished } });
+  if (!response.ok()) {
+    throw new Error(`marking the tours seen answered ${response.status()}`);
+  }
+}
+
 // Closes whatever greets a page: the welcome tour, a "got it", a dialog.
 export async function settle(page) {
   for (let index = 0; index < 3; index += 1) {
@@ -217,6 +232,8 @@ export function pageHarness({ page, base, ids, app, viewport, outDir, tag, api }
     api,
     tap: (locator) => (touch && app ? locator.tap() : locator.click()),
     shot: (name) => page.screenshot({ path: path.join(outDir, `${tag}-${name}.png`), fullPage: false }).catch(() => {}),
+    // Where a shot of that name goes, for a clipped screenshot of one part.
+    shotPath: (name) => path.join(outDir, `${tag}-${name}.png`),
     // Where the page is: the address bar on the server; in the app, whose
     // window stays on index.html, the shell's own navigation.
     url: async () => {
@@ -315,6 +332,14 @@ async function appNavigate(page, route, ids, touch) {
     }
     await tile.waitFor({ state: "visible", timeout: 30_000 });
     await tap(tile);
+    // A page under the campaign (its character chooser, its table): once the
+    // campaign is open, push the full route on the shell's router, the way
+    // the lobby's own links do.
+    const rest = route.slice(`/campaigns/${campaign}`.length);
+    if (rest && !rest.startsWith("?")) {
+      await sleep(2_000);
+      await push(route);
+    }
   } else {
     await push(route);
   }
@@ -402,7 +427,30 @@ export async function axeViolations(page, selector) {
     if (!result.passes.length) {
       return [{ id: "nothing-checked", impact: "critical", help: "axe checked no rule here", nodes: [scope] }];
     }
+    // Under forced colors Chromium draws text in the forced colour but reports
+    // its -webkit-text-fill-color as the author's, which axe reads: a gold
+    // button's dark text, measured against the black behind it, though the
+    // page shows the forced white. A contrast failure stands only if the
+    // colour actually drawn fails as well.
+    const forced = window.matchMedia("(forced-colors: active)").matches;
+    const channels = (value) => (String(value).match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+    const hexChannels = (hex) => [1, 3, 5].map((at) => parseInt(String(hex).slice(at, at + 2), 16));
+    const luminance = ([r, g, b]) =>
+      [r, g, b].map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((sum, v, at) => sum + v * [0.2126, 0.7152, 0.0722][at], 0);
+    const drawnPasses = (node) => {
+      const data = node.any?.[0]?.data;
+      const el = document.querySelector(node.target.join(" "));
+      if (!forced || !el || !data?.bgColor) return false;
+      const fg = luminance(channels(getComputedStyle(el).color));
+      const bg = luminance(hexChannels(data.bgColor));
+      const ratio = (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+      return ratio >= Number.parseFloat(data.expectedContrastRatio ?? "4.5");
+    };
+    for (const violation of result.violations.filter((entry) => entry.id === "color-contrast")) {
+      violation.nodes = violation.nodes.filter((node) => !drawnPasses(node));
+    }
     return result.violations
+      .filter((violation) => violation.nodes.length)
       .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
       .map((violation) => ({
         id: violation.id,

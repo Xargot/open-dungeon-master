@@ -7,15 +7,19 @@
 // refused while it is that character's own turn and their player has not
 // spoken in the input this DM turn answers. An absent player's turn is the lead's to
 // skip (skipCurrentTurn), not the AI's to play. Companions are the AI's to
-// play; reactions and anything off the character's turn never come here.
+// play, unless a player commands one (src/lib/dm/companion-command.ts): then
+// it waits for them the same way. Reactions and anything off the character's
+// turn never come here.
 // A person at the console keeps a free hand, as with every correction
 // (src/lib/dm/enemy-turn-order.ts is the same rule for enemies).
 
 import type { DmTurn } from "@/lib/db/dm-turns";
+import { getCampaignById } from "@/lib/db/campaigns";
 import { getActiveEncounter } from "@/lib/db/encounters";
 import { listRecentMessages } from "@/lib/db/messages";
 import { getSheetById } from "@/lib/db/sheets";
 import { canAct } from "@/lib/dm/can-act";
+import { aiPlaysSheet } from "@/lib/dm/companion-command";
 import { isNarration } from "@/lib/dm/ooc-question";
 import { resolveSheetRef } from "@/lib/dm/rolls";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
@@ -34,6 +38,18 @@ export function declaredThisTurn(campaignId: string, characterId: string): boole
   );
 }
 
+// What the character's player wrote since the DM last spoke, table talk
+// aside: the words a turn's end may be read from (src/lib/dm/claims.ts
+// readTurnEndInWords).
+export function wordsThisTurn(campaignId: string, characterId: string): string {
+  const messages = listRecentMessages(campaignId, 50);
+  const since = messages.slice(messages.findLastIndex(isNarration) + 1);
+  return since
+    .filter((message) => message.authorType === "player" && message.characterId === characterId && !message.content.startsWith("(ooc)"))
+    .map((message) => message.content)
+    .join("\n\n");
+}
+
 // The character whose own turn waits on their player: a player's character
 // (not a companion) who could act, and whose player has not spoken since the
 // DM last did. GAME STATE says so (src/lib/dm/turn.ts buildEncounterState),
@@ -47,7 +63,7 @@ export function characterAwaitingPlayer(campaignId: string): CharacterSheet | nu
   }
   const current = encounter.order[encounter.turnIndex];
   const sheet = current.kind === "pc" ? getSheetById(current.characterId) : null;
-  if (!sheet || sheet.isCompanion || !canAct({ sheet, encounter, kind: "free" }).ok || declaredThisTurn(campaignId, sheet.id)) {
+  if (!sheet || aiPlaysSheet(getCampaignById(campaignId), sheet) || !canAct({ sheet, encounter, kind: "free" }).ok || declaredThisTurn(campaignId, sheet.id)) {
     return null;
   }
   return sheet;

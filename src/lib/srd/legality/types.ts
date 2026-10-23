@@ -81,8 +81,16 @@ export type Legalized = {
   sheet: CreateSheetInput;
   // What the server rolled while deriving, for the response to show.
   rolled?: { hp?: number[] };
+  // Picks a file left open that it could not have made: a feat's or a
+  // subclass's from before they asked for them (issue #430). The character
+  // comes in without them and the builder asks for them when it is next
+  // opened; the response tells the importer.
+  owed?: string[];
 };
 
+// Skills, tools and expertise as a sheet stores them: lower case, otherwise
+// as written. Compared only in that stored form, as ODM's own skill keys
+// (ALL_SKILLS); a name a table writes compares by textKey.
 export const lower = (value: string) => value.trim().toLowerCase();
 
 export function uniqueBy<T>(list: T[], keyOf: (entry: T) => string): T[] {

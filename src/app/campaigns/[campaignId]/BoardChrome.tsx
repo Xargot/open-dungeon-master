@@ -76,14 +76,32 @@ export function InitiativeRail({
   round,
   faceOf,
   onOpen,
+  namesOnly = false,
 }: {
   encounter: PublicEncounter;
   round: number;
   faceOf: FaceLookup;
   onOpen?: () => void;
+  namesOnly?: boolean;
 }) {
   if (!encounter.orderReady || !encounter.order.length) {
     return null;
+  }
+  if (namesOnly) {
+    return (
+      <div className="board-initiative-names" data-tour="battle-initiative">
+        <button type="button" onClick={onOpen} disabled={!onOpen} aria-label={`Round ${round}, open initiative order`}>
+          Round {round} · initiative
+        </button>
+        <ol tabIndex={0} aria-label="Initiative order">
+          {encounter.order.map((entry, at) => (
+            <li key={`${entry.id}-${at}`} aria-current={at === encounter.turnIndex ? "step" : undefined} title={entry.name}>
+              {entry.name}
+            </li>
+          ))}
+        </ol>
+      </div>
+    );
   }
   // A short order is shown as it stands. A longer one is a window on the
   // cycle, starting one before the current turn, so whoever is up and whoever
@@ -177,6 +195,7 @@ const PIPS: Array<{ key: keyof TurnHudBudget; label: string }> = [
 export function TurnHud({
   actorName,
   mine,
+  commanded = false,
   budget,
   speedLeftFeet,
   ac,
@@ -184,6 +203,8 @@ export function TurnHud({
 }: {
   actorName: string;
   mine: boolean;
+  // The turn is a companion's this player commands.
+  commanded?: boolean;
   budget?: TurnHudBudget | null;
   speedLeftFeet?: number | null;
   ac?: number | null;
@@ -199,7 +220,7 @@ export function TurnHud({
   ].filter(Boolean);
   return (
     <div className="pointer-events-none absolute right-2 top-2 z-10 flex max-w-[58%] flex-col items-end gap-1 @md:right-3.5 @md:top-3.5 @md:gap-[7px]">
-      <span className="board-eyebrow block max-w-full truncate text-right">{mine ? `${actorName} · your turn` : `${actorName}'s turn`}</span>
+      <span className="board-eyebrow block max-w-full truncate text-right">{mine ? `${actorName} · ${commanded ? "your orders" : "your turn"}` : `${actorName}'s turn`}</span>
       {mine && budget ? (
         // On a narrow board the pips and the stats sit under the rail's
         // plates instead of beside them, where there is no room.

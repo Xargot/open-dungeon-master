@@ -8,12 +8,14 @@ import { populateFeatures, populateFeaturesForClasses } from "@/lib/srd/features
 import { packSubclassExtras } from "@/lib/content/archetype-tables";
 import { extraSubclassOf, mergeExtras, type SubclassExtras } from "@/lib/srd/subclass-tables";
 import { repairedTraining } from "@/lib/srd/subclass-training";
+import { keyedFeatChoices } from "@/lib/schemas/sheet";
 import { populateResources } from "@/lib/srd/class-resources";
 import { featsAsRun, registerTableFeatReader } from "@/lib/srd/feat-effects";
 import { tableFeatsFrom } from "@/lib/db/table-feats";
 import { registerTableHazardReader } from "@/lib/srd/table-hazards";
 import { tableHazardsFrom } from "@/lib/db/table-hazards";
 import { ROW_TEXT, settleLoreTexts } from "@/lib/worldforge/account";
+import { backfillLegacyItemRows } from "@/lib/db/item-row-backfill";
 
 const dbPath =
   process.env.SQLITE_DB_PATH || path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "local-roleplay.sqlite");
@@ -222,7 +224,7 @@ function ensureSchema(db: SqliteDatabase) {
     CREATE TABLE IF NOT EXISTS homebrew_entries (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL CHECK (kind IN ('spell','feat','item','race','background','archetype','monster','hazard')),
+      kind TEXT NOT NULL CHECK (kind IN ('spell','feat','item','race','background','archetype','monster','hazard','class')),
       slug TEXT NOT NULL,
       name TEXT NOT NULL,
       data_json TEXT NOT NULL,
@@ -706,6 +708,29 @@ function ensureSchema(db: SqliteDatabase) {
       updated_at TEXT NOT NULL
     );
 
+    -- WorldForge's Paint (src/lib/db/world-paint-jobs.ts, audit WF-16): one
+    -- row per picture asked for an entry, from queued to accepted, rejected,
+    -- cancelled or failed with its reason. A finished picture waits here
+    -- until the DM keeps it; previous_path is the picture the entry had when
+    -- it was asked, which a late result must not replace unnoticed. boot is
+    -- the process that queued it, so a restart's lost jobs read as failed.
+    CREATE TABLE IF NOT EXISTS world_paint_jobs (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      ref TEXT NOT NULL,
+      user_id TEXT,
+      state TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      result_path TEXT NOT NULL DEFAULT '',
+      previous_path TEXT NOT NULL DEFAULT '',
+      boot TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      decided_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_world_paint_jobs_entry ON world_paint_jobs (campaign_id, ref, created_at);
+
     CREATE TABLE IF NOT EXISTS battle_tokens (
       id TEXT PRIMARY KEY,
       map_id TEXT NOT NULL REFERENCES battle_maps(id) ON DELETE CASCADE,
@@ -738,6 +763,26 @@ function ensureSchema(db: SqliteDatabase) {
       updated_at TEXT NOT NULL,
       PRIMARY KEY (map_id, character_id)
     );
+
+    -- Things put down rather than lost (issue #424): a sword let fall to
+    -- draw a bow, a shield, a key set down. On the board where it fell while
+    -- that board is up (map_id, x, y), and at the place it fell (the
+    -- location's name then) after; anyone within reach picks it up. An enemy
+    -- that takes one holds it (held_by_enemy) until it falls or the fight ends.
+    CREATE TABLE IF NOT EXISTS dropped_items (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      map_id TEXT,
+      x INTEGER,
+      y INTEGER,
+      place TEXT NOT NULL DEFAULT '',
+      item_json TEXT NOT NULL,
+      dropped_by TEXT NOT NULL DEFAULT '',
+      held_by_enemy TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dropped_items_campaign ON dropped_items(campaign_id);
 
     -- Persistent NPCs and their disposition toward the party. Attitude is the
     -- 5e social-interaction scale (hostile/indifferent/friendly); it persists
@@ -1509,6 +1554,10 @@ function ensureSchema(db: SqliteDatabase) {
   // ac_override lands keeps its hand-typed armor class, so nobody logs in to
   // find their character suddenly wearing different numbers.
   const sheetsNeedAcOverride = !sheetColumns.some((column) => column.name === "ac_override");
+  // And for companion command: the party companions already at a one-player
+  // table the AI runs start under that player's orders in fights, as new ones
+  // do (src/lib/dm/companion-command.ts defaultCommander).
+  const sheetsNeedCommanders = !sheetColumns.some((column) => column.name === "commanded_by");
 
   addColumns("homebrew_entries", [
     // Set when the author forgets an entry (src/lib/db/homebrew.ts
@@ -1535,6 +1584,12 @@ function ensureSchema(db: SqliteDatabase) {
     ["gender", `TEXT NOT NULL DEFAULT ''`],
     // Player-authored backstory, visible to the whole party and the DM.
     ["backstory", `TEXT NOT NULL DEFAULT ''`],
+    // The picks a feat or a subclass grant left to the player (Linguist's
+    // languages, a Lore bard's skills), keyed by its name, as the library
+    // copy keeps them. A level-up records the ones it applies, so the
+    // character goes home, to a file and to the builder with them (issue
+    // #430). NULL on sheets stored before the column: nothing recorded.
+    ["feat_choices_json", `TEXT`],
     // Class features, racial traits, and story-granted abilities; the DM
     // prompt treats this as the complete list of what a character can do.
     ["features_json", `TEXT`],
@@ -1585,6 +1640,10 @@ function ensureSchema(db: SqliteDatabase) {
     // exactly right for every existing character: they had no small change
     // because there was nowhere to put it.
     ["copper", `INTEGER NOT NULL DEFAULT 0`],
+    // The player who takes this AI companion's turns in a fight; NULL = the
+    // DM plays them. Out of fights the DM always does
+    // (src/lib/dm/companion-command.ts).
+    ["commanded_by", `TEXT`],
   ]);
 
   if (sheetsNeedAcOverride) {
@@ -1596,6 +1655,10 @@ function ensureSchema(db: SqliteDatabase) {
 
   if (sheetsNeedFeatureBackfill) {
     backfillSheetFeatures(db);
+  }
+
+  if (sheetsNeedCommanders) {
+    backfillCompanionCommanders(db);
   }
 
   addColumns("campaign_messages", [
@@ -1632,6 +1695,10 @@ function ensureSchema(db: SqliteDatabase) {
     // src/lib/dm/speech.ts SpokenLine), decided when the message is written.
     // Null on messages written before it, whose lines stay the narrator's.
     ["speech_json", `TEXT`],
+    // The shop a "<shop> is open" line announces (src/lib/dm/shop-tools.ts
+    // announceShop), so the chat's Browse wares opens the Market on it.
+    // Null on every other message.
+    ["shop_id", `TEXT`],
   ]);
 
   addColumns("dm_turns", [
@@ -2235,6 +2302,17 @@ function ensureSchema(db: SqliteDatabase) {
     })();
   }
 
+  // Items saved before names were read whole keep the weapon or armor the
+  // words of their English name gave them (src/lib/db/item-row-backfill.ts).
+  // One pass, guarded by an app_settings marker.
+  const itemRowMarker = db.prepare(`SELECT key FROM app_settings WHERE key = 'item_row_backfill_done'`).get();
+  if (!itemRowMarker) {
+    db.transaction(() => {
+      backfillLegacyItemRows(db);
+      db.prepare(`INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)`).run("item_row_backfill_done", "true", new Date().toISOString());
+    })();
+  }
+
   // Connected agents (docs/archive/harness-mcp-plan.md 7): a player's own agent
   // session (Claude Code, Codex, any MCP client) acting as that player over
   // /api/mcp. Only the token's hash is kept, the same rule as sessions.
@@ -2454,21 +2532,22 @@ function ensureSchema(db: SqliteDatabase) {
 // battle_tokens, so no cascade is being suppressed here. The pragma is a
 // no-op inside a transaction, which is why the copy is not wrapped in one;
 // the guard above makes a half-finished run safe to repeat instead.
-// Widens homebrew_entries.kind to take 'hazard'. The new table is the
-// stored DDL with the kind list widened, so every column the table has gained
-// arrives as it is; detected from that DDL, so it runs once and is
-// idempotent if interrupted.
+// Widens homebrew_entries.kind to take 'hazard' and then 'class' (a class
+// made in the workshop). The new table is the stored DDL with the kind list
+// widened, so every column the table has gained arrives as it is; detected
+// from that DDL, so it runs once and is idempotent if interrupted.
 function rebuildHomebrewKinds(db: SqliteDatabase) {
   const ddl = db
     .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'homebrew_entries'`)
     .get() as { sql: string } | undefined;
-  if (!ddl || ddl.sql.includes("'hazard'")) {
+  if (!ddl || ddl.sql.includes("'class'")) {
     return;
   }
   const widened = ddl.sql
     .replace(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"?homebrew_entries"?/i, "CREATE TABLE homebrew_entries_rebuilt")
-    .replace("'archetype','monster')", "'archetype','monster','hazard')");
-  if (!widened.includes("'hazard'")) {
+    .replace("'archetype','monster')", "'archetype','monster','hazard')")
+    .replace("'monster','hazard')", "'monster','hazard','class')");
+  if (!widened.includes("'class'")) {
     return;
   }
   db.pragma("foreign_keys = OFF");
@@ -2626,6 +2705,48 @@ export function repairWorkshopDmSeats(db: SqliteDatabase): number {
     repaired += 1;
   }
   return repaired;
+}
+
+// The rule of src/lib/dm/companion-command.ts defaultCommander, read from the
+// rows: a party companion (not a summon) at a table where the AI tells the
+// story and exactly one player holds a party slot follows that player.
+function backfillCompanionCommanders(db: SqliteDatabase) {
+  const companions = db
+    .prepare(
+      `SELECT id, campaign_id FROM character_sheets
+       WHERE is_companion = 1 AND companion_kind = 'party' AND summon_json IS NULL`,
+    )
+    .all() as Array<{ id: string; campaign_id: string }>;
+  const campaignRow = db.prepare(
+    `SELECT human_dm_user_id, assistant_dm_user_id, game_settings_json FROM campaigns WHERE id = ?`,
+  );
+  const members = db.prepare(`SELECT user_id FROM campaign_members WHERE campaign_id = ?`);
+  const update = db.prepare(`UPDATE character_sheets SET commanded_by = ? WHERE id = ?`);
+  for (const companion of companions) {
+    const campaign = campaignRow.get(companion.campaign_id) as
+      | { human_dm_user_id: string | null; assistant_dm_user_id: string | null; game_settings_json: string }
+      | undefined;
+    if (!campaign) {
+      continue;
+    }
+    let dmMode = "ai";
+    try {
+      dmMode = (JSON.parse(campaign.game_settings_json) as { dmMode?: string }).dmMode ?? "ai";
+    } catch {
+      // An unreadable settings blob reads as the default storyteller.
+    }
+    // src/lib/dm/viewer.ts hasHumanDm: a person narrates, so they play the companions.
+    if ((dmMode === "human" || dmMode === "assisted") && campaign.human_dm_user_id) {
+      continue;
+    }
+    const dmSeats = dmMode === "ai" ? [] : [campaign.human_dm_user_id, campaign.assistant_dm_user_id];
+    const players = (members.all(companion.campaign_id) as Array<{ user_id: string }>)
+      .map((row) => row.user_id)
+      .filter((id) => !dmSeats.includes(id));
+    if (players.length === 1) {
+      update.run(players[0], companion.id);
+    }
+  }
 }
 
 function backfillSheetPortraits(db: SqliteDatabase) {
@@ -3087,7 +3208,7 @@ export function resyncLibraryTraining(db: SqliteDatabase): number {
           ? sheet.classes
           : [{ id: row.class, level: row.level, subclass: row.subclass }];
       const training = repairedTraining(
-        { proficiencies: sheet.proficiencies, abilities: sheet.abilities, featChoices: sheet.featChoices },
+        { proficiencies: sheet.proficiencies, abilities: sheet.abilities, featChoices: keyedFeatChoices(sheet.featChoices) },
         classes,
         extras,
       );

@@ -51,7 +51,7 @@ const { createSheet } = await import("../src/lib/db/sheets.ts");
 const { createSheetSchema } = await import("../src/lib/schemas/sheet.ts");
 const { MINUTES_PER_DAY } = await import("../src/lib/dm/calendar.ts");
 const { askingPriceCp } = await import("../src/lib/dm/shop-logic.ts");
-const { formatCopper } = await import("../src/lib/srd/currency.ts");
+const { formatPrice } = await import("../src/lib/srd/currency.ts");
 
 const route = (name) => import(new URL(`../src/app/api/${name}/route.ts`, import.meta.url).href);
 const campaignsRoute = await route("campaigns");
@@ -288,7 +288,7 @@ upsertCurrentLocation({ campaignId, name: "The Harbour" });
 await test("the storyteller sees the prepared shelf at the place, keeper named, prices as authored", async () => {
   const block = shopsBlock(getCampaignById(campaignId));
   assert.match(block, /Venn's Lanterns \(kept by Marla Venn\)/);
-  assert.ok(block.includes(`Example Lantern x1 at ${formatCopper(askingPriceCp(123, 1.25))}`), block);
+  assert.ok(block.includes(`Example Lantern x1 at ${formatPrice(askingPriceCp(123, 1.25))}`), block);
   assert.deepEqual(getShop(tableShop.id).stock, [LANTERN, ROPE], "building the prompt rerolled the prepared shelf");
 });
 
@@ -325,10 +325,13 @@ await test("asking for second copies brings a numbered shop with the authored sh
   assert.deepEqual(getShop(tableShop.id).stock, [ROPE], "the copy touched the played shop");
 });
 
-await test("a due restock refills the authored shelf; a pack restock with no pack keeps what is there", async () => {
+await test("a due restock refills the authored shelf; a restock with nothing to draw on keeps what is there", async () => {
   updateShop(tableShop.id, { restockDays: 3 });
+  // Curiosities: magic items only, which the bundled SRD tables never stock,
+  // so with no pack there is nothing to draw on.
   const pool = insertShop(campaignId, {
     name: "Harbour Sundries",
+    kind: "curiosities",
     locationId: tableShop.locationId,
     locationName: "The Harbour",
     stock: [{ itemName: "Torch", qty: 4, priceCp: 1, note: "" }],

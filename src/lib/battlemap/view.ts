@@ -8,13 +8,15 @@ import { effectiveAmbient } from "@/lib/battlemap/daylight";
 import { weatherObscurementTiles } from "@/lib/srd/weather";
 import { listEffects } from "@/lib/db/active-effects";
 import { applyField, resolveField } from "@/lib/dm/effects-logic";
-import { getActiveBoard, getActiveEncounter, listEnemies, type Encounter } from "@/lib/db/encounters";
+import { getActiveBoard, getActiveEncounter, getEnemy, listEnemies, type Encounter } from "@/lib/db/encounters";
+import { listDroppedItems } from "@/lib/db/dropped-items";
+import { tokenFootprint } from "@/lib/dm/board-reach";
 import { speedFor } from "@/lib/srd";
 import { getMounts } from "@/lib/db/mounts";
 import { effectiveMaxHp, effectiveSpeed, exhaustionSpeed } from "@/lib/dm/condition-logic";
 import { budgetApplies } from "@/lib/dm/action-budget";
 import { listSheets } from "@/lib/db/sheets";
-import { footprintForSize, footprintIndexes, type Footprint } from "@/lib/battlemap/footprint";
+import { footprintDistance, footprintForSize, footprintIndexes, type Footprint } from "@/lib/battlemap/footprint";
 import { healthWord } from "@/lib/battlemap/health-words";
 import { orderEntryId } from "@/lib/db/encounters";
 import {
@@ -46,7 +48,9 @@ import { lightsWithZones, sightTerrainFor, withZoneSteps } from "@/lib/dm/zone-r
 import { viewZones } from "@/lib/dm/zone-view";
 import { standUpTiles } from "@/lib/srd/authored-effects-more";
 import { addSilenceChips, viewerMoves } from "@/lib/battlemap/view-moves";
+import { undoableMove, undoOffer } from "@/lib/battlemap/move-undo";
 import type { AuraTone, PlayerMapView } from "@/lib/battlemap/view-types";
+import { holdsFeature } from "@/lib/srd/feature-names";
 
 export type { PlayerMapView } from "@/lib/battlemap/view-types";
 
@@ -59,7 +63,7 @@ export type { PlayerMapView } from "@/lib/battlemap/view-types";
 // Aura of Protection reaches 10 ft from paladin 6 and 30 ft from 18; the
 // save bonus itself is applied by src/lib/dm/aura.ts. This is only the ring.
 function paladinAura(sheet: CharacterSheet): { radiusFeet: number; tone: AuraTone } | null {
-  const hasAura = sheet.features.some((feature) => /aura of protection/i.test(feature.name));
+  const hasAura = holdsFeature(sheet, "Aura of Protection");
   if (!hasAura) {
     return null;
   }
@@ -153,6 +157,39 @@ export function getActiveBattleMap(campaignId: string): BattleMap | null {
     return null;
   }
   return getBattleMapForEncounter(board.id);
+}
+
+// What lies on this board and where (issue #424): dropped things on their
+// square, and what a fallen enemy held on its body. Only on squares the
+// viewer has explored; the DM's explored set is the whole board.
+function dropsOn(
+  campaignId: string,
+  mapId: string,
+  width: number,
+  explored: Set<number>,
+  mine: BattleToken | null,
+): NonNullable<PlayerMapView["drops"]> {
+  const out: NonNullable<PlayerMapView["drops"]> = [];
+  for (const entry of listDroppedItems(campaignId)) {
+    let at: { x: number; y: number } | null = entry.mapId === mapId && entry.x !== null && entry.y !== null ? { x: entry.x, y: entry.y } : null;
+    if (entry.heldByEnemy) {
+      const enemy = getEnemy(entry.heldByEnemy);
+      const body = enemy?.status === "dead" ? getTokenByRef(mapId, enemy.id) : null;
+      at = body ? { x: body.x, y: body.y } : null;
+    }
+    if (!at || !explored.has(tileIndex(width, at.x, at.y))) {
+      continue;
+    }
+    out.push({
+      id: entry.id,
+      name: `${entry.item.qty > 1 ? `${entry.item.qty} ` : ""}${entry.item.name}`,
+      x: at.x,
+      y: at.y,
+      by: entry.droppedBy,
+      reach: Boolean(mine && footprintDistance(mine, tokenFootprint(mine), at, 1) <= 1),
+    });
+  }
+  return out;
 }
 
 export function buildPlayerMapView(
@@ -448,6 +485,8 @@ export function buildPlayerMapView(
         enemyNumbers: fullVision || options.enemyNumbers === true,
       })
     : [];
+  // The viewer's last walk, while it can still be taken back.
+  const undoMove = !fullVision && sheet && myToken && encounter.kind !== "scene" ? undoOffer(undoableMove(encounter, map.id, sheet.id)) : undefined;
 
   return {
     mapId: map.id,
@@ -472,12 +511,15 @@ export function buildPlayerMapView(
     reachableCost,
     ...(moves ? { moves } : {}),
     budgetLeft,
+    ...(undoMove ? { undoMove } : {}),
     myTokenId: myToken?.id ?? null,
     round: encounter.round,
     currentTurnName: currentEntry?.name ?? "",
     board: encounter.kind,
     fullVision,
     labels: labelsFor(map.labels, map.width, { dm: fullVision, explored }),
+    drops: dropsOn(campaignId, map.id, map.width, explored, myToken),
+    mounts: Object.fromEntries(Object.entries(getMounts(campaignId)).map(([characterId, mount]) => [characterId, mount.name])),
     spellZones,
     drawings: drawingsFor(map.drawings, { dm: fullVision, round: encounter.round }),
     tokenConditions,

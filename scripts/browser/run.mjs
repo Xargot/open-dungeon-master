@@ -25,7 +25,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { removeTempDir } from "../lib/remove-temp-dir.mjs";
-import { enterApp, freePort, launchBrowser, newContext, pageHarness, serveFolder, signIn, startServer } from "./lib.mjs";
+import { enterApp, freePort, launchBrowser, newContext, pageHarness, seeAllTours, serveFolder, signIn, startServer } from "./lib.mjs";
 
 const { values: args } = parseArgs({
   options: {
@@ -96,6 +96,9 @@ for (const file of fs.readdirSync(scenarioDir).filter((name) => name.endsWith(".
     throw new Error(`${file} does not export a scenario ({ name, run })`);
   }
   if (wanted && !wanted.some((name) => scenario.name.includes(name))) continue;
+  // A measurement, not a check (54-large-world-measure.mjs): it runs only
+  // when --only names it in full.
+  if (scenario.onlyWhenNamed && !wanted?.includes(scenario.name)) continue;
   if (app && scenario.app === false) continue;
   scenarios.push(scenario);
 }
@@ -116,6 +119,9 @@ try {
       const t0 = Date.now();
       try {
         await signIn(apiContext, base, ids.lead, ids.password);
+        // The lead has seen every tour at its current version; tours-account
+        // walks its own accounts, and a scenario about a tour replays it.
+        await seeAllTours(apiContext.request, base);
         if (app) {
           await enterApp(page, shell.base, base, ids, harness.touch);
         } else {

@@ -70,6 +70,7 @@ import { antimagicProblem, silenceProblem } from "@/lib/dm/zone-rules";
 import { placeSpellZone } from "@/lib/dm/zone-cast";
 import { spellSaveDcFor } from "@/lib/srd";
 import { castTempHp } from "@/lib/dm/authored-spells";
+import { authoredSlotRefund } from "@/lib/srd/authored-effects-more";
 import { takeItemCast } from "@/lib/srd/item-cast-credit";
 import { castFromItem } from "@/lib/dm/item-casts";
 import { summonSlotProblem } from "@/lib/srd/summon-spells";
@@ -78,6 +79,7 @@ import { wardOnCast } from "@/lib/dm/arcane-ward";
 import { casterCost } from "@/lib/dm/spell-self";
 import { toolError, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
 import { textKey } from "@/lib/language/text-logic";
+import { isConditionNamed } from "@/lib/srd/feature-names";
 
 // Which tool the cast came through. It decides two things only: whether a
 // casting whose shares are resolved one call at a time (Eldritch Blast's
@@ -409,7 +411,7 @@ export function castSpell(
   // Mantle of Majesty's Command costs no slot while the mantle holds.
   const mantled =
     !input.ritual && !signature && !freeCast && /^command$/i.test(engine.trim()) &&
-    sheet.conditions.some((entry) => entry.trim().toLowerCase().startsWith(MANTLE_OF_MAJESTY));
+    sheet.conditions.some((entry) => isConditionNamed(entry, MANTLE_OF_MAJESTY));
   const slot: SlotPlan | ToolError = input.ritual
     ? { kind: "none", note: `${name} cast as a ritual: no slot spent.` }
     : slowHeld
@@ -454,6 +456,17 @@ export function castSpell(
   }
   if (freeCast) {
     patch.resources = spendSignature(sheet.resources, freeCast);
+  }
+  // Expert Divination (School of Divination 6): a divination spell of 2nd
+  // level or higher cast with a slot gives back one spent slot of a lower
+  // level, 5th at most.
+  const refund =
+    slot.kind !== "none" && patch.spellcasting ? authoredSlotRefund(sheet, { school: spellSchoolFor(spell, authors), slotLevel }, patch.spellcasting.slots) : null;
+  if (refund && patch.spellcasting) {
+    const slots = patch.spellcasting.slots;
+    const row = slots[String(refund.level)];
+    patch.spellcasting = { ...patch.spellcasting, slots: { ...slots, [String(refund.level)]: { ...row, used: row.used - 1 } } };
+    result.slotRefund = `${refund.feature}: a spent level ${refund.level} slot comes back.`;
   }
   if (Object.keys(patch).length) {
     patchSheet(sheet.id, patch);

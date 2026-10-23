@@ -27,6 +27,8 @@ import type { AbilityMethod, AbilityState } from "./AbilityEditor";
 import type { PoolEntry, PoolSlots } from "./abilityDice";
 import { reconcilePicks, type BuilderPicks, type DroppedPick } from "./reconcile";
 import type { BackgroundOption, ClassOption, RaceOption } from "./useBuilderOptions";
+import { keyedFeatChoices, withFeatChoice } from "@/lib/schemas/sheet";
+import { textKey } from "@/lib/language/text-logic";
 
 // `priceCp` is the listed price of one, in copper, as the catalog row it was
 // picked from gave it; it is what the purse is charged, and the server
@@ -200,17 +202,13 @@ export function useBuilderState({
     return (initial.feats ?? []).filter((feat) => !asiFeats.has(feat));
   });
   // The picks a feat leaves open (Linguist's three languages, Skill Expert's
-  // skill and expertise), keyed by the feat's name in lower case
-  // (src/lib/srd/feat-grants.ts). Kept for every feat ever picked here, so
+  // skill and expertise), keyed by featChoice (src/lib/srd/feat-grants.ts),
+  // a stored draft's map re-keyed so. Kept for every feat ever picked here, so
   // a feat dropped and taken again finds its picks; the payload sends only
   // the feats on the sheet.
-  const [featChoices, setFeatChoices] = useState<FeatChoices>(() =>
-    Object.fromEntries(
-      Object.entries(initial?.featChoices ?? {}).map(([feat, picks]) => [feat.trim().toLowerCase(), picks]),
-    ),
-  );
+  const [featChoices, setFeatChoices] = useState<FeatChoices>(() => keyedFeatChoices(initial?.featChoices));
   function setFeatPicks(feat: string, picks: FeatPicks) {
-    setFeatChoices((current) => ({ ...current, [feat.trim().toLowerCase()]: picks }));
+    setFeatChoices((current) => withFeatChoice(current, feat, picks));
   }
   // One slot per ASI threshold the effective level has earned; kept full
   // length so lowering and re-raising the level restores earlier picks.
@@ -387,8 +385,8 @@ export function useBuilderState({
     ...(initial?.feats ?? []),
     ...(initial?.asiChoices ?? []).flatMap((choice) => (choice.mode === "feat" ? [choice.feat] : [])),
   ];
-  const storedFeatDescOf = (feat: string) => initialFeatDescs?.[feat.trim().toLowerCase()] ?? authoredFeatDesc(feat) ?? "";
-  const storedFeatsKnown = storedFeats.every((feat) => authoredFeatDesc(feat) || initialFeatDescs?.[feat.trim().toLowerCase()] !== undefined);
+  const storedFeatDescOf = (feat: string) => initialFeatDescs?.[textKey(feat)] ?? authoredFeatDesc(feat) ?? "";
+  const storedFeatsKnown = storedFeats.every((feat) => authoredFeatDesc(feat) || initialFeatDescs?.[textKey(feat)] !== undefined);
   useEffect(() => {
     if (!races.length || !classes.length || !backgrounds.length || !storedFeatsKnown) {
       return;
@@ -563,53 +561,83 @@ export function useBuilderState({
   const keepsStoredGear =
     Boolean(initial) && classId === initial?.class && backgroundId === initial?.background;
 
-  // Put back an unfinished character saved on this device. Every pick is
-  // set as it was, without the reconcile a change runs: they were
-  // checked against each other when they were made. The table's level
-  // wins over the draft's.
-  function restoreDraft(draft: BuilderDraftFields) {
-    setName(draft.name);
-    setAlignment(draft.alignment);
-    setLevel(fixedLevel ?? draft.level);
-    setRaceId(draft.raceId);
-    setClassId(draft.classId);
-    setSubclass(draft.subclass);
-    setBackgroundId(draft.backgroundId);
-    setMethod(draft.method);
-    setScores(draft.scores);
-    setRollPool(draft.rollPool);
-    setRollSlots(draft.rollSlots);
-    setChosenSkills(draft.chosenSkills);
-    setExpertisePicks(draft.expertisePicks);
-    setStylePicks(draft.stylePicks);
-    setSpells(draft.spells);
-    setBookPrepared(draft.bookPrepared);
-    setCantrips(draft.cantrips);
-    setEquipment(draft.equipment);
-    setRemovedAutoNames(draft.removedAutoNames);
-    setKitChoices(draft.kitChoices);
-    setFeats(draft.feats);
-    setFeatChoices(draft.featChoices);
-    setAsiChoices(draft.asiChoices);
-    setBonusLanguages(draft.bonusLanguages);
-    setRacialAsi(draft.racialAsi);
-    setRacialSkills(draft.racialSkills);
-    setRacialCantrip(draft.racialCantrip);
-    setRacialTool(draft.racialTool);
-    setRacialAncestry(draft.racialAncestry);
-    setRacialFeatAbility(draft.racialFeatAbility);
-    setToolPicks(draft.toolPicks);
-    setRepeatSkills(draft.repeatSkills);
-    setBackgroundSkills(draft.backgroundSkills);
-    setBackgroundGearPicks(draft.backgroundGearPicks);
-    setOptionPicks(draft.optionPicks);
-    setBackstory(draft.backstory);
-    setGender(draft.gender);
-    setAppearance(draft.appearance);
-    setPortrait(draft.portrait);
-    setGold(draft.gold);
-    setHpOverride(draft.hpOverride);
-    setAcOverride(draft.acOverride);
+  // Every draft field's setter, so a draft put back (restoreDraft) and a
+  // quick-build fill (applyFill) set the same fields the same way.
+  const setters: { [K in keyof BuilderDraftFields]: (value: BuilderDraftFields[K]) => void } = {
+    name: setName,
+    alignment: setAlignment,
+    level: (value) => setLevel(fixedLevel ?? value),
+    raceId: setRaceId,
+    classId: setClassId,
+    subclass: setSubclass,
+    backgroundId: setBackgroundId,
+    method: setMethod,
+    scores: setScores,
+    rollPool: setRollPool,
+    rollSlots: setRollSlots,
+    chosenSkills: setChosenSkills,
+    expertisePicks: setExpertisePicks,
+    stylePicks: setStylePicks,
+    spells: setSpells,
+    bookPrepared: setBookPrepared,
+    cantrips: setCantrips,
+    equipment: setEquipment,
+    removedAutoNames: setRemovedAutoNames,
+    kitChoices: setKitChoices,
+    feats: setFeats,
+    featChoices: (value) => setFeatChoices(keyedFeatChoices(value)),
+    asiChoices: setAsiChoices,
+    bonusLanguages: setBonusLanguages,
+    racialAsi: setRacialAsi,
+    racialSkills: setRacialSkills,
+    racialCantrip: setRacialCantrip,
+    racialTool: setRacialTool,
+    racialAncestry: setRacialAncestry,
+    racialFeatAbility: setRacialFeatAbility,
+    toolPicks: setToolPicks,
+    repeatSkills: setRepeatSkills,
+    backgroundSkills: setBackgroundSkills,
+    backgroundGearPicks: setBackgroundGearPicks,
+    optionPicks: setOptionPicks,
+    backstory: setBackstory,
+    gender: setGender,
+    appearance: setAppearance,
+    portrait: setPortrait,
+    gold: setGold,
+    hpOverride: setHpOverride,
+    acOverride: setAcOverride,
+  };
+  function setFields(fields: Partial<BuilderDraftFields>) {
+    for (const key of Object.keys(fields) as Array<keyof BuilderDraftFields>) {
+      (setters[key] as (value: unknown) => void)(fields[key]);
+    }
+  }
+
+  // Put back an unfinished character saved on this device, or the fields
+  // as they were before a quick-build fill (its Undo). Every pick is set as
+  // it was, without the reconcile a change runs: they were checked against
+  // each other when they were made. The table's level wins over the
+  // draft's.
+  function restoreDraft(draft: Partial<BuilderDraftFields>) {
+    setFields(draft);
+  }
+
+  // What one round of a quick-build fill wrote (quickBuild.ts). The fill
+  // writes only blank slots, so a race, class or background it picks has
+  // no picks of its own yet to clear; the rest of the picks are checked
+  // against the new ones, as a change by hand would be.
+  function applyFill(patch: Partial<BuilderDraftFields>) {
+    const ids: Partial<Selection> = {};
+    if (patch.raceId !== undefined) ids.raceId = patch.raceId;
+    if (patch.classId !== undefined) ids.classId = patch.classId;
+    if (patch.backgroundId !== undefined) ids.backgroundId = patch.backgroundId;
+    setFields(patch);
+    if (Object.keys(ids).length) {
+      const current = Object.fromEntries(
+        Object.entries(picks).map(([key, value]) => [key, key in patch ? patch[key as keyof BuilderDraftFields] : value]),
+      ) as BuilderPicks;
+      applyChange("quick build", ids, current);
+    }
   }
   const draftFields: BuilderDraftFields = {
     name,
@@ -659,6 +687,7 @@ export function useBuilderState({
   return {
     draftFields,
     restoreDraft,
+    applyFill,
     keepsStoredGear,
     levelFloor,
     levelLocked,

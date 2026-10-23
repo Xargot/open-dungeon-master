@@ -6,19 +6,9 @@ import { aoeSpendFor } from "@/lib/srd/aoe-spend";
 import { rollExpression } from "@/lib/dice";
 import { publishWithSeq } from "@/lib/events";
 import { computeSheetDerived } from "@/lib/srd";
-import {
-  findBeastForm,
-  formatCr,
-  formList,
-  hitPointCeilingForCr,
-  UNLISTED_FORM_MAX_AC,
-  wildShapeCapsFor,
-  wildShapeForms,
-  wildShapeHours,
-} from "@/lib/srd/beast-forms";
-import { isUnlimited, matchResource, RAGING, resourceLevel, type ResourceDef } from "@/lib/srd/class-resources";
+import { ELEMENTAL_WILD_SHAPE_COST, elementalWildShape, wildShapeUse, type WildShapeAsk } from "@/lib/dm/wild-shape-use";
+import { isUnlimited, matchResource, RAGING, recoveringPrefix, resourceLevel, type ResourceDef } from "@/lib/srd/class-resources";
 import { effectiveMaxHp, incapacitatedBy, wearsHeavyArmor } from "@/lib/dm/condition-logic";
-import { classLevelFor, classListFor } from "@/lib/srd/multiclass";
 import { conditionEffectsFor } from "@/lib/srd/condition-effects";
 import { consumableEffect, findCarriedItem, notCarried } from "@/lib/dm/item-logic";
 import { kiTechnique, spendKiTechnique, spendQuickenedSpell } from "@/lib/dm/bonus-actions";
@@ -27,7 +17,8 @@ import { textKey } from "@/lib/language/text-logic";
 import { optionsOfKind } from "@/lib/srd/options";
 import type { CharacterSheet, FullPatchSheetInput } from "@/lib/schemas/sheet";
 import { holdsMote } from "@/lib/srd/authored-effects-more";
-import type { ToolError, ToolResult } from "@/lib/dm/tool-errors";
+import { noneNamed, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { isConditionNamed, nameChoice } from "@/lib/srd/feature-names";
 import { isTableGearName } from "@/lib/db/homebrew";
 import { spentSlotRefusal } from "@/lib/dm/cast-rules";
 
@@ -255,20 +246,24 @@ export function payForUse(
   };
 }
 
+// The marker a spend leaves when its use returns only after a rolled number
+// of long rests: "<name> recovering (n)", counted down by each long rest.
+function recoveryMarker(campaign: Campaign, sheet: CharacterSheet, def: ResourceDef): { conditions: string[]; note: string } {
+  const rests = Math.max(1, rollHealing(campaign, sheet, `${def.displayName}: long rests until it returns`, def.recovers ?? "1"));
+  const prefix = recoveringPrefix(def.displayName);
+  return {
+    conditions: [...sheet.conditions.filter((entry) => !isConditionNamed(entry, prefix)), `${prefix} (${rests})`],
+    note: `${def.displayName} comes back after ${rests} long rest${rests === 1 ? "" : "s"}.`,
+  };
+}
+
 export function computeUseResource(
   campaign: Campaign,
   sheet: CharacterSheet,
   target: CharacterSheet,
   resourceName: string,
   amount: number,
-  form?: {
-    name?: string;
-    hp?: number;
-    ac?: number;
-    cr?: number;
-    flies?: boolean;
-    swims?: boolean;
-  },
+  form?: WildShapeAsk,
   variant?: string,
   // The reaction gate judged the character as they stood before the hit
   // that dropped them (a reaction that answers it, or one taken on dropping
@@ -318,6 +313,12 @@ export function computeUseResource(
     if (technique) {
       return spendKiTechnique(campaign, sheet, technique, variant);
     }
+    if (variant?.trim()) {
+      return {
+        error: `${def.displayName} takes variant 'flurry of blows', 'patient defense', 'step of the wind' ('step of the wind dash' to Dash), 'diamond soul' or 'empty body'; "${variant}" is none of them. A plain spend (Stunning Strike) names no variant. Nothing was spent.`,
+        retry: true,
+      };
+    }
   }
 
   // Font of Magic: sorcery points convert into a spell slot and back, the
@@ -357,14 +358,37 @@ export function computeUseResource(
     };
   }
 
+  // Elemental Wild Shape spends two uses at once, or is refused before
+  // anything is spent (src/lib/dm/wild-shape-use.ts).
+  const elementalAsk = def.effect.kind === "wild_shape" ? elementalWildShape(sheet, form?.name) : null;
+  if (elementalAsk && "error" in elementalAsk) {
+    return elementalAsk;
+  }
+  const elemental = elementalAsk?.form ?? null;
+  const cost = elemental ? ELEMENTAL_WILD_SHAPE_COST : amount;
+
   if (def.requires === "below_half" && sheet.currentHp >= effectiveMaxHp(sheet) / 2) {
     return {
       error: `${def.displayName} is used when ${sheet.name} has fewer than half of their hit points left, and they have ${sheet.currentHp}/${effectiveMaxHp(sheet)}. Nothing was spent.`,
       refused: "rules",
     };
   }
+  // A pool a single use may only dip into (Balm of the Summer Court: half the
+  // druid level of dice; Healing Light: the Charisma modifier).
+  if (def.perUse) {
+    const cap =
+      def.perUse === "half_level"
+        ? Math.max(1, Math.floor(resourceLevel(def, sheet) / 2))
+        : Math.max(1, computeSheetDerived(sheet).abilityMods.cha);
+    if (amount > cap) {
+      return {
+        error: `${def.displayName} spends at most ${cap} at a time for ${sheet.name} (${def.perUse === "half_level" ? "half their level" : "their Charisma modifier"}); ${amount} is more. Nothing was spent.`,
+        retry: true,
+      };
+    }
+  }
   const left = state.max - state.used;
-  const payment = payForUse(sheet, def, state, amount);
+  const payment = payForUse(sheet, def, state, cost);
   if ("error" in payment) {
     return payment;
   }
@@ -375,14 +399,18 @@ export function computeUseResource(
     ? { ...sheet.resources, [paid.id]: { max: paid.state.max, used: paid.state.used + paid.amount } }
     : unlimited
       ? sheet.resources
-      : { ...sheet.resources, [def.id]: { max: state.max, used: state.used + amount } };
+      : { ...sheet.resources, [def.id]: { max: state.max, used: state.used + cost } };
+  // A use that returns only after several long rests (Limited Wish): the
+  // marker the rest counts down (src/lib/dm/rest-logic.ts).
+  const recovering = def.recovers && !paid && !unlimited ? recoveryMarker(campaign, sheet, def) : null;
   const outcome: Outcome = {
-    patch: { resources: spent },
+    patch: { resources: spent, ...(recovering ? { conditions: recovering.conditions } : {}) },
     result: {
       ok: true,
+      ...(recovering ? { returns: recovering.note } : {}),
       resource: def.displayName,
-      spent: paid ? `${paid.amount} ${paid.id.replace(/_/g, " ")} (no use was left)` : amount,
-      left: unlimited ? "unlimited" : paid ? `0/${state.max}` : `${left - amount}/${state.max}`,
+      spent: paid ? `${paid.amount} ${paid.id.replace(/_/g, " ")} (no use was left)` : cost,
+      left: unlimited ? "unlimited" : paid ? `0/${state.max}` : `${left - cost}/${state.max}`,
       refills: def.recharge === "short" ? "on any rest" : "on a long rest",
       effect: def.guidance,
     },
@@ -418,6 +446,17 @@ export function computeUseResource(
       outcome.healTarget = { characterId: target.id, amount: Math.max(1, total) };
       outcome.result.healingRolled = total;
       outcome.result.healed = `${total} HP to ${target.name}`;
+      // Balm of the Summer Court: a temporary hit point for each die, kept
+      // only when it beats what the creature already has.
+      const temp = (def.effect.tempPerDie ?? 0) * amount;
+      if (temp > target.tempHp) {
+        if (target.id === sheet.id) {
+          outcome.patch.tempHp = temp;
+        } else {
+          outcome.patchTarget = { characterId: target.id, patch: { tempHp: temp } };
+        }
+        outcome.result.tempHp = `${temp} temporary hit points to ${target.name}`;
+      }
       return outcome;
     }
     case "heal_target": {
@@ -451,14 +490,20 @@ export function computeUseResource(
     }
     case "buff": {
       const effect = def.effect;
-      const wanted = (variant ?? "").trim().toLowerCase();
-      const condition =
-        wanted && effect.variants?.length
-          ? (effect.variants.find((entry) => entry.toLowerCase().includes(wanted)) ??
-            (effect.variants.some((entry) => wanted.includes(entry.toLowerCase()))
-              ? effect.variants.find((entry) => wanted.includes(entry.toLowerCase()))!
-              : effect.condition))
-          : effect.condition;
+      // A feature with variants takes the one named whole or by its choice
+      // ("bear" for "spirit totem: bear"); a miss is refused, never the
+      // first.
+      let condition = effect.condition;
+      if (effect.variants?.length) {
+        const wanted = textKey(variant ?? "");
+        const picked = effect.variants.find((entry) => [entry, nameChoice(entry) ?? ""].some((spelling) => textKey(spelling) === wanted));
+        if (!picked) {
+          return wanted
+            ? noneNamed(`${def.displayName} has no variant called`, (variant ?? "").trim(), effect.variants)
+            : { error: `${def.displayName} needs its variant: ${effect.variants.join(", ")}. Ask the player which, unless they named one. Nothing was spent.`, retry: true };
+        }
+        condition = picked;
+      }
       const recipient = effect.target === "ally" ? target : sheet;
       if (recipient.conditions.some((entry) => entry.toLowerCase() === condition)) {
         return { error: `${recipient.name} is already ${condition}; the feature is already running.`, refused: "rules" };
@@ -504,9 +549,6 @@ export function computeUseResource(
       outcome.result.applied = `${condition} on ${recipient.name} for ${effect.rounds} rounds`;
       if (summary) {
         outcome.result.effect = summary;
-      }
-      if (effect.variants?.length && !wanted) {
-        outcome.result.variants = `Options: ${effect.variants.join(", ")}. Pass variant to pick; ${condition} was applied.`;
       }
       return outcome;
     }
@@ -602,121 +644,7 @@ export function computeUseResource(
       return outcome;
     }
     case "wild_shape": {
-      const name = (form?.name ?? "").trim();
-      // Multiclass: the caps read the DRUID levels and the druid entry's
-      // circle, not the character's summed level or primary subclass.
-      const druidEntry = classListFor(sheet).find((entry) => entry.id.toLowerCase() === "druid");
-      const druidLevel = classLevelFor(sheet, "druid") || sheet.level;
-      const moonDruid = /moon/i.test(druidEntry?.subclass ?? sheet.subclass ?? "");
-      const caps = wildShapeCapsFor(druidLevel, moonDruid);
-      // The forms they can take now, for every question and refusal below.
-      const offer = formList(wildShapeForms(caps));
-      if (!name) {
-        return {
-          error: `${def.displayName} needs the beast being assumed in form; at druid level ${druidLevel} ${sheet.name} can take: ${offer}. Ask the player which, unless they named one.`,
-          retry: true,
-        };
-      }
-      // A known form loads its real stat block and is validated against the
-      // druid-level ceilings; Circle of the Moon raises the CR cap.
-      const known = findBeastForm(name);
-      if (known) {
-        if (known.cr > caps.maxCr) {
-          return {
-            error: `${known.name} is CR ${formatCr(known.cr)}; at level ${druidLevel}${moonDruid ? " (Circle of the Moon)" : ""} ${sheet.name} can Wild Shape into beasts of CR ${formatCr(caps.maxCr)} or lower: ${offer}. Offer a form within the limit.`,
-            retry: true,
-          };
-        }
-        if (known.fly && !caps.fly) {
-          return {
-            error: `${known.name} has a flying speed; Wild Shape allows flying forms only from druid level 8. Offer a ground form instead: ${offer}.`,
-            retry: true,
-          };
-        }
-        if (known.swim && !caps.swim) {
-          return {
-            error: `${known.name} has a swimming speed; Wild Shape allows swimming forms only from druid level 4. Offer a land form instead: ${offer}.`,
-            retry: true,
-          };
-        }
-        outcome.patch.wildShape = {
-          form: known.name,
-          beastHp: known.hp,
-          beastMaxHp: known.hp,
-          beastAc: known.ac,
-          kind: "wildshape",
-          // Wild Shape swaps the physical scores; INT/WIS/CHA stay the
-          // druid's own, so only these three are stored.
-          abilities: {
-            str: known.abilities.str,
-            dex: known.abilities.dex,
-            con: known.abilities.con,
-          },
-          speed: known.speed,
-          attacks: known.attacks,
-        };
-        outcome.result.form = `${known.name}: ${known.hp} HP, AC ${known.ac}, speed ${known.speed} ft, STR ${known.abilities.str}/DEX ${known.abilities.dex}/CON ${known.abilities.con}`;
-        outcome.result.attacks = known.attacks
-          .map((attack) => `${attack.name} +${attack.toHit} (${attack.damage} ${attack.type})`)
-          .join(", ");
-        if (known.traits) {
-          outcome.result.formTraits = known.traits;
-        }
-        outcome.shapeHours = wildShapeHours(druidLevel);
-        outcome.result.lasts = `${outcome.shapeHours} hour${outcome.shapeHours === 1 ? "" : "s"}`;
-        outcome.result.note = `Damage lands on the beast's ${known.hp} hit points first; ${sheet.name}'s own ${sheet.currentHp}/${sheet.maxHp} waits for them when the form drops. Physical rolls use the beast's scores; they keep their own mind and cannot cast while shaped. Resolve the beast's attacks with pc_attack. Call use_resource on Wild Shape again to revert (no use spent).`;
-        return outcome;
-      }
-      // A beast the table does not list: the caller brings its stat block,
-      // challenge rating included, and the same level caps hold. Numbers
-      // above what that challenge rating carries are refused, so naming a
-      // dragon a CR 1/4 beast buys nothing.
-      const limits = `CR ${formatCr(caps.maxCr)} or lower${caps.fly ? "" : ", no flying forms"}${caps.swim ? "" : ", no swimming forms"}`;
-      if (!form?.hp || !form?.ac || form.cr === undefined) {
-        return {
-          error: `"${name}" is not in the beast-form table; pass formHp, formAc and formCr from its stat block (and formFlies or formSwims if it does). At druid level ${druidLevel} the form must be ${limits}; the table's forms within it: ${offer}.`,
-          retry: true,
-        };
-      }
-      if (form.cr > caps.maxCr) {
-        return {
-          error: `${name} is CR ${formatCr(form.cr)}; at level ${druidLevel}${moonDruid ? " (Circle of the Moon)" : ""} ${sheet.name} can Wild Shape into beasts of ${limits}. Offer a form within the limit.`,
-          retry: true,
-        };
-      }
-      if (form.flies && !caps.fly) {
-        return {
-          error: `${name} has a flying speed; Wild Shape allows flying forms only from druid level 8. Offer a ground form instead.`,
-          retry: true,
-        };
-      }
-      if (form.swims && !caps.swim) {
-        return {
-          error: `${name} has a swimming speed; Wild Shape allows swimming forms only from druid level 4. Offer a land form instead.`,
-          retry: true,
-        };
-      }
-      const hpCeiling = hitPointCeilingForCr(form.cr);
-      if (form.hp > hpCeiling || form.ac > UNLISTED_FORM_MAX_AC) {
-        return {
-          error: `A CR ${formatCr(form.cr)} beast has at most ${hpCeiling} hit points and AC ${UNLISTED_FORM_MAX_AC}; ${form.hp} HP and AC ${form.ac} are not ${name}'s numbers at that challenge rating. Send its real stat block, or a form from the table.`,
-          retry: true,
-        };
-      }
-      const beastHp = Math.max(1, form.hp);
-      const beastAc = Math.max(1, form.ac);
-      outcome.patch.wildShape = {
-        form: name.slice(0, 60),
-        beastHp,
-        beastMaxHp: beastHp,
-        beastAc,
-        kind: "wildshape",
-      };
-      outcome.shapeHours = wildShapeHours(druidLevel);
-      outcome.result.lasts = `${outcome.shapeHours} hour${outcome.shapeHours === 1 ? "" : "s"}`;
-      outcome.result.form = `${name}: ${beastHp} HP, AC ${beastAc}`;
-      outcome.result.note = `Damage lands on the beast's ${beastHp} hit points first; ${sheet.name}'s own ${sheet.currentHp}/${sheet.maxHp} waits for them when the form drops. Call use_resource on Wild Shape again to revert (no use spent).`;
-      return outcome;
+      return wildShapeUse(sheet, outcome, def.displayName, form, elemental);
     }
     case "recover_slots": {
       // Spent through take_rest, which reads the counter and returns the

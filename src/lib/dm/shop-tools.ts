@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Campaign } from "@/lib/db/campaigns";
 import { allocateSeq } from "@/lib/db/campaigns";
+import { insertCampaignMessage, listRecentMessages } from "@/lib/db/messages";
 import { insertCharacterEvent } from "@/lib/db/character-events";
 import { getClock } from "@/lib/db/clock";
 import { getCurrentLocation } from "@/lib/db/locations";
@@ -8,17 +9,22 @@ import { getNpcById, getNpcByName } from "@/lib/db/npcs";
 import { insertRoll } from "@/lib/db/rolls";
 import { insertSheetAudit } from "@/lib/db/sheet-audit";
 import { getSheetById, listSheets, patchSheet } from "@/lib/db/sheets";
-import { findShopNear, getShop, insertShop, listShopsAt, updateShop } from "@/lib/db/shops";
+import { findShopNear, getShop, insertShop, listShops, listShopsAt, updateShop } from "@/lib/db/shops";
 import { searchItems } from "@/lib/content";
+import { SRD_GEAR } from "@/lib/srd/adventuring-gear";
+import { SRD_ARMOR } from "@/lib/srd/armor";
+import { bundledPriceCopper } from "@/lib/srd/starting-wealth";
+import { SRD_WEAPONS } from "@/lib/srd/weapons";
 import { rollExpression } from "@/lib/dice";
 import { grantItemMath, removeItemMath } from "@/lib/dm/mutation-math";
-import { resolveRollExpression, resolveSheetRef, type RollArgs } from "@/lib/dm/rolls";
+import { resolveRollExpression, resolveSheetRef, type RollArgs, unknownSheetRef } from "@/lib/dm/rolls";
 import { rollExtrasFor, spendRollCarriers } from "@/lib/dm/forced-save";
-import { keepsFullValue, listPriceCp } from "@/lib/dm/trade-value";
+import { keepsFullValue, listPriceCp, magicValueOf } from "@/lib/dm/trade-value";
 import { capacityProblem } from "@/lib/dm/load-rules";
 import {
   addStock,
   askingPriceCp,
+  costToCopper,
   findStockLine,
   haggleDc,
   haggleStep,
@@ -29,25 +35,34 @@ import {
   refillStock,
   renderShopsForPrompt,
   restockDue,
+  SHELF_RARITIES,
   SIZE_MARKUP,
   stockFromPool,
   takeStock,
   type Shop,
 } from "@/lib/dm/shop-logic";
+import { magicItemValueCp, pricedRarity } from "@/lib/srd/magic-item-value";
 import { MINUTES_PER_DAY } from "@/lib/dm/calendar";
 import { publishEphemeral, publishPersisted, publishWithSeq } from "@/lib/events";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
-import { addCopper, formatCopper } from "@/lib/srd/currency";
-import { waypointProperty } from "@/lib/dm/waypoint-logic";
-import type { ToolResult } from "@/lib/dm/tool-errors";
-import { notCarried } from "@/lib/dm/item-logic";
+import { addCopper, formatCopper, formatPrice } from "@/lib/srd/currency";
+import { noneNamed, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { alreadyInPack, notCarried } from "@/lib/dm/item-logic";
 import { isTableGearName } from "@/lib/db/homebrew";
-import { textKey } from "@/lib/language/text-logic";
+import { containsPhrase, textKey } from "@/lib/language/text-logic";
+import { lineNamed } from "@/lib/srd/item-row";
+import type { EngineCall, ToolArgs } from "@/lib/dm/tool-merge-logic";
 
 // The shop tools (docs/vtt-parity-implementation-plan.md 11.1). The server
 // prices everything: the model names the item, the shelf says what it
 // costs, the purse says whether it can be had. Every purchase and sale
 // writes the same audit row purchase does, so the ledger reads as one.
+//
+// The model buys and sells through purchase alone (issue #471): a purchase
+// where a shop stands that trades the item reaches buy_item or sell_item
+// below (tradeCall), so a trade at a shop never skips its shelf. Both stay
+// engine actions under their own names, for the Market and for callers that
+// still send them.
 
 type ToolDef = {
   type: "function";
@@ -62,14 +77,14 @@ export const shopTools: ToolDef[] = [
     function: {
       name: "open_shop",
       description:
-        "Open a shop at the party's current place; the server stocks its shelves from the content pack at the settlement size's markup. Call it once when the party first walks in; the shop and its prices then appear in GAME STATE. A shop already standing here (one in SHOPS HERE) is reopened as it is: its shelf, prices and haggles stay, and it restocks only when its restock day has come.",
+        "Open the shop where the party stands. Its keeper, when named, is an NPC from GAME STATE. The server stocks its shelves from the content pack at the settlement size's markup. Call it once when the party first walks in; the shop and its prices then appear in GAME STATE. A shop already standing here (one in SHOPS HERE) is reopened as it is: its shelf, prices and haggles stay, and it restocks only when its restock day has come.",
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string", description: "The shop's name ('Marla's Sundries')." },
+          name: { type: "string" },
           kind: { type: "string", enum: ["general", "smith", "apothecary", "outfitter", "curiosities"] },
           size: { type: "string", enum: ["hamlet", "village", "town", "city"] },
-          keeper: { type: "string", description: "The keeper's name, an NPC from GAME STATE when one fits." },
+          keeper: { type: "string" },
         },
         required: ["name", "kind"],
       },
@@ -78,44 +93,8 @@ export const shopTools: ToolDef[] = [
   {
     type: "function",
     function: {
-      name: "buy_item",
-      description: "Resolve a character buying from a shop in GAME STATE. The server takes the asking price from the shelf and refuses what the purse cannot cover or the shelf does not hold.",
-      parameters: {
-        type: "object",
-        properties: {
-          ...waypointProperty,
-          characterId: { type: "string" },
-          shop: { type: "string", description: "The shop's name." },
-          item: { type: "string" },
-          qty: { type: "integer", minimum: 1, maximum: 99 },
-        },
-        required: ["characterId", "shop", "item"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "sell_item",
-      description: "Resolve a character selling something they carry to a shop that buys. The keeper pays half list price, from the content pack when the item is known there; name a price in copper only for something the pack does not know.",
-      parameters: {
-        type: "object",
-        properties: {
-          characterId: { type: "string" },
-          shop: { type: "string" },
-          item: { type: "string" },
-          qty: { type: "integer", minimum: 1, maximum: 99 },
-          priceCp: { type: "integer", minimum: 1, maximum: 10000000, description: "Only for an item the content pack has no price for: what the keeper pays each, in copper (at most 100,000 gp)." },
-        },
-        required: ["characterId", "shop", "item"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "haggle",
-      description: "Resolve a character haggling with a shop's keeper: a Persuasion check against the settlement's DC. Success drops every price in that shop one step, failure raises them one step. One try per character per shop.",
+      description: "A Persuasion check that moves a shop's prices. It is rolled against the settlement's DC. Success drops every price in that shop one step, failure raises them one step. One try per character per shop.",
       parameters: {
         type: "object",
         properties: { characterId: { type: "string" }, shop: { type: "string" } },
@@ -139,6 +118,12 @@ function resolveSheet(campaign: Campaign, ref: string): CharacterSheet | null {
   return stale ? getSheetById(stale.id) ?? stale : null;
 }
 
+// A shop no name found, refused with the shops the campaign has.
+function noShop(campaign: Campaign, ref: string): ToolError {
+  const refusal = noneNamed("There is no shop called", ref, listShops(campaign.id).map((shop) => shop.name));
+  return { ...refusal, error: `${refusal.error} A new one opens with open_shop.` };
+}
+
 // By id, or by name at the party's place before anywhere else.
 function resolveShop(campaign: Campaign, ref: string): Shop | null {
   const byId = getShop(ref);
@@ -147,6 +132,20 @@ function resolveShop(campaign: Campaign, ref: string): Shop | null {
 
 function publishShops(campaignId: string) {
   publishEphemeral(campaignId, "shops_updated", { at: Date.now() });
+}
+
+// One line in the chat when a shop opens or reopens where the party stands:
+// "<shop> is open", which the chat draws with a Browse wares button onto
+// the Market (MessageItem.tsx). Once per opening: a second open_shop in the
+// same breath, with nothing said since, adds no second line.
+export function announceShop(campaignId: string, shop: Pick<Shop, "id" | "name">) {
+  const [latest] = listRecentMessages(campaignId, 1);
+  if (latest?.authorType === "system" && latest.shopId === shop.id) {
+    return;
+  }
+  const seq = allocateSeq(campaignId);
+  const message = insertCampaignMessage({ campaignId, seq, authorType: "system", glyph: "cue-coin", shopId: shop.id, content: `${shop.name} is open.` });
+  publishWithSeq(campaignId, seq, "message_added", { message });
 }
 
 function publishSheet(campaign: Campaign, sheetId: string) {
@@ -159,21 +158,85 @@ function publishSheet(campaign: Campaign, sheetId: string) {
 // The pool a shop of this kind stocks from: the pack's items of the right
 // kinds, filtered by the kind's words when it has any. Once per name: the
 // pack files some items under two documents, and a shelf with two "Barrel"
-// lines sells one of them and strands the other.
-export function stockPool(kind: string): Array<{ name: string; cost: string }> {
+// lines sells one of them and strands the other. The first item each of the
+// kind's staples names is marked, and always goes on the shelf. The pack
+// prices no magic item, so each is priced by its rarity and carries that
+// rarity for the shelf's size to choose by; a curiosity shop opened bare.
+export function stockPool(kind: string): Array<{ name: string; cost: string; staple?: boolean; rarity?: string }> {
   const spec = KIND_POOL[normalizeShopKind(kind)];
-  const pool: Array<{ name: string; cost: string }> = [];
+  const pool: Array<{ name: string; cost: string; staple?: boolean; rarity?: string }> = [];
   const seen = new Set<string>();
+  const stapled = new Set<string>();
+  const baseCost = spec.kinds.includes("magic_item") ? baseCostLookup() : null;
   for (const itemKind of spec.kinds) {
-    for (const item of searchItems({ kind: itemKind, limit: 400 })) {
-      if (!item.cost || (spec.match && !spec.match.test(item.name)) || seen.has(textKey(item.name))) {
+    for (const item of packItemsOfKind(itemKind)) {
+      const magic = baseCost && item.kind === "magic_item" ? magicItemValueCp(item, baseCost) : undefined;
+      const cost = magic === undefined ? item.cost : magic === null ? "" : `${magic} cp`;
+      if (!cost || (spec.match && !spec.match.test(item.name)) || spec.skip?.includes(item.category) || seen.has(textKey(item.name))) {
         continue;
       }
       seen.add(textKey(item.name));
-      pool.push({ name: item.name, cost: item.cost });
+      const staple = spec.staples?.exec(item.name)?.[1];
+      const first = staple !== undefined && !stapled.has(textKey(staple));
+      if (first) {
+        stapled.add(textKey(staple));
+      }
+      const rarity = magic ? pricedRarity(item.rarity) : null;
+      pool.push({ name: item.name, cost, ...(first ? { staple: true } : {}), ...(rarity ? { rarity } : {}) });
     }
   }
-  return pool;
+  return pool.length ? pool : bundledPool(spec);
+}
+
+// With no content pack installed (or none with this kind's goods), the
+// bundled SRD 5.1 tables the builder prices from: weapons, armor and
+// adventuring gear at list price. The setting's firearms and genre armor
+// and every magic item stay off the shelf, as they do at creation
+// (src/lib/srd/starting-wealth.ts), so a curiosities shop stays bare.
+// The weapon table prints the SRD's own rows first; the setting's firearms,
+// exotics and simple genre weapons (a machete, a hurled vial) follow from
+// the first firearm on, and carry no genre mark of their own.
+const SRD_TABLE_WEAPONS = SRD_WEAPONS.slice(0, SRD_WEAPONS.findIndex((weapon) => weapon.category === "firearm"));
+
+function bundledPool(spec: (typeof KIND_POOL)[keyof typeof KIND_POOL]): Array<{ name: string; cost: string }> {
+  const rows: Array<{ name: string; cp: number | null }> = [
+    ...(spec.kinds.includes("weapon") ? SRD_TABLE_WEAPONS.map((weapon) => ({ name: weapon.name, cp: bundledPriceCopper(weapon.name) })) : []),
+    ...(spec.kinds.includes("armor") ? SRD_ARMOR.filter((armor) => !armor.genres).map((armor) => ({ name: armor.name, cp: bundledPriceCopper(armor.name) })) : []),
+    ...(spec.kinds.includes("gear") ? SRD_GEAR.map((gear) => ({ name: gear.name, cp: gear.costCp })) : []),
+  ];
+  return rows
+    .filter((row): row is { name: string; cp: number } => row.cp !== null && row.cp > 0 && (!spec.match || spec.match.test(row.name)))
+    .map((row) => ({ name: row.name, cost: `${row.cp} cp` }));
+}
+
+// The pack's weapons and armor priced by name, for a magic item made from
+// one: "plate" finds Plate, "chain shirt" Chain Shirt.
+function baseCostLookup(): (base: string) => number | null {
+  const prices = new Map<string, number>();
+  for (const item of [...packItemsOfKind("weapon"), ...packItemsOfKind("armor")]) {
+    const cp = costToCopper(item.cost);
+    if (cp !== null && !prices.has(textKey(item.name))) {
+      prices.set(textKey(item.name), cp);
+    }
+  }
+  return (base) => prices.get(textKey(base)) ?? prices.get(textKey(`${base} armor`)) ?? null;
+}
+
+// Every pack item of one kind. The search hands back at most 200 rows a call,
+// sorted by name, so one call stocked a general store from the gear before
+// "M" (no torch, rope or rations, ever): every page is read until the rows
+// run out.
+const PAGE = 200;
+function packItemsOfKind(kind: "weapon" | "armor" | "gear" | "magic_item"): ReturnType<typeof searchItems> {
+  const found: ReturnType<typeof searchItems> = [];
+  for (let offset = 0; offset < PAGE * 20; offset += PAGE) {
+    const page = searchItems({ kind, limit: PAGE, offset });
+    found.push(...page);
+    if (page.length < PAGE) {
+      break;
+    }
+  }
+  return found;
 }
 
 // A restock: a prepared shelf is refilled to what its author wrote; a shop
@@ -224,7 +287,20 @@ export function handleOpenShop(campaign: Campaign, rawArguments: string, random:
     })!;
     const shop = due ? restockShop(placed, instant, random) : placed;
     publishShops(campaign.id);
+    announceShop(campaign.id, shop);
     return { ok: true, shop: shop.name, reopened: true, restocked: due, lines: shop.stock.length, shelf: shelfLines(shop) };
+  }
+  // A name that holds a shop standing here, or that one's name holds
+  // ("Marla" for "Bottega di Marla"), is asked again rather than opened as a
+  // second shop beside it, whose shelf and haggling would start over: a shop
+  // is reopened by its whole name.
+  const here = location ? listShopsAt(campaign.id, location.id, location.name) : listShops(campaign.id).filter((shop) => !shop.locationId && !shop.locationName);
+  const overlapping = here.filter((shop) => containsPhrase(shop.name, args.name) || containsPhrase(args.name, shop.name));
+  if (overlapping.length) {
+    return {
+      error: `open_shop: ${overlapping.map((shop) => `"${shop.name}"`).join(", ")} ${overlapping.length > 1 ? "stand" : "stands"} here. Send its name as it is to reopen it, or give a new shop a name of its own. Nothing was opened.`,
+      retry: true,
+    };
   }
   const shop = insertShop(campaign.id, {
     name: args.name,
@@ -238,11 +314,12 @@ export function handleOpenShop(campaign: Campaign, rawArguments: string, random:
     restockedAt: instant,
   });
   publishShops(campaign.id);
+  announceShop(campaign.id, shop);
   return { ok: true, shop: shop.name, reopened: false, restocked: false, lines: shop.stock.length, shelf: shelfLines(shop) };
 }
 
 function shelfLines(shop: Shop): string[] {
-  return shop.stock.slice(0, 12).map((line) => `${line.itemName} x${line.qty} at ${formatCopper(askingPriceCp(line.priceCp, shop.markup))}`);
+  return shop.stock.slice(0, 12).map((line) => `${line.itemName} x${line.qty} at ${formatPrice(askingPriceCp(line.priceCp, shop.markup))}`);
 }
 
 const buySchema = z.object({
@@ -267,15 +344,15 @@ function ledger(campaign: Campaign, sheet: CharacterSheet, kind: string, delta: 
 export function handleBuyItem(campaign: Campaign, rawArguments: string): ToolResult {
   const args = parse(buySchema, rawArguments);
   if (!args) {
-    return { error: "Invalid arguments: buy_item needs characterId, shop and item.", retry: true };
+    return { error: "Invalid arguments: a purchase at a shop needs characterId, shop and item.", retry: true };
   }
   const sheet = resolveSheet(campaign, args.characterId);
   if (!sheet) {
-    return { error: "Unknown characterId; use one from GAME STATE.", retry: true };
+    return unknownSheetRef("characterId", args.characterId, listSheets(campaign.id));
   }
   const shop = resolveShop(campaign, args.shop);
   if (!shop) {
-    return { error: `No shop called "${args.shop}" here. Open one with open_shop first.`, retry: true };
+    return noShop(campaign, args.shop);
   }
   const line = findStockLine(shop.stock, args.item);
   if (!line) {
@@ -288,10 +365,10 @@ export function handleBuyItem(campaign: Campaign, rawArguments: string): ToolRes
   const total = each * args.qty;
   const purse = { gold: sheet.gold, copper: sheet.copper };
   if (purse.gold * 100 + purse.copper < total) {
-    return { error: `${line.itemName} x${args.qty} costs ${formatCopper(total)}; ${sheet.name} carries ${formatCopper(purse.gold * 100 + purse.copper)}. They cannot afford it.`, refused: "rules" };
+    return { error: `${line.itemName} x${args.qty} costs ${formatPrice(total)}; ${sheet.name} carries ${formatCopper(purse.gold * 100 + purse.copper)}. They cannot afford it.`, refused: "rules" };
   }
   const paid = addCopper(purse, -total);
-  const items = grantItemMath(sheet.equipment, line.itemName, args.qty);
+  const items = grantItemMath(sheet.equipment, line.itemName, args.qty, line.srdName ? { srdName: line.srdName } : {});
   // Strength x 15 pounds is all a character can carry (src/lib/dm/load-rules.ts).
   const tooHeavy = capacityProblem(sheet, items.equipment, line.itemName, paid.purse.gold);
   if (tooHeavy) {
@@ -300,11 +377,11 @@ export function handleBuyItem(campaign: Campaign, rawArguments: string): ToolRes
   const patch = { gold: paid.purse.gold, copper: paid.purse.copper, equipment: items.equipment };
   patchSheet(sheet.id, patch);
   updateShop(shop.id, { stock: takeStock(shop.stock, line.itemName, args.qty) ?? shop.stock });
-  ledger(campaign, sheet, "purchase", { item: line.itemName, qty: args.qty, action: "buy", priceCp: each, shop: shop.name }, `Bought at ${shop.name}`, patch, `Bought ${line.itemName}${args.qty > 1 ? ` x${args.qty}` : ""} for ${formatCopper(total)} at ${shop.name}.`);
+  ledger(campaign, sheet, "purchase", { item: line.itemName, qty: args.qty, action: "buy", priceCp: each, shop: shop.name }, `Bought at ${shop.name}`, patch, `Bought ${line.itemName}${args.qty > 1 ? ` x${args.qty}` : ""} for ${formatPrice(total)} at ${shop.name}.`);
   publishSheet(campaign, sheet.id);
   publishShops(campaign.id);
   publishEphemeral(campaign.id, "coins", { characterId: sheet.id, direction: "out", amountCp: total, at: Date.now() });
-  return { ok: true, bought: line.itemName, qty: args.qty, paid: formatCopper(total), purse: formatCopper(paid.purse.gold * 100 + paid.purse.copper) };
+  return { ok: true, bought: line.itemName, qty: args.qty, paid: formatPrice(total), purse: formatCopper(paid.purse.gold * 100 + paid.purse.copper), note: alreadyInPack(sheet.name, true) };
 }
 
 // A price the table cannot check is still held to the ceiling purchase keeps
@@ -315,15 +392,15 @@ const sellSchema = buySchema.extend({ priceCp: z.coerce.number().int().min(1).ma
 export function handleSellItem(campaign: Campaign, rawArguments: string): ToolResult {
   const args = parse(sellSchema, rawArguments);
   if (!args) {
-    return { error: "Invalid arguments: sell_item needs characterId, shop and item, and a priceCp of at most 10000000 (100,000 gp) when one is given.", retry: true };
+    return { error: "Invalid arguments: a sale at a shop needs characterId, shop and item, and a price of at most 100,000 gp each when one is given.", retry: true };
   }
   const sheet = resolveSheet(campaign, args.characterId);
   if (!sheet) {
-    return { error: "Unknown characterId; use one from GAME STATE.", retry: true };
+    return unknownSheetRef("characterId", args.characterId, listSheets(campaign.id));
   }
   const shop = resolveShop(campaign, args.shop);
   if (!shop) {
-    return { error: `No shop called "${args.shop}" here.`, retry: true };
+    return noShop(campaign, args.shop);
   }
   if (!shop.buys) {
     return { error: `${shop.name} does not buy.`, refused: "rules" };
@@ -332,26 +409,36 @@ export function handleSellItem(campaign: Campaign, rawArguments: string): ToolRe
   if (!removal) {
     return notCarried(sheet.name, sheet.equipment.map((item) => item.name), args.item, isTableGearName(campaign.id, args.item));
   }
-  const line = sheet.equipment.find((item) => textKey(item.name) === textKey(args.item)) ?? { name: args.item };
+  const line = removal.item;
   const carried = line.name;
+  // A shop buys the magic it would sell (SRD 5.2, Magic Item Rarity). Anything
+  // rarer finds a buyer among "the wealthiest nobles" (SRD 5.1, Selling
+  // Treasure), whom the story provides and purchase settles.
+  const magic = magicValueOf(line);
+  if (magic && !SHELF_RARITIES[shop.size].includes(magic.rarity)) {
+    const where = SHELF_RARITIES.city.includes(magic.rarity) ? "changes hands only in a city" : "is bought by no shop, only by the wealthiest nobles";
+    return { error: `${shop.name} does not buy ${carried}: a ${magic.rarity} magic item ${where}. A buyer the story provides is settled with purchase, no shop named. Nothing was sold.`, refused: "rules" };
+  }
   // Gems, jewelry, art and trade goods keep their full value (SRD 5.1,
   // Selling Treasure), priced by the worth they were given; a name is never
   // read for a price (src/lib/dm/trade-value.ts).
   const listCp = listPriceCp(line);
   const each = listCp !== null ? (keepsFullValue(line) ? listCp : offerPriceCp(listCp)) : args.priceCp ?? null;
   if (each === null) {
-    return { error: `The pack has no price for "${carried}"; pass priceCp for what the keeper pays each.`, retry: true };
+    // `unpriced`: the Market has no price to send, so it hands the sale to
+    // whoever runs the story to name one (MarketPanel.tsx).
+    return { error: `The pack has no price for "${carried}"; send price, the gold the keeper pays for each.`, retry: true, unpriced: true };
   }
   const total = each * removal.removed;
   const paid = addCopper({ gold: sheet.gold, copper: sheet.copper }, total);
   const patch = { gold: paid.purse.gold, copper: paid.purse.copper, equipment: removal.equipment };
   patchSheet(sheet.id, patch);
-  updateShop(shop.id, { stock: addStock(shop.stock, carried, removal.removed, listCp ?? each * 2) });
-  ledger(campaign, sheet, "purchase", { item: carried, qty: removal.removed, action: "sell", priceCp: each, shop: shop.name }, `Sold at ${shop.name}`, patch, `Sold ${carried}${removal.removed > 1 ? ` x${removal.removed}` : ""} for ${formatCopper(total)} at ${shop.name}.`);
+  updateShop(shop.id, { stock: addStock(shop.stock, carried, removal.removed, listCp ?? each * 2, line.srdName) });
+  ledger(campaign, sheet, "purchase", { item: carried, qty: removal.removed, action: "sell", priceCp: each, shop: shop.name }, `Sold at ${shop.name}`, patch, `Sold ${carried}${removal.removed > 1 ? ` x${removal.removed}` : ""} for ${formatPrice(total)} at ${shop.name}.`);
   publishSheet(campaign, sheet.id);
   publishShops(campaign.id);
   publishEphemeral(campaign.id, "coins", { characterId: sheet.id, direction: "in", amountCp: total, at: Date.now() });
-  return { ok: true, sold: carried, qty: removal.removed, received: formatCopper(total), purse: formatCopper(paid.purse.gold * 100 + paid.purse.copper) };
+  return { ok: true, sold: carried, qty: removal.removed, received: formatPrice(total), purse: formatCopper(paid.purse.gold * 100 + paid.purse.copper) };
 }
 
 const haggleSchema = z.object({ characterId: z.string().trim().min(1), shop: z.string().trim().min(1) });
@@ -363,11 +450,11 @@ export function handleHaggle(campaign: Campaign, rawArguments: string): ToolResu
   }
   const sheet = resolveSheet(campaign, args.characterId);
   if (!sheet) {
-    return { error: "Unknown characterId; use one from GAME STATE.", retry: true };
+    return unknownSheetRef("characterId", args.characterId, listSheets(campaign.id));
   }
   const shop = resolveShop(campaign, args.shop);
   if (!shop) {
-    return { error: `No shop called "${args.shop}" here.`, retry: true };
+    return noShop(campaign, args.shop);
   }
   if (shop.haggledBy.includes(sheet.id)) {
     return { error: `${sheet.name} already tried their luck with ${shop.name}'s keeper.`, refused: "rules" };
@@ -408,4 +495,54 @@ export function shopsBlock(campaign: Campaign): string {
     return { ...fresh, keeperName: fresh.keeperNpcId ? getNpcById(fresh.keeperNpcId)?.name ?? "" : "" };
   });
   return renderShopsForPrompt(shops);
+}
+
+// The handler a purchase reaches (src/lib/dm/tool-merge.ts). A shop named in
+// the call trades whatever it is asked, and refuses what it does not stock
+// or buy as it always has. With none named, a shop standing where the party
+// is trades the item when it stocks it (a purchase) or would buy it (a
+// sale): one that already shelves it first, then the general store, then
+// any other. Anything else changes hands at list price, outside a shop.
+export function tradeCall(campaign: Campaign, args: ToolArgs): EngineCall {
+  const action = args.action === "buy" || args.action === "sell" ? args.action : null;
+  const item = String(args.item ?? args.name ?? "").trim();
+  const named = typeof args.shop === "string" ? args.shop.trim() : "";
+  const listPrice = { name: "purchase", args: Object.fromEntries(Object.entries(args).filter(([key]) => key !== "shop" && key !== "priceCp")) };
+  if (!action || !item) {
+    return listPrice;
+  }
+  const atShop = (shop: string, shelfName: string = item): EngineCall => {
+    const common = { characterId: args.characterId, shop, item: shelfName, ...(args.qty !== undefined ? { qty: args.qty } : {}) };
+    if (action === "buy") {
+      return { name: "buy_item", args: { ...common, ...(args.waypoint !== undefined ? { waypoint: args.waypoint } : {}) } };
+    }
+    const priceCp = args.priceCp ?? (Number.isFinite(Number(args.price)) && Number(args.price) > 0 ? Math.round(Number(args.price) * 100) : undefined);
+    return { name: "sell_item", args: { ...common, ...(priceCp !== undefined ? { priceCp } : {}) } };
+  };
+  if (named) {
+    return atShop(named);
+  }
+  const location = getCurrentLocation(campaign.id);
+  const here = location ? listShopsAt(campaign.id, location.id, location.name) : [];
+  if (!here.length) {
+    return listPrice;
+  }
+  const srdName = typeof args.srdName === "string" ? args.srdName.trim() : "";
+  const shelved = (shop: Shop) => findStockLine(shop.stock, item) ?? (srdName ? findStockLine(shop.stock, srdName) : null);
+  if (action === "buy") {
+    for (const shop of here) {
+      const line = shelved(shop);
+      if (line) {
+        return atShop(shop.name, line.itemName);
+      }
+    }
+    return listPrice;
+  }
+  // A shop buys the magic it would sell, and no rarer (handleSellItem).
+  const sheet = typeof args.characterId === "string" ? resolveSheet(campaign, args.characterId) : null;
+  const carried = sheet ? sheet.equipment[lineNamed(sheet.equipment, item)] : undefined;
+  const magic = carried ? magicValueOf(carried) : null;
+  const buyers = here.filter((shop) => shop.buys && (!magic || SHELF_RARITIES[shop.size].includes(magic.rarity)));
+  const buyer = buyers.find((shop) => shelved(shop)) ?? buyers.find((shop) => shop.kind === "general") ?? buyers[0];
+  return buyer ? atShop(buyer.name) : listPrice;
 }

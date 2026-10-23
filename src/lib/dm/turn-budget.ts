@@ -14,14 +14,15 @@ import {
   budgetApplies,
   freshBudget,
   grantAction,
+  type StruckSwing,
   type TurnBudget,
 } from "@/lib/dm/action-budget";
 import { conditionTurnShape, type TurnShape } from "@/lib/srd/condition-effects";
 import { combatRiders } from "@/lib/srd/feature-effects";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { summonAttacksPerTurn } from "@/lib/dm/summon-rules";
-import { BEAST_FORMS } from "@/lib/srd/beast-forms";
-import { formSees } from "@/lib/srd/shape-rules";
+import { findBeastForm } from "@/lib/srd/beast-forms";
+import { formSees } from "@/lib/srd/form-sees";
 import type { ToolError, ToolResult } from "@/lib/dm/tool-errors";
 
 // The combatant the initiative pointer is currently on, or null out of
@@ -78,6 +79,27 @@ export function storeBudget(encounter: Encounter, budget: TurnBudget) {
   encounter.turnBudget = budget;
   saveEncounter(encounter);
   publishTurnCount(encounter.campaignId);
+}
+
+// An attack this turn rolled, kept on the turn's budget beside what it spent
+// (action-budget.ts TurnBudget.struck). Nothing when the budget is not this
+// owner's turn: an attack off their turn spends no budget either.
+export function noteSwing(campaignId: string, ownerId: string, result: ToolResult) {
+  const encounter = getActiveEncounter(campaignId);
+  const budget = encounter?.turnBudget ?? null;
+  if (!encounter || !budgetApplies(budget, ownerId, encounter.round)) {
+    return;
+  }
+  if (typeof result.target !== "string" || typeof result.hit !== "boolean") {
+    return;
+  }
+  const swing: StruckSwing = {
+    target: result.target,
+    hit: result.hit,
+    ...(typeof result.damage === "number" ? { damage: result.damage } : {}),
+  };
+  encounter.turnBudget = { ...budget, struck: [...(budget.struck ?? []), swing] };
+  saveEncounter(encounter);
 }
 
 // The pips on the board and in the Hand read the count from the encounter
@@ -139,10 +161,12 @@ export function attacksAllowedFor(sheet: CharacterSheet): number {
     return summoned;
   }
   // A beast form attacks as its Multiattack lets it; a Polymorph's beast
-  // has no Extra Attack of the character's (shape-rules.ts formSees).
-  const form = sheet.wildShape ? BEAST_FORMS.find((entry) => entry.name.toLowerCase() === sheet.wildShape?.form.toLowerCase()) : null;
+  // has no Extra Attack of the character's (form-sees.ts).
+  // The record carries the form's Multiattack; one written before it did
+  // reads the table's form of that name.
+  const shaped = sheet.wildShape ? (sheet.wildShape.attacksPerTurn ?? findBeastForm(sheet.wildShape.form)?.attacksPerTurn ?? 1) : null;
   const own = 1 + combatRiders(formSees(sheet)).extraAttacks;
-  return form ? Math.max(form.attacksPerTurn ?? 1, own) : own;
+  return shaped !== null ? Math.max(shaped, own) : own;
 }
 
 // Action Surge: one additional action on the turn it is used. Called by

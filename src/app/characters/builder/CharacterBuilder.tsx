@@ -2,7 +2,7 @@
 
 import { ContentScopeProvider } from "@/lib/content-scope";
 import { Loader2 } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AvatarCropDialog } from "@/app/settings/AvatarCropDialog";
 import { Wizard, type WizardNotice, type WizardStep } from "@/components/ui/Wizard";
 import { cn } from "@/lib/cn";
@@ -41,13 +41,22 @@ import {
 } from "./submit";
 import { clearBuilderDraft, readBuilderDraft, writeBuilderDraft, type BuilderDraft } from "./builderDraft";
 import { builderActions, useBuilderDerived } from "./useBuilderDerived";
-import { useArchetypes, useBuilderOptions, useWorldPack } from "./useBuilderOptions";
+import { BuildMathPanel } from "./BuildMathPanel";
+import { useArchetypeOptions, useBuilderOptions, useWorldPack, type OptionListKind } from "./useBuilderOptions";
+import { TableScopeNote } from "./TableScopeNote";
+import { summaryRows, type SummaryRowKey } from "./summary";
+import { ALIGNMENT_LABELS } from "./usePickerGroups";
 import { listWords, unofferedPicks } from "./unoffered";
 import { findRace, useBuilderState, type DroppedNotice } from "./useBuilderState";
 import { useFeatDescs, useFeatTexts } from "./useFeatDescs";
 import { builderFeatJudge, FeatJudgeContext, unmetFeatMessage } from "./featPrereqs";
 import { racialFeatCount } from "@/lib/srd/race-id";
 import { usePickerGroups } from "./usePickerGroups";
+import type { PickerGroup } from "./OptionPicker";
+import { useWiderSpellPool } from "@/components/sheet/useSpellPool";
+import { QuickBuildQuiz, type QuizVoice } from "./QuickBuildQuiz";
+import { QuickBuildReadback } from "./QuickBuildReadback";
+import { useQuickFill, type FillRequest } from "./useQuickFill";
 import { useTableRules } from "./useTableRules";
 
 export type { BuilderResult } from "./submit";
@@ -79,6 +88,18 @@ const STEP_OF_TARGET: Record<BlockerTarget, string> = {
   spells: "spells-gear",
   gear: "spells-gear",
 };
+
+// The steps' keys in order, for the summary's Edit and Fix links and for a
+// quick build's read-back, whose Change goes to a pick's step.
+const STEP_ORDER = ["identity", "ancestry", "calling", "abilities", "spells-gear", "finish"];
+
+// The rows a picker offers, in its order: what the quiz and the fill choose
+// from, so they never pick what this table leaves out.
+function offeredRows<T extends { id: string }>(rows: T[], groups: PickerGroup[]): T[] {
+  const ids = [...new Set(groups.flatMap((group) => group.options.map((option) => option.id)).filter(Boolean))];
+  const picked = ids.flatMap((id) => rows.filter((row) => row.id === id).slice(0, 1));
+  return picked.length ? picked : rows;
+}
 
 // A dropped pick as the player knows it: skill and style ids by name, an
 // ability by its word, everything else as it was picked.
@@ -152,6 +173,8 @@ function CharacterBuilderForm({
   role,
   draftKey,
   onCancel,
+  quizVoice = "player",
+  openQuiz = false,
   className,
 }: {
   // The table the character is made for: its hit point method and starting
@@ -194,6 +217,11 @@ function CharacterBuilderForm({
   // Where the first step's back arrow leads (the page or dialog it opened
   // from), as every other wizard's does; later steps step back as before.
   onCancel?: () => void;
+  // Whose job the first step's question and "Help me build" ask about: a
+  // player's own hero, or (the DM's quick companion) what the party needs.
+  quizVoice?: QuizVoice;
+  // Open on "Help me build" (the hero chooser's door to it, backlog F1).
+  openQuiz?: boolean;
   className?: string;
 }) {
   // creator.css stills its loops under <html data-effects="low">, which only
@@ -206,6 +234,7 @@ function CharacterBuilderForm({
     backgrounds: rawBackgrounds,
     packInstalled,
     loaded,
+    status: optionStatus,
   } = useBuilderOptions(initial?.race);
   const pack = useWorldPack(worldPackId);
   // Display overlay only. applyIdReskins rewrites `name`, never `id`, so
@@ -232,7 +261,13 @@ function CharacterBuilderForm({
   const race = findRace(races, state.raceId);
   const klass = classes.find((entry) => entry.id === state.classId);
   const background = backgrounds.find((entry) => entry.id === state.backgroundId);
-  const archetypes = useArchetypes(klass?.id ?? "");
+  const subclassOptions = useArchetypeOptions(klass?.id ?? "");
+  const archetypes = subclassOptions.archetypes;
+  // Why a list is short: the asker's own Homebrew a table leaves out, or a
+  // list the server did not send (workshop import audit F06).
+  const scopeNote = (noun: string, kind: OptionListKind) => (
+    <TableScopeNote noun={noun} unadmitted={optionStatus.unadmitted[kind]} failed={optionStatus.failed.includes(kind)} onRetry={optionStatus.retry} />
+  );
 
   const table = useTableRules(campaignId, klass?.id);
   // The text of every feat picked, for what each grants (issue #125); a
@@ -242,7 +277,7 @@ function CharacterBuilderForm({
     ...state.asiChoices.flatMap((choice) => (choice?.mode === "feat" ? [choice.feat] : [])),
   ]);
   const featDescs = featTexts.descs;
-  const derived = useBuilderDerived({ state, race, klass, background, fixedLevel, rules: table.rules, featDescs });
+  const derived = useBuilderDerived({ state, race, klass, background, fixedLevel, rules: table.rules, featDescs, genre });
   // Each feat's prerequisite judged as the save judges it, against the
   // character as built so far (featPrereqs.ts): the feat pickers read it,
   // and the gates below flag a picked feat a later choice broke.
@@ -277,7 +312,22 @@ function CharacterBuilderForm({
   // (builderDraft.ts), and offered back the next time this door opens. The
   // step is the builder's so a resumed draft can land where it was left.
   const draftAt = !initial && draftKey ? draftKey : null;
-  const [step, setStep] = useState(0);
+  // An edit opens on the last step, the summary (backlog F3): one row per
+  // step with a way to it, so changing one pick never starts at step 1.
+  const [step, setStep] = useState(initial ? STEP_ORDER.length - 1 : 0);
+  // Once the summary has been seen, every other step offers "Back to
+  // summary", and that returns focus to the row the player left from.
+  const [summarySeen, setSummarySeen] = useState(Boolean(initial));
+  if (step === STEP_ORDER.length - 1 && !summarySeen) {
+    setSummarySeen(true);
+  }
+  const [cameFrom, setCameFrom] = useState<SummaryRowKey | null>(null);
+  const [returnTo, setReturnTo] = useState<{ row: SummaryRowKey } | null>(null);
+  function backToSummary(from: string) {
+    setReturnTo({ row: cameFrom ?? (from as SummaryRowKey) });
+    setCameFrom(null);
+    setStep(STEP_ORDER.length - 1);
+  }
   const [draftOffer, setDraftOffer] = useState<BuilderDraft | null>(null);
   const [draftChecked, setDraftChecked] = useState(false);
   useEffect(() => {
@@ -314,6 +364,43 @@ function CharacterBuilderForm({
       clearBuilderDraft(draftAt);
     }
     setDraftOffer(null);
+  }
+
+  // The quick build (quickBuild.ts): the quiz, "Fill what's left" and the
+  // cards' "Pick for me" all choose from what this builder offers.
+  const offered = {
+    classes: offeredRows(classes, pickers.classGroups),
+    races: offeredRows(races, pickers.raceGroups),
+    backgrounds: offeredRows(backgrounds, pickers.backgroundGroups),
+    recommended: new Set(
+      pickers.classGroups.filter((group) => group.recommended).flatMap((group) => group.options.map((option) => option.id)),
+    ),
+  };
+  // The spell step's own list for this class, so a fill picks what the
+  // step would offer (shared with it: one fetch).
+  const { pool: spellPool } = useWiderSpellPool(derived.spellSearchClass, derived.maxSpellLevel, derived.casts, derived.spellWider);
+  // "Help me build" open, with the job already picked on the first step.
+  const [quiz, setQuiz] = useState<{ role: PlaystyleId | null } | null>(openQuiz ? { role: null } : null);
+  const fill = useQuickFill({
+    state,
+    derived,
+    race,
+    klass,
+    background,
+    offered,
+    subclasses: pickers.subclassGroups.flatMap((group) => group.options.map((option) => option.id)).filter(Boolean),
+    spellPool,
+    // A quiz character opens on the last step, where every part shows with
+    // a way back to it.
+    onDone: (done) => {
+      if (done.from === "quiz") {
+        setStep(STEP_ORDER.length - 1);
+      }
+    },
+  });
+  function startFill(request: FillRequest = {}) {
+    setSaveProblem(null);
+    fill.start(request);
   }
 
   // Takes the player to the block that holds the missing pick: scrolls the
@@ -384,7 +471,29 @@ function CharacterBuilderForm({
     onSubmit(buildBuilderResult(input));
   }
 
-  if (!races.length || !classes.length || !backgrounds.length) {
+  // An edit arrives on the summary with focus on its heading, as a step
+  // change puts it (Wizard.tsx); "Back to summary" puts it on the row's
+  // Edit instead. Both run after the wizard's own focus move.
+  const ready = Boolean(races.length && classes.length && backgrounds.length);
+  const arrived = useRef(false);
+  useEffect(() => {
+    if (!ready || !initial || arrived.current) {
+      return;
+    }
+    arrived.current = true;
+    document
+      .querySelector<HTMLElement>(`[data-builder-root="${rootId}"] section[data-active] .wizard-step-heading`)
+      ?.focus({ preventScroll: true });
+  }, [ready, initial, rootId]);
+  useEffect(() => {
+    if (returnTo) {
+      document
+        .querySelector<HTMLElement>(`[data-builder-root="${rootId}"] section[data-active] [data-summary-edit="${returnTo.row}"]`)
+        ?.focus();
+    }
+  }, [returnTo, rootId]);
+
+  if (!ready) {
     return (
       <div className="flex justify-center py-10">
         <Loader2 className="size-5 animate-spin text-stone-500" />
@@ -415,8 +524,43 @@ function CharacterBuilderForm({
     abilities: owed.abilities[0] ?? null,
     spells: owed.spells[0] ?? null,
   };
-  const owedLine = (blocks: typeof owed.identity) => <OwedLine picks={owedPicks(blocks)} onShow={locate} />;
+  // The summary holds Save on the first pick owed anywhere, and its Show me
+  // goes to that pick's step and field, as a row's Fix does.
+  const firstOwed = blockers.identity ?? blockers.ancestry ?? blockers.calling ?? blockers.abilities ?? blockers.spells;
+  const owedLine = (blocks: typeof owed.identity) => (
+    <OwedLine picks={owedPicks(blocks)} onShow={locate} onFill={fill.running ? undefined : () => startFill()} />
+  );
+  // What a fill left for the player (a spell list that ran out), said in its
+  // read-back.
+  const stillOwed = Object.values(owed).reduce((sum, blocks) => sum + owedPicks(blocks).length, 0);
+  // A change from the read-back: to the pick's step, then to its block once
+  // the step is showing.
+  function changePick(target: BlockerTarget) {
+    const index = STEP_ORDER.indexOf(STEP_OF_TARGET[target]);
+    if (index >= 0) {
+      setStep(index);
+    }
+    window.setTimeout(() => locate(target), 350);
+  }
   const casts = derived.casts;
+  const summary = summaryRows({
+    name: state.name,
+    background: background?.name,
+    race: race?.name,
+    klass: klass?.name,
+    subclass: state.subclass || undefined,
+    level: derived.effectiveLevel,
+    abilities: derived.shownAbilities,
+    casts,
+    cantrips: state.cantrips,
+    spells: state.spells,
+    gear: derived.fullEquipment,
+    alignment: ALIGNMENT_LABELS[state.alignment]?.name ?? state.alignment,
+    portrait: Boolean(state.portrait),
+    appearance: Boolean(state.appearance.trim()),
+    backstory: Boolean(state.backstory.trim()),
+    owed,
+  });
   // The classes this table offers, as the playstyle answer reads them.
   const playstyleOffered = pickers.classGroups.flatMap((group) =>
     group.options.map((option) => {
@@ -428,8 +572,6 @@ function CharacterBuilderForm({
   // Each step's title is the task in plain words; its label is the short
   // name printed under its diamond and said with it, and the one the notices
   // above the steps use ("asked for on the Class step").
-  // The steps' keys in order, for the finishing step's Edit links.
-  const STEP_ORDER = ["identity", "ancestry", "calling", "abilities", "spells-gear", "finish"];
   const steps: WizardStep[] = [
     {
       key: "identity",
@@ -455,10 +597,13 @@ function CharacterBuilderForm({
                     chosenClass: klass?.id ?? "",
                     onChooseClass: state.changeClass,
                     backgrounds: playstyle ? playstyleBackgrounds(playstyle, backgrounds) : [],
+                    question: quizVoice === "party" ? "What does the party need?" : "In a fight, what's your job?",
+                    onHelpMeBuild: (role) => setQuiz({ role }),
                   }
             }
             backgroundGroups={pickers.backgroundGroups}
             background={background}
+            backgroundNote={scopeNote("backgrounds", "backgrounds")}
           />
         </>
       ),
@@ -480,6 +625,7 @@ function CharacterBuilderForm({
             background={background}
             races={races}
             raceGroups={pickers.raceGroups}
+            listNote={scopeNote("species", "races")}
           />
         </>
       ),
@@ -507,7 +653,10 @@ function CharacterBuilderForm({
             offersSubclass={pickers.offersSubclass}
             subclassLockedAt={pickers.subclassLockedAt}
             chosenArchetype={pickers.chosenArchetype}
+            classNote={scopeNote("classes", "classes")}
+            subclassNote={<TableScopeNote noun="subclasses" unadmitted={subclassOptions.unadmitted} failed={subclassOptions.failed} onRetry={subclassOptions.retry} />}
             playstyle={initial ? undefined : { value: playstyle, onChange: setPlaystyle }}
+            onPickForMe={fill.running ? undefined : (target) => startFill({ only: [target] })}
           />
         </>
       ),
@@ -521,7 +670,13 @@ function CharacterBuilderForm({
       content: (
         <>
           {owedLine(owed.abilities)}
-          <AbilitiesStep state={state} derived={derived} race={race} klass={klass} />
+          <AbilitiesStep
+            state={state}
+            derived={derived}
+            race={race}
+            klass={klass}
+            onPickForMe={fill.running ? undefined : (target) => startFill({ only: [target] })}
+          />
         </>
       ),
     },
@@ -551,7 +706,9 @@ function CharacterBuilderForm({
       label: "Finish",
       title: "Check your hero and finish",
       blurb: "Who have you made?",
-      canContinue: !busy,
+      canContinue: !busy && !firstOwed,
+      blocker: firstOwed?.message ?? null,
+      onBlocked: firstOwed ? () => changePick(firstOwed.target) : undefined,
       content: (
         <FinishStep
           state={state}
@@ -564,7 +721,15 @@ function CharacterBuilderForm({
           paintsPortraits={paintsPortraits}
           onUploadPortrait={() => setCropping(true)}
           error={state.localError || error}
-          onEdit={(key) => setStep(STEP_ORDER.indexOf(key))}
+          onEdit={(key) => {
+            setCameFrom(key);
+            setStep(STEP_ORDER.indexOf(key));
+          }}
+          summary={summary}
+          onFix={(target) => {
+            setCameFrom(STEP_OF_TARGET[target] as SummaryRowKey);
+            changePick(target);
+          }}
           alignmentGroups={pickers.alignmentGroups}
           alignmentInfo={pickers.alignmentInfo}
           role={role}
@@ -572,6 +737,15 @@ function CharacterBuilderForm({
       ),
     },
   ];
+
+  // Every step but the summary goes back to it once it has been seen.
+  const flow: WizardStep[] = summarySeen
+    ? steps.map((entry, index) =>
+        index === STEP_ORDER.length - 1
+          ? entry
+          : { ...entry, secondary: { label: "Back to summary", onClick: () => backToSummary(entry.key) } },
+      )
+    : steps;
 
   // What the last change set aside, said above the steps with a way to the
   // step it belongs to (issue #124: the list was computed and thrown away).
@@ -618,8 +792,54 @@ function CharacterBuilderForm({
           </button>
         </div>
       ) : null}
+      {fill.readback ? (
+        <QuickBuildReadback
+          readback={fill.readback}
+          stillOwed={stillOwed}
+          onChange={changePick}
+          onUndo={() => {
+            fill.undo();
+            if (fill.readback?.from === "quiz") {
+              setStep(0);
+            }
+          }}
+          onDismiss={fill.dismiss}
+        />
+      ) : fill.kept ? (
+        // What was picked stays a tap away after "Keep them", until the
+        // character is saved or another fill starts.
+        <p data-quick-kept="" className="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-stone-800 px-3 py-1.5 text-xs text-stone-400">
+          <span className="min-w-0 flex-1">
+            {fill.kept.filled.length} {fill.kept.filled.length === 1 ? "choice was" : "choices were"} picked for you.
+          </span>
+          <button type="button" onClick={fill.reopen} className="text-sky-300 underline-offset-2 hover:underline">
+            Show what was picked
+          </button>
+        </p>
+      ) : null}
+      {quiz ? (
+        <QuickBuildQuiz
+          voice={quizVoice}
+          classes={offered.classes}
+          races={offered.races}
+          backgrounds={offered.backgrounds}
+          recommended={offered.recommended}
+          initial={quiz.role ? { role: quiz.role } : undefined}
+          onCancel={() => setQuiz(null)}
+          onChoose={(seed, answers) => {
+            setQuiz(null);
+            // The class step's picker opens on the job the quiz was given.
+            setPlaystyle(answers.role);
+            startFill({ seed, answers });
+          }}
+        />
+      ) : (
       <FeatJudgeContext.Provider value={featJudge}>
+      {/* The build math table (F10): beside the steps where the builder is wide, under them where it is not. */}
+      <div className="@container flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 @4xl:flex-row @4xl:gap-5">
       <Wizard
+        className="min-w-0 flex-1"
         step={step}
         onStepChange={setStep}
         title={state.name.trim() || "New character"}
@@ -643,7 +863,7 @@ function CharacterBuilderForm({
               ].join(" · ")
             : undefined
         }
-        steps={steps}
+        steps={flow}
         onCancel={onCancel}
         onDone={submit}
         doneLabel={
@@ -656,7 +876,11 @@ function CharacterBuilderForm({
           )
         }
       />
+      <BuildMathPanel derived={derived} scores={state.scores} klass={klass} atTable={Boolean(table.rules)} />
+      </div>
+      </div>
       </FeatJudgeContext.Provider>
+      )}
       {cropping ? (
         <AvatarCropDialog
           title={`Portrait for ${state.name.trim() || "your character"}`}
