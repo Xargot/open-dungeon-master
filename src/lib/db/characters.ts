@@ -50,6 +50,12 @@ export type LibraryCharacter = {
   // library's own. Set by the Party system and carried by a bundle
   // (docs/workshop-parity-audit.md phase 15).
   workshopId: string;
+  // A pregen the DM offers to the players of a table made from its
+  // workshop (src/lib/db/pregen-offers.ts). False for every other character.
+  offered: boolean;
+  // The DM's pregen this is a player's copy of (src/lib/db/pregen-offers.ts),
+  // or "" for every other character. A duplicate of a copy keeps it.
+  pregenOriginId: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -67,6 +73,8 @@ type LibraryRow = {
   xp: number;
   sheet_json: string;
   workshop_id: string | null;
+  offered_to_table?: number | null;
+  pregen_origin_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -123,6 +131,8 @@ function mapCharacter(row: LibraryRow): LibraryCharacter {
     xp: row.xp,
     sheet: withRepairedWeights(withKeyedFeatChoices(withStoredGender(withSplitCantrips(parseJson(row.sheet_json, {} as CreateSheetInput))))),
     workshopId: row.workshop_id ?? "",
+    offered: Boolean(row.workshop_id) && row.offered_to_table === 1,
+    pregenOriginId: row.pregen_origin_id ?? "",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -236,9 +246,43 @@ export function setCharacterWorkshop(
   if (!character) {
     return null;
   }
+  // A pregen moved to another workshop, or taken off the roster, is no
+  // longer offered: the toggle was for the table of the workshop it left.
   getDatabase()
-    .prepare(`UPDATE library_characters SET workshop_id = ?, updated_at = ? WHERE id = ?`)
-    .run(workshopId, nowIso(), characterId);
+    .prepare(
+      `UPDATE library_characters SET workshop_id = ?, offered_to_table = CASE WHEN workshop_id = ? THEN offered_to_table ELSE 0 END, updated_at = ? WHERE id = ?`,
+    )
+    .run(workshopId, workshopId, nowIso(), characterId);
+  return getCharacter(characterId);
+}
+
+// Offers a pregen to the players of a table made from its workshop, or
+// takes the offer back (option B: the DM ticks which). Only a player
+// character filed under a workshop can be offered. A seat already taken
+// keeps its copy either way.
+export function setPregenOffered(
+  userId: string,
+  characterId: string,
+  offered: boolean,
+): LibraryCharacter | null {
+  const character = getCharacterForUser(userId, characterId);
+  if (!character || !character.workshopId || (offered && character.role === "companion")) {
+    return null;
+  }
+  getDatabase()
+    .prepare(`UPDATE library_characters SET offered_to_table = ?, updated_at = ? WHERE id = ?`)
+    .run(offered ? 1 : 0, nowIso(), characterId);
+  return getCharacter(characterId);
+}
+
+// Marks a player's library character as their copy of a DM's offered pregen
+// (POST /sheet/offered), so the pregen stays theirs at that table however the
+// copy is seated again (src/lib/db/pregen-offers.ts). Not a field any form
+// writes: only the server, as it makes the copy.
+export function setPregenOrigin(characterId: string, pregenId: string): LibraryCharacter | null {
+  getDatabase()
+    .prepare(`UPDATE library_characters SET pregen_origin_id = ? WHERE id = ?`)
+    .run(pregenId, characterId);
   return getCharacter(characterId);
 }
 
@@ -331,6 +375,10 @@ export function instantiateIntoCampaign(
   campaignId: string,
   userId: string,
   targetLevel: number,
+  // The choices the hero owes, picked on the confirm sheet and applied to
+  // the admitted sheet before it is stored (src/lib/characters/seat-preview.ts
+  // admitLibraryForSeat). Absent: the sheet as the door admitted it.
+  admit: typeof admitLibraryCharacter = admitLibraryCharacter,
 ): CharacterSheet | { error: string; problems?: string[] } {
   const character = getCharacterForUser(userId, characterId);
   if (!character) {
@@ -356,7 +404,7 @@ export function instantiateIntoCampaign(
     return { error: "You already have a character in this campaign." };
   }
   const level = Math.max(1, Math.min(20, targetLevel));
-  const admitted = admitLibraryCharacter(character, campaign, userId, level);
+  const admitted = admit(character, campaign, userId, level);
   if (!admitted.ok) {
     return { error: admitted.error, problems: admitted.problems };
   }
@@ -586,6 +634,10 @@ export function listAssignmentsForCharacter(
 // The portrait travels as a path, like a prepared map's backdrop: it points
 // at a file in public/uploads that both copies can read, and duplicating the
 // image would cost megabytes to show the same face.
+//
+// A duplicate of a player's copy of a DM's offered pregen is that pregen too
+// (pregen_origin_id), so it cannot sit at a table where someone else holds
+// the pregen, or beside the copy it was made from (src/lib/db/pregen-offers.ts).
 export function duplicateCharacter(userId: string, id: string): LibraryCharacter | null {
   const source = getCharacterForUser(userId, id);
   if (!source) {
@@ -602,9 +654,9 @@ export function duplicateCharacter(userId: string, id: string): LibraryCharacter
     .prepare(
       `INSERT INTO library_characters (
          id, user_id, name, role, race, class, subclass, background, level, xp,
-         sheet_json, created_at, updated_at
+         sheet_json, pregen_origin_id, created_at, updated_at
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       copyId,
@@ -618,6 +670,7 @@ export function duplicateCharacter(userId: string, id: string): LibraryCharacter
       source.level,
       source.xp,
       JSON.stringify({ ...source.sheet, name }),
+      source.pregenOriginId,
       now,
       now,
     );

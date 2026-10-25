@@ -3,6 +3,7 @@
 // hit, parks the damage roll too. Split from pc-attack.ts, which has
 // already refused or paid for everything the parked roll carries.
 
+import { getFoe, resolveTargetFoe } from "@/lib/dm/sheet-foe";
 import { tryParry } from "@/lib/dm/enemy-reactions";
 import { getCampaignById } from "@/lib/db/campaigns";
 import {
@@ -11,13 +12,12 @@ import {
   publicPendingRoll,
   type PendingRoll,
 } from "@/lib/db/dm-turns";
-import { getActiveEncounter, getEnemy } from "@/lib/db/encounters";
+import { getActiveEncounter } from "@/lib/db/encounters";
 import type { StoredRoll } from "@/lib/db/rolls";
 import { listSheets } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
 import { adjudicateHit } from "@/lib/dm/attack-logic";
 import { critDamageExpression } from "@/lib/dm/encounter-logic";
-import { resolveEnemyRef } from "@/lib/dm/enemy-damage";
 import { claimHitRiders, liveTypedRiders, strikesAsMagic } from "@/lib/dm/pc-attack-damage";
 import { budgetApplies } from "@/lib/dm/action-budget";
 import type { AttackPlan } from "@/lib/dm/pc-attack-plan";
@@ -35,6 +35,7 @@ import {
   spendFeatureUse,
 } from "@/lib/dm/attack-onhit";
 import { storeBudget } from "@/lib/dm/turn-budget";
+import { SAVAGE_ATTACKER_USED, savageAttackerApplies } from "@/lib/srd/feat-combat";
 import { landNaturalOnHit } from "@/lib/dm/natural-onhit";
 import { rollAgainst } from "@/lib/roll-labels";
 import { markCritRange } from "@/lib/dm/attack-marks";
@@ -68,6 +69,18 @@ function claimParkedFoeSlayer(campaignId: string): boolean {
 
 // Physical dice: park the to-hit roll for the player; the submit route
 // adjudicates it and, on a hit, parks the damage roll too.
+// Savage Attacker on a physical roll: the player rolls the weapon's dice
+// twice and enters the better total, so the once-a-turn mark is spent here.
+function claimSavageAttacker(plan: AttackPlan): boolean {
+  const { budget, encounter, sheet, profile } = plan;
+  if (!budget || !savageAttackerApplies(sheet, { weaponAttack: plan.weaponAttack, melee: !profile.ranged && !plan.atRange }, budget.oncePerTurn)) {
+    return false;
+  }
+  budget.oncePerTurn.push(SAVAGE_ATTACKER_USED);
+  storeBudget(encounter, budget);
+  return true;
+}
+
 export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: string | null) {
   const { campaign, turn, sheet, enemy, profile, riders, context } = plan;
   const { critExtraDice } = strike;
@@ -93,6 +106,7 @@ export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: strin
       ? { critRange: Math.min(plan.weaponAttack ? riders.critRange : 20, markCritRange(plan.marks.applies)) }
       : {}),
     ...(strike.rerollBelow ? { rerollBelow: strike.rerollBelow } : {}),
+    ...(claimSavageAttacker(plan) ? { savageAttacker: true } : {}),
     ...(strike.hasOnHit ? { onHit: strike.onHitSpends } : {}),
     ...(plan.options.nonlethal ? { nonlethal: true } : {}),
     ...(plan.hitSpent.length ? { hitSpent: plan.hitSpent } : {}),
@@ -148,7 +162,7 @@ export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): 
     critRange: context.critRange,
   });
   // Parry: the creature's reaction lifts its AC against a melee hit (enemy-reactions.ts).
-  const parryFoe = fight && context.targetEnemyId ? getEnemy(context.targetEnemyId) : null;
+  const parryFoe = fight && context.targetEnemyId ? getFoe(context.targetEnemyId) : null;
   const parry = judged.hit && !judged.crit && fight && parryFoe && (context as ParkedAttack).melee
     ? tryParry({ encounter: fight, enemy: parryFoe, total: roll.total, natural20: false, ac: context.targetAc, melee: true, attackerUnseen: false })
     : null;
@@ -181,7 +195,7 @@ export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): 
   // Verify the target still stands before asking for damage dice (the lead
   // may have force-ended the encounter while the roll sat parked).
   const encounter = getActiveEncounter(pending.campaignId);
-  const enemy = encounter ? resolveEnemyRef(encounter.id, context.targetEnemyId) : null;
+  const enemy = encounter ? resolveTargetFoe(pending.campaignId, encounter, context.targetEnemyId) : null;
   if (!enemy || enemy.status !== "alive") {
     return `${context.attacker}'s ${context.weapon} attack rolled ${roll.total} vs AC ${context.targetAc}: HIT, but the target is already gone; narrate around it.`;
   }
@@ -311,5 +325,5 @@ export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): 
     context.rerollBelow
       ? `, rerolling any die of ${context.rerollBelow} or less once for Great Weapon Fighting`
       : ""
-  }; the server will apply it to ${enemy.displayName} automatically.`;
+  }${context.savageAttacker ? ", rolling the weapon's dice a second time and keeping the better total (Savage Attacker)" : ""}; the server will apply it to ${enemy.displayName} automatically.`;
 }

@@ -12,10 +12,11 @@ import { appConfirm } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { formatCopper, formatPrice } from "@/lib/srd/currency";
-import { KitButton, LoadFailed, panelField, PanelLoading, SettingToggle } from "./PanelKit";
+import { KitButton, LoadFailed, panelField, PanelLoading, RowMenu, SettingToggle } from "./PanelKit";
 import { MarketShopEditor, type Named } from "./MarketShopEditor";
 import type { StockLine } from "@/lib/dm/shop-logic";
 import type { MarketRequest } from "@/lib/dm/table-tabs";
+import { GameTerm } from "@/components/ui/GameTerm";
 
 // The market (docs/vtt-parity-implementation-plan.md 11.1): the shops at
 // the party's place, stock as tiles with a price chip in coin, a Buy on
@@ -42,7 +43,37 @@ type ShopView = {
   buys: boolean;
   markup: number;
   haggledBy: string[];
+  haggles: Array<{ ids: string[]; steps: number; skill: HaggleSkill }>;
+  // The viewer's own price at this shop, moved by a haggle they were at
+  // the counter for, and that haggle's step (null: they have not haggled).
+  yourMarkup: number;
+  yourHaggle: number | null;
+  // Where that haggle left the viewer's prices, in the server's words.
+  yourPrices: string | null;
+  haggleDc: number;
 };
+
+type HaggleSkill = "persuasion" | "intimidation" | "deception";
+
+// A haggle's outcome for the person who made it, in the rules' own words.
+// `moved` is false at an end of the price ladder, where a step had nowhere
+// to go; `prices` is where it left them, in the server's words.
+function haggleOutcome(steps: number, moved: boolean, prices: string): string {
+  if (steps < 0) {
+    return moved ? `You talked the keeper down: your prices here are ${prices}.` : "You talked the keeper down, but your prices here are already at their lowest.";
+  }
+  if (steps === 0) {
+    return "The keeper holds firm: your prices stay where they were.";
+  }
+  return moved
+    ? `A bad failure (you missed the DC by 5 or more): your prices here are ${prices}.`
+    : "A bad failure (you missed the DC by 5 or more), but your prices here are already at their highest.";
+}
+
+// Where the viewer's haggle left their prices, for the line under a shop.
+function haggledLine(steps: number, prices: string): string {
+  return steps < 0 ? `You haggled here: your prices are ${prices}.` : steps === 0 ? "You haggled here: the keeper held firm." : `You haggled here and pushed too hard: your prices are ${prices}.`;
+}
 
 const KINDS = ["general", "smith", "apothecary", "outfitter", "curiosities"] as const;
 const SIZES = ["hamlet", "village", "town", "city"] as const;
@@ -105,6 +136,9 @@ export function MarketPanel({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [spotlight, setSpotlight] = useState("");
+  // Prices are the viewer's own (a haggle they were at the counter for), so
+  // a Play as switch to another of their characters reads the shops again.
+  const viewerId = mySheet?.id ?? "";
 
   useEffect(() => {
     let cancelled = false;
@@ -127,7 +161,7 @@ export function MarketPanel({
     return () => {
       cancelled = true;
     };
-  }, [campaignId, refreshKey, reload, settle, isDm]);
+  }, [campaignId, refreshKey, reload, settle, isDm, viewerId]);
 
   // Deferred a tick, as the hero page's heading is: the panel paints the
   // shops on the render that loads them, after this effect is scheduled.
@@ -146,7 +180,7 @@ export function MarketPanel({
     return () => window.clearTimeout(id);
   }, [focus, loadedShops]);
 
-  async function counter(shop: ShopView, action: "buy" | "sell" | "haggle", item = "") {
+  async function counter(shop: ShopView, action: "buy" | "sell" | "haggle", item = "", skill: HaggleSkill = "persuasion") {
     setBusy(`${shop.id}:${action}:${item}`);
     setError("");
     setUnpriced(null);
@@ -154,7 +188,7 @@ export function MarketPanel({
       const response = await fetch(`/api/campaigns/${campaignId}/shops/${shop.id}/trade`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, item, qty: 1, characterId: mySheet?.id }),
+        body: JSON.stringify({ action, item, qty: 1, characterId: mySheet?.id, ...(action === "haggle" ? { skill } : {}) }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok && data.unpriced === true) {
@@ -162,7 +196,9 @@ export function MarketPanel({
       } else if (!response.ok) {
         setError(String(data.error ?? "The keeper shakes their head."));
       } else if (action === "haggle") {
-        setError(data.result?.success ? `Haggled well: prices ${data.result.prices}.` : `The keeper is unmoved: prices ${data.result?.prices ?? "rise"}.`);
+        // The haggler's new markup against the shop's own: equal when the
+        // step met an end of the ladder.
+        setError(haggleOutcome(Number(data.result?.steps) || 0, Number(data.result?.markup) !== shop.markup, String(data.result?.prices ?? "")));
       }
       setReload((current) => current + 1);
     } finally {
@@ -296,8 +332,19 @@ export function MarketPanel({
       ) : null}
       {shops.map((shop) => {
         const canHaggle = Boolean(mySheet && !shop.haggledBy.includes(mySheet.id));
+        // A keeper falls for a lie once: after one Deception here, nobody may try another.
+        const canDeceive = canHaggle && !shop.haggles.some((deal) => deal.skill === "deception");
+        // The haggle's skills: the menu beside Haggle and the shop's own
+        // right-click or long-press menu offer the same list.
+        const haggleItems: ContextMenuItem[] = canHaggle
+          ? [
+              { id: "haggle", label: "Haggle (Persuasion)", glyph: "skill-persuasion", disabled: Boolean(busy), onSelect: () => void counter(shop, "haggle") },
+              { id: "haggle-intimidation", label: "Haggle by Intimidation (a bad failure: two steps up)", glyph: "skill-intimidation", disabled: Boolean(busy), onSelect: () => void counter(shop, "haggle", "", "intimidation") },
+              ...(canDeceive ? [{ id: "haggle-deception", label: "Haggle by Deception (works once per shop)", glyph: "skill-deception", disabled: Boolean(busy), onSelect: () => void counter(shop, "haggle", "", "deception") }] : []),
+            ]
+          : [];
         const shopItems: ContextMenuItem[] = [
-          ...(canHaggle ? [{ id: "haggle", label: "Haggle", glyph: "skill-persuasion", disabled: Boolean(busy), onSelect: () => void counter(shop, "haggle") }] : []),
+          ...haggleItems,
           ...(canPrep ? [{ id: "edit", label: "Edit the shop and its shelf", glyph: "ui-edit", separated: canHaggle, onSelect: () => setEditing(shop.id) }] : []),
           ...(canPrep ? [{ id: "close", label: `Close ${shop.name}`, glyph: "ui-lock", tone: "danger" as const, onSelect: () => void close(shop) }] : []),
         ];
@@ -336,13 +383,32 @@ export function MarketPanel({
                   {shop.kind}
                   {shop.keeperName ? `, kept by ${shop.keeperName}` : ""}
                   {steersStory && shop.locationName ? ` at ${shop.locationName}` : ""}
-                  {shop.markup !== 1 ? ` (prices ${shop.markup > 1 ? "+" : ""}${Math.round((shop.markup - 1) * 100)}%)` : ""}
+                  {shop.yourMarkup !== 1 ? ` (prices ${shop.yourMarkup > 1 ? "+" : ""}${Math.round((shop.yourMarkup - 1) * 100)}%)` : ""}
+                  {shop.kind === "curiosities" || shop.kind === "apothecary" ? (
+                    <>
+                      {" · "}
+                      {/* A finger-sized target (40px) that keeps the line's height. */}
+                      <GameTerm id="magic_item_prices" className="-my-3.5 inline-block py-3.5">
+                        How magic is priced
+                      </GameTerm>
+                    </>
+                  ) : null}
                 </p>
               </div>
               {canHaggle ? (
-                <KitButton disabled={Boolean(busy)} busy={busy === `${shop.id}:haggle:`} onClick={() => void counter(shop, "haggle")}>
-                  Haggle
-                </KitButton>
+                <>
+                  <KitButton disabled={Boolean(busy)} busy={busy === `${shop.id}:haggle:`} onClick={() => void counter(shop, "haggle")}>
+                    Haggle
+                  </KitButton>
+                  {/* One tap haggles by Persuasion; this door opens the other
+                      skills, the same list the shop's own menu holds. */}
+                  <RowMenu
+                    items={haggleItems}
+                    label={`Haggle at ${shop.name}`}
+                    trigger={{ label: "Haggle with another skill", icon: <ChevronDown className="size-4" aria-hidden="true" /> }}
+                    className="-ml-1.5"
+                  />
+                </>
               ) : null}
               {canPrep ? (
                 <>
@@ -355,6 +421,17 @@ export function MarketPanel({
                 </>
               ) : null}
             </ContextMenu>
+            {canHaggle ? (
+              <p data-haggle-rules="" className="text-pretty text-[11px] leading-snug text-stone-500">
+                Haggling is a Persuasion check against DC {shop.haggleDc}: win and your prices drop a step, fail and they stay where they were, fail by 5 or
+                more and they rise a step. One try each, and the price you get is yours, not the whole party&apos;s. The menu beside Haggle offers
+                Intimidation and Deception instead.
+              </p>
+            ) : mySheet && shop.yourHaggle !== null ? (
+              <p data-haggle-rules="" className="text-[11px] leading-snug text-stone-500">
+                {haggledLine(shop.yourHaggle, shop.yourPrices ?? "")}
+              </p>
+            ) : null}
             {/* Columns follow the panel, not the window: the side panel is
                 narrow on the widest screen, and three columns there left
                 no room for a price. */}

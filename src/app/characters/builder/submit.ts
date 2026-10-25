@@ -23,6 +23,7 @@ import type { BuilderDerived } from "./useBuilderDerived";
 import type { BuilderState, EquipmentItem } from "./useBuilderState";
 import { textKey } from "@/lib/language/text-logic";
 import { featChoice } from "@/lib/schemas/sheet";
+import { normalizeAttraction } from "@/lib/attraction";
 
 export type BuilderResult = { level: number; sheet: CreateSheetInput };
 
@@ -147,8 +148,11 @@ export function ancestryBlocks(
   if (race.asiChoice && racialAsi.filter(Boolean).length < race.asiChoice.count) {
     owed.push(block("racialAsi", `Pick which abilities your ${race.name} heritage makes stronger (ability score increase).`));
   }
+  const racialFrom = race.skillChoice?.from ?? [];
   if (race.skillChoice && racialSkills.filter(Boolean).length < race.skillChoice.count) {
     owed.push(block("racialSkills", `Pick the skills your ${race.name} heritage trained (skill proficiencies).`));
+  } else if (racialFrom.length && racialSkills.some((skill) => skill && !racialFrom.includes(skill))) {
+    owed.push(block("racialSkills", `Your ${race.name} heritage trains only some skills: pick its skill proficiencies from its list.`));
   }
   if (race.toolChoice && !racialTool) {
     owed.push(block("racialTool", `Pick a tool your ${race.name} knows how to use (tool proficiency).`));
@@ -578,6 +582,9 @@ export function buildBuilderResult(input: SubmitInput): BuilderResult {
       background: background.id,
       alignment: state.alignment,
       gender: state.gender,
+      // Who they are drawn to (issue 501): identity, so an edit keeps it
+      // the way it keeps the gender, because the builder holds it.
+      attraction: normalizeAttraction(state.attraction),
       appearance: state.appearance.trim(),
       abilities,
       maxHp: preview.maxHp,

@@ -11,6 +11,7 @@ import {
   WORLD_RECORD_KINDS,
   IMPORT_KIND_LABELS,
   SINGULAR_KINDS,
+  standingUnsaid,
   type ImportKind,
   type ImportPlan,
 } from "@/lib/workshop/import";
@@ -89,6 +90,23 @@ export function ContentImportPicker({
   const [note, setNote] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   // The list of sources could not be read, which is not "nothing to copy".
   const [sourcesFailed, setSourcesFailed] = useState(false);
+  // What earlier imports kept as this campaign has it and the author has
+  // not settled yet (src/lib/worldforge/import-kept.ts), read from the
+  // entries themselves, so it is said again after a reload. The entry's
+  // page in the World tab is where the author chooses.
+  const [standing, setStanding] = useState<string[]>([]);
+  const readStanding = useCallback(() => {
+    if (!campaignId) return Promise.resolve();
+    return fetch(`/api/campaigns/${campaignId}/import?kept=1`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => setStanding(Array.isArray(data?.kept) ? data.kept : []))
+      .catch(() => {
+        // transient; the next import reads it again
+      });
+  }, [campaignId]);
+  useEffect(() => {
+    void readStanding();
+  }, [readStanding]);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,6 +233,7 @@ export function ContentImportPicker({
       // Refetching here as well raced it with the old ticks and left the
       // last import's warnings and notes on screen.
       onChange({ ...selection, select: [] });
+      void readStanding();
       onImported?.(outcome.copied);
     } finally {
       setBusy(false);
@@ -246,8 +265,19 @@ export function ContentImportPicker({
     );
   }
 
+  // Said beside an import's note too, less what the note already says.
+  const unsaid = standingUnsaid(standing, note?.text);
+
   return (
     <div className="space-y-3">
+      {unsaid.length ? (
+        <p className="flex items-start gap-1.5 text-xs text-amber-300/90" data-testid="import-kept-standing">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            Kept from an earlier import, until you choose on the entry in the World tab: {unsaid.join(" ")}
+          </span>
+        </p>
+      ) : null}
       <div className="block">
         <FieldLabel className="mb-1 block">Start from</FieldLabel>
         <Select

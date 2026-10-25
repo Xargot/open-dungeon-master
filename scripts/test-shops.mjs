@@ -21,11 +21,20 @@ const {
   addStock,
   askingPriceCp,
   costToCopper,
+  BAD_FAILURE_MARGIN,
+  dealFor,
+  dealInWords,
   findStockLine,
-  haggleStep,
+  haggledIds,
+  haggleSteps,
+  markupFor,
+  normalizeHaggles,
+  normalizeHaggleSkill,
   offerPriceCp,
   renderShopsForPrompt,
   restockDue,
+  shiftMarkup,
+  stepMoves,
   stockFromPool,
   takeStock,
 } = await import("../src/lib/dm/shop-logic.ts");
@@ -58,11 +67,64 @@ test("pack costs read into copper and prices follow the markup", () => {
   assert.equal(offerPriceCp(1), 1);
 });
 
-test("a haggle walks the ladder a step either way and never off it", () => {
-  assert.equal(haggleStep(1, true), 0.9);
-  assert.equal(haggleStep(1, false), 1.1);
-  assert.equal(haggleStep(0.8, true), 0.8);
-  assert.equal(haggleStep(2, false), 2);
+test("a haggle walks the ladder by steps and never off it; no step leaves the markup as it was", () => {
+  assert.equal(shiftMarkup(1, -1), 0.9);
+  assert.equal(shiftMarkup(1, 1), 1.1);
+  assert.equal(shiftMarkup(1, 2), 1.25);
+  assert.equal(shiftMarkup(0.8, -1), 0.8);
+  assert.equal(shiftMarkup(2, 1), 2);
+  assert.equal(shiftMarkup(1.5, 2), 2);
+  assert.equal(shiftMarkup(1.2, 0), 1.2, "held firm keeps an off-ladder markup exactly");
+});
+
+test("at an end of the ladder a deal is said as the end it stopped at, never as a step it did not take", () => {
+  assert.equal(dealInWords(1, -1), "a step lower");
+  assert.equal(dealInWords(1, 1), "a step higher");
+  assert.equal(dealInWords(1.25, 2), "two steps higher");
+  assert.equal(dealInWords(1.1, 0), "unchanged");
+  assert.equal(dealInWords(0.8, -1), "already at their lowest");
+  assert.equal(dealInWords(2, 1), "already at their highest");
+  assert.equal(dealInWords(2, 2), "already at their highest");
+  assert.equal(dealInWords(1.5, 2), "a step higher, as high as they go");
+  assert.equal(stepMoves(0.8, -1), false);
+  assert.equal(stepMoves(0.85, -1), true, "an off-ladder price still drops to the bottom rung");
+  const shelf = { name: "Cheap Jack's", keeperName: "", kind: "general", buys: true, stock: [], markup: 0.8 };
+  const block = renderShopsForPrompt(
+    [
+      { ...shelf, haggles: [{ ids: ["ann"], steps: -1, skill: "persuasion" }] },
+      { ...shelf, name: "Dear Jack's", markup: 2, haggles: [{ ids: ["bo"], steps: 1, skill: "persuasion" }] },
+    ],
+    (id) => ({ ann: "Ann", bo: "Bo" })[id],
+  );
+  assert.match(block, /Haggled: Ann pay these prices \(already at their lowest\)/);
+  assert.match(block, /Haggled: Bo pay these prices \(already at their highest\)/);
+  assert.doesNotMatch(block, /pay prices a step/);
+});
+
+test("a won haggle is a step down, a failure holds, a failure by 5 or more is a step up (two for Intimidation)", () => {
+  assert.equal(BAD_FAILURE_MARGIN, 5);
+  for (const skill of ["persuasion", "intimidation", "deception"]) {
+    assert.equal(haggleSteps(skill, 15, 15), -1, `${skill} meets the DC`);
+    assert.equal(haggleSteps(skill, 11, 15), 0, `${skill} misses by 4`);
+  }
+  assert.equal(haggleSteps("persuasion", 10, 15), 1, "misses by 5");
+  assert.equal(haggleSteps("deception", 1, 15), 1);
+  assert.equal(haggleSteps("intimidation", 10, 15), 2);
+  assert.equal(normalizeHaggleSkill(" Intimidation "), "intimidation");
+  assert.equal(normalizeHaggleSkill("bribery"), null);
+});
+
+test("a haggle's price is for the characters it names; everyone else pays the shop's own", () => {
+  const shop = { markup: 1.1, haggles: normalizeHaggles([{ ids: ["ann", "bo"], steps: -1, skill: "persuasion" }, { ids: ["cy"], steps: 2, skill: "intimidation" }, "old-id"]) };
+  assert.equal(markupFor(shop, "ann"), 1);
+  assert.equal(markupFor(shop, "bo"), 1);
+  assert.equal(markupFor(shop, "cy"), 1.5);
+  assert.equal(markupFor(shop, "old-id"), 1.1, "a haggle stored as a bare id used its try at the shop's price");
+  assert.equal(markupFor(shop, "dee"), 1.1);
+  assert.equal(markupFor(shop, null), 1.1);
+  assert.equal(dealFor(shop, "dee"), null);
+  assert.deepEqual(haggledIds(shop.haggles), ["ann", "bo", "cy", "old-id"]);
+  assert.deepEqual(normalizeHaggles([{ ids: [], steps: 1 }, { ids: ["x", "x"], steps: 9, skill: "bribery" }, 3]), [{ ids: ["x"], steps: 2, skill: "persuasion" }]);
 });
 
 test("stock lines are found by their whole name, taken down and put back with the row they are", () => {
@@ -122,25 +184,29 @@ test("a general store always carries the everyday basics, one line each, ahead o
   }
 });
 
-test("a magic item is priced by its rarity, as SRD 5.2 sets it", () => {
-  const plate = (base) => (base === "plate" ? 150000 : null);
-  const value = (name, rarity, category) => magicItemValueCp({ name, rarity, category }, plate);
-  assert.equal(value("Cloak of Protection", "uncommon", "wondrous item"), 40000);
+test("a magic item is priced by its rarity under the 2014 rules: the top of each value band, a consumable half, nothing legendary for sale", () => {
+  const value = (name, rarity, category) => magicItemValueCp({ name, rarity, category });
+  assert.equal(value("Cloak of Protection", "uncommon", "wondrous item"), 50000);
   assert.equal(value("Potion of Climbing", "common", "potion"), 5000, "a consumable is worth half");
-  assert.equal(value("Ammunition +1", "uncommon", "weapon"), 20000, "ammunition is a consumable");
-  assert.equal(value("Plate Armor +1", "rare", "armor (plate)"), 550000, "+1 plate is the rare 4,000 gp and plate's 1,500");
-  assert.equal(value("Ring of Regeneration", "Very Rare ", "ring"), 4000000);
+  assert.equal(value("Ammunition +1", "uncommon", "weapon"), 25000, "ammunition is a consumable");
+  assert.equal(value("Plate Armor +1", "rare", "armor (plate)"), 500000, "+1 plate is rare, with nothing added for the plate");
+  assert.equal(value("Ring of Regeneration", "Very Rare ", "ring"), 5000000);
+  assert.equal(value("Staff of the Magi", "legendary", "staff"), null, "a legendary item has no price");
   assert.equal(value("Vorpal Sword", "legendary", "weapon (any sword)"), null, "which sword it is was left open");
   assert.equal(value("Belt of Giant Strength", "rarity varies", "wondrous item"), null);
   assert.equal(value("Spell Scroll", "common", "scroll"), null, "a scroll is priced by a spell level the row does not give");
+  assert.equal(value("Scroll of Conjuring", "uncommon", "scroll"), 25000, "a scroll that holds no spell is its own rarity, as a consumable");
+  assert.equal(value("Spell Scroll (Fireball)", "", "scroll"), 25000, "a 3rd-level scroll is uncommon (SRD 5.1, Spell Scroll)");
+  assert.equal(value("Spell Scroll (Wish)", "", "scroll"), null, "a 9th-level scroll is legendary");
   assert.equal(value("Orb of Dragonkind", "artifact", "wondrous item"), null);
-  assert.deepEqual(bonusItemValue("armor", 1, 150000), { cp: 550000, rarity: "rare" }, "+1 plate");
-  assert.deepEqual(bonusItemValue("weapon", 3, 1500), { cp: 4001500, rarity: "very rare" }, "+3 longsword");
-  assert.deepEqual(bonusItemValue("shield", 2, 1000), { cp: 401000, rarity: "rare" }, "+2 shield");
-  assert.equal(bonusItemValue("weapon", 4, 1500), null);
+  assert.deepEqual(bonusItemValue("armor", 1), { cp: 500000, rarity: "rare" }, "+1 plate");
+  assert.deepEqual(bonusItemValue("weapon", 3), { cp: 5000000, rarity: "very rare" }, "+3 longsword");
+  assert.deepEqual(bonusItemValue("shield", 2), { cp: 500000, rarity: "rare" }, "+2 shield");
+  assert.equal(bonusItemValue("armor", 3), null, "+3 armor is legendary");
+  assert.equal(bonusItemValue("weapon", 4), null);
 });
 
-test("a curiosity shop sells commons in a village and saves uncommon and rare magic for a city", () => {
+test("a curiosity shop stocks common magic items in any settlement, and nothing rarer by chance (SRD 5.1, Selling Treasure)", () => {
   let seed = 3;
   const random = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
   const pool = ["common", "uncommon", "rare", "very rare"].flatMap((rarity) =>
@@ -150,17 +216,15 @@ test("a curiosity shop sells commons in a village and saves uncommon and rare ma
   assert.equal(village.length, 10);
   assert.ok(village.every((line) => line.itemName.startsWith("common ")), village.map((line) => line.itemName).join(", "));
   const city = stockFromPool(pool, "city", random).map((line) => line.itemName);
-  const count = (rarity) => city.filter((name) => name.startsWith(`${rarity} `)).length;
   assert.equal(city.length, 24);
-  assert.equal(count("very rare"), 0, "nothing rarer than rare is for sale");
-  assert.ok(count("common") > count("rare") && count("rare") > 0, city.join(", "));
+  assert.ok(city.every((name) => name.startsWith("common ")), city.join(", "));
   // From the pack itself, when the runner has it.
   const curiosities = stockPool("curiosities");
   if (curiosities.length) {
     const shelf = stockFromPool(curiosities, "village");
     assert.equal(shelf.length, 10, "the village shop opened with bare shelves");
     assert.ok(shelf.every((line) => line.priceCp === 5000 || line.priceCp === 10000), shelf.map((line) => `${line.itemName} ${line.priceCp}`).join(", "));
-    assert.ok(stockFromPool(curiosities, "city").every((line) => line.priceCp <= 550000));
+    assert.ok(stockFromPool(curiosities, "city").every((line) => line.priceCp <= 10000), "commons only");
     assert.equal(curiosities.find((item) => item.name === "Potion of Healing")?.cost, "5000 cp", "a potion of healing at the 50 gp the gear list asks");
     const apothecary = stockPool("apothecary").map((item) => item.name);
     assert.ok(apothecary.includes("Potion of Climbing"), apothecary.join(", "));
@@ -255,13 +319,14 @@ test("selling pays half list for a known item and restocks the shelf", () => {
   assert.match(String(lacking.error), /does not carry "Longsword"/);
 });
 
-test("a keeper buys a magic item back at half what the shelf would ask, and none rarer than the shop sells", () => {
+test("a keeper buys back a potion or a scroll at half its value, and no other magic item (SRD 5.1, Selling Treasure)", () => {
   if (!stockPool("curiosities").length) {
     return; // the rarity comes from the content pack
   }
   const owner = createUser("wren", "x");
   const carried = [
     { name: "Potion of Climbing", qty: 1 },
+    { name: "Pozione di scalata", srdName: "Potion of Climbing", qty: 1 },
     { name: "Cloak of Protection", qty: 1 },
     { name: "Ring of Regeneration", qty: 1 },
   ];
@@ -271,31 +336,44 @@ test("a keeper buys a magic item back at half what the shelf would ask, and none
   assert.equal(sold.ok, true, JSON.stringify(sold));
   assert.equal(getSheetById(wren.id).gold, 25, "half the 50 gp a common potion is worth");
   assert.equal(getShop(odd.id).stock.find((line) => line.itemName === "Potion of Climbing").priceCp, 5000);
-  const cloak = handleSellItem(campaign, JSON.stringify({ characterId: wren.id, shop: odd.id, item: "Cloak of Protection", priceCp: 100 }));
-  assert.equal(cloak.refused, "rules", JSON.stringify(cloak));
-  assert.match(String(cloak.error), /uncommon magic item changes hands only in a city/);
-  const ring = handleSellItem(campaign, JSON.stringify({ characterId: wren.id, shop: odd.id, item: "Ring of Regeneration" }));
-  assert.equal(ring.refused, "rules", JSON.stringify(ring));
-  assert.match(String(ring.error), /only by the wealthiest nobles/);
-  assert.equal(getSheetById(wren.id).equipment.length, 2, "a refused sale took something");
+  // A potion named in the table's language sells as the row its srdName names.
+  const named = handleSellItem(campaign, JSON.stringify({ characterId: wren.id, shop: odd.id, item: "Pozione di scalata" }));
+  assert.equal(named.ok, true, JSON.stringify(named));
+  assert.equal(getSheetById(wren.id).gold, 50);
   const city = insertShop(campaign.id, { name: "The Gilded Owl", kind: "curiosities", size: "city", markup: 1, stock: [] });
-  assert.equal(handleSellItem(campaign, JSON.stringify({ characterId: wren.id, shop: city.id, item: "Cloak of Protection" })).ok, true);
-  assert.equal(getSheetById(wren.id).gold, 225, "half the cloak's 400 gp");
+  for (const item of ["Cloak of Protection", "Ring of Regeneration"]) {
+    for (const where of [odd, city]) {
+      const refused = handleSellItem(campaign, JSON.stringify({ characterId: wren.id, shop: where.id, item, priceCp: 100 }));
+      assert.equal(refused.refused, "rules", JSON.stringify(refused));
+      assert.match(String(refused.error), /only one of the wealthiest nobles/);
+    }
+  }
+  assert.equal(getSheetById(wren.id).equipment.length, 2, "a refused sale took something");
 });
 
-test("a haggle moves the markup a step and is one try per character", () => {
-  const result = handleHaggle(campaign, JSON.stringify({ characterId: marla.id, shop: shop.id }));
-  assert.equal(result.ok, true);
-  assert.ok(result.markup === 0.9 || result.markup === 1.1, `markup ${result.markup}`);
-  assert.equal(getShop(shop.id).markup, result.markup);
+test("a haggle leaves the shop's own markup alone, is one try per character, and is shared with who was present", () => {
+  const before = getShop(shop.id).markup;
+  const result = handleHaggle(campaign, JSON.stringify({ characterId: marla.id, shop: shop.id, present: ["Pike"] }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.for, ["Marla", "Pike"]);
+  assert.match(result.outcome, /Anyone else pays the shop's normal price/);
+  const after = getShop(shop.id);
+  assert.equal(after.markup, before, "the shop's own price did not move");
+  assert.deepEqual(after.haggles, [{ ids: [marla.id, pike.id], steps: result.steps, skill: "persuasion" }]);
   assert.match(String(handleHaggle(campaign, JSON.stringify({ characterId: marla.id, shop: shop.id })).error), /already tried/);
+  assert.match(String(handleHaggle(campaign, JSON.stringify({ characterId: pike.id, shop: shop.id })).error), /already tried/, "a companion at the counter used their try");
+  assert.equal(handleHaggle(campaign, JSON.stringify({ characterId: marla.id, shop: shop.id, present: ["Nobody"] })).retry, true);
+  assert.equal(handleHaggle(campaign, JSON.stringify({ characterId: marla.id, shop: shop.id, skill: "bribery" })).retry, true);
 });
 
-test("the prompt block names the shop and its prices", () => {
-  const block = renderShopsForPrompt(listShops(campaign.id).map((entry) => ({ ...entry, keeperName: "" })));
+test("the prompt block names the shop, its prices, and who haggled there", () => {
+  const names = { [marla.id]: "Marla", [pike.id]: "Pike" };
+  const block = renderShopsForPrompt(listShops(campaign.id).map((entry) => ({ ...entry, keeperName: "" })), (id) => names[id] ?? id);
   assert.match(block, /SHOPS HERE/);
+  assert.match(block, /only for the characters it names/);
   assert.match(block, /Marla's Sundries/);
   assert.match(block, /Plate Armor x1 at/);
+  assert.match(block, /Haggled: Marla and Pike pay /);
   assert.equal(renderShopsForPrompt([]), "");
 });
 

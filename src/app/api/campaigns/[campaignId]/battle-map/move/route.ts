@@ -1,4 +1,5 @@
 import { readiedReleaseFor } from "@/lib/dm/readied-release";
+import { tokenSides } from "@/lib/dm/combatant";
 import { z } from "zod";
 import { actingSheetFor } from "@/lib/character-seat";
 import { capsFor, isErrorResponse, requireMember } from "@/lib/campaign-api";
@@ -12,7 +13,7 @@ import {
   moveToken,
 } from "@/lib/db/battle-maps";
 import { buildPlayerMapView, footprintLookup, occupiedTiles, pcMoveBudget, type PlayerMapView } from "@/lib/battlemap/view";
-import { boardState, forgetMoves, keepMove, sightedIds, stepFeet, type MoveStep } from "@/lib/battlemap/move-undo";
+import { boardState, forgetMoves, keepMove, revealedSince, sightOf, stepFeet, type MoveStep } from "@/lib/battlemap/move-undo";
 import { findPath, reachableTiles, speedToTiles } from "@/lib/battlemap/movement";
 import { pcMoveTraits } from "@/lib/battlemap/passage";
 import { tileIndex } from "@/lib/battlemap/types";
@@ -22,6 +23,7 @@ import { planDoorFx } from "@/lib/battlemap/fx-plan";
 import { getCampaignById } from "@/lib/db/campaigns";
 import { budgetApplies } from "@/lib/dm/action-budget";
 import { resolveOpportunityAttacks } from "@/lib/dm/opportunity";
+import { riskyOrderGate } from "@/lib/dm/party-conduct";
 import { canAct } from "@/lib/dm/can-act";
 import { removeConditions } from "@/lib/dm/condition-logic";
 import { awayFromFear, fearSourceAt } from "@/lib/dm/enemy-approach";
@@ -170,13 +172,13 @@ export async function POST(
   // back afterwards (src/lib/battlemap/move-undo.ts): only a fight's own
   // walk on its own turn is kept, and only when nothing answered it.
   const undoable = !scene && !readied;
-  const sightedBefore = undoable ? sightedIds(buildPlayerMapView(campaignId, user.id)) : null;
+  const sightBefore = undoable ? sightOf(buildPlayerMapView(campaignId, user.id)) : null;
   const settle = (view: PlayerMapView | null, lasting: boolean, step: Omit<MoveStep, "sheetId" | "tokenId" | "state">) => {
     if (!undoable) {
       return;
     }
     const live = getActiveBoard(campaignId);
-    const revealed = sightedBefore !== null && [...sightedIds(view)].some((id) => !sightedBefore.has(id));
+    const revealed = sightBefore !== null && revealedSince(sightBefore, view);
     if (lasting || revealed || !live || live.id !== encounter.id) {
       forgetMoves(encounter.id);
       return;
@@ -227,6 +229,7 @@ export async function POST(
     sheet,
     footprintOf: footprintLookup(enemiesById),
     enemySize: (refId) => enemiesById.get(refId)?.stats.size,
+    sideOf: tokenSides(encounter),
   }), map, "pc", sheet.id);
   const reach = reachableTiles(
     map.terrain,
@@ -298,6 +301,12 @@ export async function POST(
   // Dragging the creature they grapple (src/lib/dm/drag.ts): every square
   // costs double unless it is two sizes smaller, and it is set down beside
   // them where they stop, so the grapple holds.
+  // A companion wary of its commander will not walk out of a foe's reach
+  // on their word (issue 503, src/lib/dm/party-conduct.ts).
+  const refusedOrder = campaign && path && !readied ? riskyOrderGate(campaign, sheet, user.id, [from, ...path], turnState?.disengaged ?? false) : null;
+  if (refusedOrder) {
+    return Response.json({ error: refusedOrder }, { status: 409 });
+  }
   let spend = cost;
   let carried: Array<{ token: (typeof tokens)[number]; at: { x: number; y: number } }> = [];
   if (parsed.data.drag && !scene) {
