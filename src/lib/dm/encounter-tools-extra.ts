@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Campaign } from "@/lib/db/campaigns";
-import { getActiveEncounter, patchEnemyConditions, patchEnemyHp } from "@/lib/db/encounters";
+import { releaseLostPins } from "@/lib/dm/grappler-pin";
+import { getActiveEncounter, listEnemies, patchEnemyConditions, patchEnemyHp } from "@/lib/db/encounters";
 import { getBattleMapForEncounter, removeTokenByRef } from "@/lib/db/battle-maps";
 import type { DmTurn } from "@/lib/db/dm-turns";
 import { finishEncounter, publishEncounter, resolveEnemyRef, unknownEnemyRef } from "@/lib/dm/enemy-damage";
@@ -300,6 +301,8 @@ function handleEnemyCondition(
   }
   const remaining = enemy.conditions.filter((entry) => !matches(entry));
   patchEnemyConditions(enemy.id, remaining, pruneMeta(remaining, enemy.conditionMeta));
+  // A grapple let go ends the Grappler's own pin restraint (grappler-pin.ts).
+  releaseLostPins(campaign);
   publishEncounter(campaign.id);
   return { ok: true, name: enemy.displayName, cleared: removed.join(", ") };
 }
