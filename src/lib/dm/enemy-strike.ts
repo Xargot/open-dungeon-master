@@ -90,7 +90,7 @@ export function enemyStrikesEnemy(
   if (!pool.length && !asked) {
     return { error: `${attacker.displayName} has no attack to make; narrate a different action.`, retry: true };
   }
-  const planned = plannedSwings(attacker.stats, pool.length ? pool : attacks, asked, { single: input.single });
+  const planned = plannedSwings(attacker.stats, pool.length ? pool : attacks, asked, { single: input.single, rollCount: (dice) => rollExpression(dice).total });
   // Haste's extra action is one weapon attack (SRD 5.1), on a creature's row
   // as on a character (enemy-attack.ts).
   if (input.haste && planned.some((attack) => attack.spellAttack)) {
