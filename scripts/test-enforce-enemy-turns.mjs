@@ -219,6 +219,31 @@ await test("Played for the lead, a cult fanatic out of melee reach throws one da
   }
 });
 
+// A bandit captain (SRD 5.1): "three melee attacks: two with its scimitar
+// and one with its dagger. Or the captain makes two ranged attacks with its
+// daggers." Both routines were read, but a dagger asked for took the first
+// that holds it, so out of reach the captain walked up and threw one dagger
+// after two scimitar swings that could not land.
+const CAPTAIN = {
+  attacks: [
+    { name: "Scimitar", toHit: 5, damage: "1d6+3", type: "slashing", mode: "melee", reach: 5 },
+    { name: "Dagger", toHit: 5, damage: "1d4+3", type: "piercing", mode: "both", reach: 5, range: { normal: 20, long: 60 } },
+  ],
+  attacksPerTurn: 3,
+  routines: [[{ attack: "Scimitar", count: 2 }, { attack: "Dagger", count: 1 }], [{ attack: "Dagger", count: 2 }]],
+  traits: ["Multiattack: The captain makes three melee attacks: two with its scimitar and one with its dagger. Or the captain makes two ranged attacks with its daggers."],
+};
+
+await test("Played for the lead, a bandit captain out of melee reach throws its two daggers; one that can walk in swings its scimitar twice and its dagger once.", async () => {
+  for (const [at, expected] of [[[11, 2], ["Dagger", "Dagger"]], [[6, 2], ["Scimitar", "Scimitar", "Dagger"]]]) {
+    const [enemy] = await stage();
+    const before = enemyRolls(enemy).length;
+    await playTheRest(enemy, at, CAPTAIN);
+    const made = enemyRolls(enemy).slice(0, enemyRolls(enemy).length - before);
+    assert.deepEqual(made.map((roll) => /Scimitar|Dagger/.exec(roll.detail)?.[0]).sort(), [...expected].sort(), `from ${at}: ${made.map((roll) => roll.detail).join(" | ")}`);
+  }
+});
+
 await test("Played for the lead, a thug that can walk into melee still swings its Mace twice.", async () => {
   const [enemy] = await stage();
   const before = enemyRolls(enemy).length;

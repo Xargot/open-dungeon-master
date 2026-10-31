@@ -217,6 +217,28 @@ await test("A medusa whose Multiattack sets its melee routine off with dashes, a
   }
 });
 
+// The bandit captain's second sentence is a routine of its own (SRD 5.1),
+// and the turn takes whichever routine lands: out of melee reach, the two
+// thrown daggers.
+await test("A bandit captain's Multiattack reads as its melee routine or two thrown daggers, and the turn takes the one whose swings land.", () => {
+  const captain = {
+    name: "Bandit Captain", size: "Medium", type: "Humanoid", armor_class: 15, hit_points: 65, cr: 2,
+    actions: [
+      { name: "Multiattack", desc: "The captain makes three melee attacks: two with its scimitar and one with its dagger. Or the captain makes two ranged attacks with its daggers." },
+      { name: "Scimitar", desc: "Melee Weapon Attack: +5 to hit, reach 5 ft., one target. Hit: 6 (1d6 + 3) slashing damage.", attack_bonus: 5, damage_dice: "1d6", damage_bonus: 3 },
+      { name: "Dagger", desc: "Melee or Ranged Weapon Attack: +5 to hit, reach 5 ft. or range 20/60 ft., one target. Hit: 5 (1d4 + 3) piercing damage.", attack_bonus: 5, damage_dice: "1d4", damage_bonus: 3 },
+    ],
+  };
+  for (const row of [captain, ...(world.hasPack ? [srdRow("bandit-captain")] : [])]) {
+    const stats = parseMonster(row, 2);
+    const dagger = stats.attacks.find((attack) => attack.name === "Dagger");
+    const names = (swings) => swings.map((swing) => swing.name);
+    assert.deepEqual(names(plannedSwings(stats, stats.attacks, dagger)), ["Scimitar", "Scimitar", "Dagger"], "in reach, the melee routine");
+    const thrown = plannedSwings(stats, stats.attacks, dagger, { reaches: (attack) => attack.name === "Dagger" });
+    assert.deepEqual(names(thrown), ["Dagger", "Dagger"], "out of melee reach, the two thrown daggers");
+  }
+});
+
 await test("A Multiattack's groups name the block's attacks by whole name, \"+1\" and a bracket note set aside, either side plural.", () => {
   assert.deepEqual(readAs("The vila makes two shortsword attacks or two shortbow attacks.", ["+1 Shortsword", "+1 Shortbow"]).routines, ["+1 Shortsword x2", "+1 Shortbow x2"]);
   assert.deepEqual(readAs("It makes two talon attacks and one beak attack.", ["Talons (Eagle Form Only)", "Beak (Eagle Form Only)"]).routines, ["Talons (Eagle Form Only) x2 + Beak (Eagle Form Only) x1"]);

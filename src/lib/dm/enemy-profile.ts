@@ -226,7 +226,12 @@ export function plannedSwings(
   stats: Pick<EnemyStats, "attacks" | "attacksPerTurn" | "routines"> & { traits?: string[] },
   attacks: EnemyAttack[],
   asked: EnemyAttack | null,
-  options: { single?: boolean; rollCount?: (dice: string) => number } = {},
+  // `reaches`: whether a swing can land on the target this turn, walk and
+  // all. Of several routines that could be the turn, the first whose every
+  // swing reaches: a bandit captain out of melee reach throws "two ranged
+  // attacks with its daggers" (SRD 5.1), where its first routine, "two with
+  // its scimitar and one with its dagger", left it nothing to land.
+  options: { single?: boolean; rollCount?: (dice: string) => number; reaches?: (attack: EnemyAttack) => boolean } = {},
 ): EnemyAttack[] {
   if (!attacks.length) {
     return [];
@@ -236,11 +241,11 @@ export function plannedSwings(
   }
   const routines = (stats.routines ?? []).map((routine) => expand(routine, attacks, options.rollCount)).filter((swings) => swings.length);
   if (routines.length) {
-    if (!asked) {
-      return loadedOnce(stats, routines[0]);
-    }
-    const holding = routines.find((swings) => swings.includes(asked));
-    return holding ? loadedOnce(stats, holding) : [asked];
+    const holding = asked ? routines.filter((swings) => swings.includes(asked)) : routines;
+    const reaches = options.reaches;
+    const landing = reaches && holding.length > 1 ? holding.find((swings) => swings.every(reaches)) : undefined;
+    const chosen = landing ?? holding[0];
+    return chosen ? loadedOnce(stats, chosen) : [asked ?? attacks[0]];
   }
   const count = Math.max(1, Math.min(10, Math.floor(stats.attacksPerTurn ?? 1)));
   const swing = asked ?? attacks[0];
