@@ -1,5 +1,6 @@
 import { openDatabase, type SqliteDatabase } from "./driver.ts";
 import { fileSubAreasByName } from "./place-parents-backfill.ts";
+import { backfillNpcHeard } from "./npc-heard-backfill.ts";
 import { createHash } from "node:crypto";
 import { mkdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -2865,6 +2866,14 @@ function ensureSchema(db: SqliteDatabase) {
   if (!npcColumns.some((column) => column.name === "met_at")) {
     addColumns("npcs", [["met_at", `TEXT NOT NULL DEFAULT ''`]]);
     backfillNpcMet(db);
+  }
+  // When the story first said an NPC's name to the table (Npc.heardAt):
+  // met or heard, every seat is sent them; anyone else stays with the seats
+  // that read the whole cast (issue 650). The rows already played get it
+  // once, from the transcript they were named in.
+  if (!npcColumns.some((column) => column.name === "heard_at")) {
+    addColumns("npcs", [["heard_at", `TEXT NOT NULL DEFAULT ''`]]);
+    backfillNpcHeard(db);
   }
 }
 

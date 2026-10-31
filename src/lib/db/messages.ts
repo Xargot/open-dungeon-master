@@ -4,6 +4,7 @@ import { touchCampaign } from "@/lib/db/campaigns";
 import type { GeneratedImage, ImageRequest } from "@/lib/types";
 import { parseMessageIntent, type MessageIntent } from "@/lib/dm/intent-logic";
 import { isSystemGlyph, type SystemGlyph } from "@/lib/system-glyphs";
+import { noteNamesHeard } from "@/lib/dm/cast";
 
 export type CampaignMessage = {
   id: string;
@@ -158,7 +159,18 @@ export function insertCampaignMessage(
   if (!message) {
     throw new Error("Failed to insert campaign message.");
   }
+  namesHeardIn(message);
   return message;
+}
+
+// The names a GM or system message says to the table, as it now reads,
+// are known from here on (src/lib/dm/cast.ts noteNamesHeard, issue 650).
+// The speakers counted are those of the lines this text still holds: a
+// reroll's speech covers every take, and a take not shown said nothing.
+function namesHeardIn(message: CampaignMessage | null) {
+  if (message && message.authorType !== "player") {
+    noteNamesHeard(message.campaignId, message.content, message.speech.filter((spoken) => message.content.includes(spoken.line)));
+  }
 }
 
 export function getCampaignMessage(messageId: string): CampaignMessage | null {
@@ -308,7 +320,9 @@ export function updateMessageContent(messageId: string, content: string, speech:
       `UPDATE campaign_messages SET content = ?, speech_json = ?, variants_json = NULL, variant_index = NULL, edited_take = NULL WHERE id = ?`,
     )
     .run(content, speech.length ? JSON.stringify(speech) : null, messageId);
-  return result.changes > 0 ? getCampaignMessage(messageId) : null;
+  const message = result.changes > 0 ? getCampaignMessage(messageId) : null;
+  namesHeardIn(message);
+  return message;
 }
 
 // The newest DM narration in the campaign. Rerolls are offered on this
@@ -354,5 +368,7 @@ export function setMessageVariants(
       : db
           .prepare(`UPDATE campaign_messages SET variants_json = ?, variant_index = ?, content = ?, speech_json = ?, edited_take = ? WHERE id = ?`)
           .run(JSON.stringify(variants), index, selected, speech.length ? JSON.stringify(speech) : null, editedTake, messageId);
-  return result.changes > 0 ? getCampaignMessage(messageId) : null;
+  const message = result.changes > 0 ? getCampaignMessage(messageId) : null;
+  namesHeardIn(message);
+  return message;
 }

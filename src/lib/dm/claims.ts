@@ -190,7 +190,7 @@ export function guardGate(
 const SKILL_IDS = SRD_SKILLS.map((skill) => skill.id);
 
 // Everyone who may speak a line at this table, by the ref the reader copies:
-// the cast every seat sees (src/lib/dm/cast.ts publicCast), the party, the
+// the cast (src/lib/dm/cast.ts wholeCast), the party, the
 // fight's creatures, and the NPCs the reply being read registers, whose row
 // does not exist yet (an id-less speaker, resolved by name when the message
 // is written: src/lib/dm/speech-lines.ts). Aliases and the gender field ride
