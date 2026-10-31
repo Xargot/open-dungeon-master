@@ -118,6 +118,7 @@ import { liveStateFor, readAsides, readReply, readTurnEndInWords, registeringNam
 import { modelTextLines } from "@/lib/dm/speech-lines";
 import { meetSpeakers } from "@/lib/dm/party-bonds";
 import { voiceOwedConscience } from "@/lib/dm/conscience-voice";
+import { readRomanceScene, romanceSceneNotes } from "@/lib/dm/romance-scenes";
 import type { SpokenLine } from "@/lib/dm/speech";
 import type { ToolResult } from "@/lib/dm/tool-errors";
 import { dispatchAdjudication } from "@/lib/dm/invoke-dispatch";
@@ -899,14 +900,14 @@ async function openTurn(
           pinned: fact.pinned,
           knownBy: fact.knownBy,
         })),
-      // The world's sparks, and a departed companion's return once it is
-      // cued (issue 503); both wait out a conversation. A romantic step
-      // asked in a fight that just ended (issue 640) is conversation itself,
-      // so it does not wait.
+      // The world's sparks, a departed companion's return once it is cued
+      // (issue 503), and a scene a romance's other side starts (issue 643);
+      // all wait out a conversation. A romantic step asked in a fight that
+      // just ended (issue 640) is conversation itself, so it does not wait.
       directorNotes: oocOnly
         ? []
         : [
-            ...(talk ? [] : [...consumePendingSparks(campaignId).map((spark) => spark.text), ...returnDirectorNotes(campaign)]),
+            ...(talk ? [] : [...consumePendingSparks(campaignId).map((spark) => spark.text), ...returnDirectorNotes(campaign), ...romanceSceneNotes(campaign)]),
             ...heldStepNotes(campaign),
           ],
       conversation: talk,
@@ -3487,6 +3488,9 @@ function finalize(context: TurnContext, turn: DmTurn, failed: string, spoken: re
   // move would make it look answered, and the follow-up turn would skip it.
   // The next narration, which answers it, says the line then.
   const voiced = voiceOwedConscience(context.campaign, message, { post: !slot.person });
+  // The scene a romance's other side was due to start, read against this
+  // narration, and the next one chosen (issue 643).
+  readRomanceScene(context.campaign, message, { handedNow: false });
 
   // Combat bookkeeping: if the current PC's turn was adjudicated, hand the
   // initiative pointer to the next living PC now, after the narration

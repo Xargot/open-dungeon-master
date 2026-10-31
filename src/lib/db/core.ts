@@ -2322,6 +2322,13 @@ function ensureSchema(db: SqliteDatabase) {
     db.exec(`UPDATE relationships SET owed = MAX(0, -approval)`);
   }
 
+  addColumns("relationships", [
+    // A romance's pace (issue 643, src/lib/db/romance-pacing.ts): when its
+    // last step was taken, the scenes the other side started, and the one
+    // due now. '' = nothing recorded yet.
+    ["pacing_json", `TEXT NOT NULL DEFAULT ''`],
+  ]);
+
   addColumns("campaigns", [
     // AI turns finished at this table, the clock NPC advances count in
     // (issue 501). Bumped after every successful AI turn, whatever the

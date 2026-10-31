@@ -3,9 +3,11 @@ import { listSheets } from "@/lib/db/sheets";
 import { getCurrentLocation } from "@/lib/db/locations";
 import { patchRelationship } from "@/lib/db/relationships";
 import { getAiTurns, listPendingAdvances } from "@/lib/db/advances";
+import { romanceStepDue } from "@/lib/dm/romance-scenes";
 import {
   ADVANCE_ANSWER_TURNS,
   ADVANCE_EVERY,
+  ADVANCE_TARGET,
   ADVANCE_WINDOW,
   advanceCue,
   advanceRollSucceeds,
@@ -66,7 +68,9 @@ export function tickAdvances(campaign: Campaign, aiTurns: number, narration: str
     }
     const candidates: Array<{ suitor: Suitor; relationshipId: string }> = [];
     for (const relationship of context.relationships) {
-      if (relationship.characterId !== sheet.id || !rollDue(aiTurns, relationship.advanceCooldownUntil)) {
+      // A pair whose last step was too recent for courting (issue 643) has
+      // no moment to open: the move would be refused.
+      if (relationship.characterId !== sheet.id || !rollDue(aiTurns, relationship.advanceCooldownUntil) || !romanceStepDue(campaign.id, relationship.id, ADVANCE_TARGET)) {
         continue;
       }
       const subject = resolveSubject(campaign, relationship.subjectName, sheets);
