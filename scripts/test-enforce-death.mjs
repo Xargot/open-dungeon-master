@@ -606,6 +606,18 @@ await test("a forced march tells the GM the death saves its hours rolled and the
   kit.reset(hero.id);
 });
 
+await test("a death save's line counts its tally in English: 1 success, 2 failures", async () => {
+  const name = world.sheet(hero.id).name;
+  dying({ ...FRESH, failures: 1 });
+  await kit.withDice([11, 9, 20], "travel", { hours: 2, pace: "normal", characterIds: [ally.id] });
+  const lines = messages.listRecentMessages(world.campaignId, 20).map((row) => row.content);
+  assert.ok(lines.includes(`${name} death save: rolled 11, success (1 success, 1 failure).`), lines.slice(-6).join(" | "));
+  assert.ok(lines.includes(`${name} death save: rolled 9, failure (1 success, 2 failures).`), lines.slice(-6).join(" | "));
+  const { describeTrack } = await import("../src/lib/dm/death.ts");
+  assert.equal(describeTrack({ ...FRESH, failures: 1 }), "dying: 0 successes, 1 failure");
+  kit.reset(hero.id);
+});
+
 await test("a march posts its own line to the chronicle after the death saves it rolled, as a rest does", async () => {
   const name = world.sheet(hero.id).name;
   dying({ ...FRESH, failures: 1 });

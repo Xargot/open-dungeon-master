@@ -108,6 +108,12 @@ function tableNote(campaign: Campaign, content: string, glyph: SystemGlyph) {
   publishWithSeq(campaign.id, seq, "message_added", { message });
 }
 
+// "1 success, 2 failures": each count with its own noun, as the table reads
+// it. "(1 successes, 1 failures)" was every first save's line.
+function tally(track: { successes: number; failures: number }): string {
+  return `${track.successes} success${track.successes === 1 ? "" : "es"}, ${track.failures} failure${track.failures === 1 ? "" : "s"}`;
+}
+
 export function describeTrack(track: DeathSaves): string {
   if (!track) {
     return "";
@@ -118,7 +124,7 @@ export function describeTrack(track: DeathSaves): string {
   if (track.stable) {
     return "stable at 0 HP";
   }
-  return `dying: ${track.successes} successes, ${track.failures} failures`;
+  return `dying: ${tally(track)}`;
 }
 
 // Called from apply_damage after the HP math lands. `preSheet` is the
@@ -374,7 +380,7 @@ export function rollDeathSave(campaign: Campaign, characterId: string, turnId: s
   }
   const line = `${sheet.name} death save: rolled ${outcome.total}, ${
     applied.outcome === "success" ? "success" : "failure"
-  } (${applied.track.successes} successes, ${applied.track.failures} failures).`;
+  } (${tally(applied.track)}).`;
   tableNote(campaign, line, "die-d20");
   return line;
 }
