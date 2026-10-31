@@ -89,8 +89,11 @@ export async function POST(
     }
     setFloor(campaignId, next);
     publishPersisted(campaignId, "floor_changed", { floor: next });
-    // An open floor at a table that waits for everyone starts a beat.
-    settleTableWait(campaignId);
+    // An open floor at a table that waits for everyone starts a beat, and
+    // answers now what was posted before it opened (issue 636).
+    if (settleTableWait(campaignId)) {
+      requestDmTurn(campaignId);
+    }
     return Response.json({ ok: true, floor: next });
   }
 
@@ -124,8 +127,11 @@ export async function POST(
   publishPersisted(campaignId, "floor_changed", { floor: next });
   if (floor.mode === "spotlight" && floor.respondedUserIds.length) {
     requestDmTurn(campaignId);
-  } else {
-    settleTableWait(campaignId);
+  } else if (settleTableWait(campaignId)) {
+    // A move posted while the narration was still being written, at a table
+    // that holds after each narration: the hold kept the narration from
+    // settling the table, so the release answers it (issue 636).
+    requestDmTurn(campaignId);
   }
   return Response.json({ ok: true });
 }
