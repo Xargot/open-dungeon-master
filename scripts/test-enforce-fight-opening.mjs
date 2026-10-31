@@ -89,7 +89,11 @@ await test("An attack written in prose before any fight exists is held back: the
     reply({ text: "The Resonance Weaver unfolds from the dark, humming, ten feet from Alden." }),
   ]);
   model.claims([[EIGHT]]);
+  // The goblin's initiative rolls at spawn, then Alden's: Alden goes first,
+  // so no goblin turn lands a real blow before his hit points are read.
+  world.dice(1, 20);
   const dm = await model.turn(world, "I step into the chamber.", alden.id, alden.userId);
+  world.clearDice();
   assert.ok(userLines(model.requests[1]).includes(unrolledDamagePrompt("8 damage.")), "the model was not sent back to the tools");
   assert.ok(dm, "the turn wrote no narration");
   assert.ok(!dm.content.includes("8 damage"), `the unrolled blow reached the table: ${dm.content}`);
