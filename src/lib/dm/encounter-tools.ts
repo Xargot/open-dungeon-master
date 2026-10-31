@@ -1115,8 +1115,10 @@ function handleEndTurn(
   // narration it belongs to, when its DM turn finishes (advanceAfterTurn);
   // the model reads it in this result, and plays its enemies in this turn
   // rather than holding the floor for them.
+  // A person at the console says it as the End Turn button does
+  // (endsTurnAnnounce), the dying it passes included.
   const ai = turn.actor === "ai";
-  const advanced = advancePointer(campaign, encounter, { announce: !ai, hold: !ai });
+  const advanced = advancePointer(campaign, encounter, { announce: ai ? false : endsTurnAnnounce(current), hold: !ai });
   if (!advanced) {
     return { error: "Nobody is left standing to take the next turn.", retry: true };
   }
@@ -1595,7 +1597,9 @@ function advancePointer(
   const owed = owedNamesForTable(encounter);
   const owedNote = owed.length ? ` ${owed.join(" and ")} act${owed.length === 1 ? "s" : ""} before ${landedOn.name}.` : "";
   if (typeof options?.announce === "function") {
-    tableNote(campaign, `${options.announce(landedOn, dyingNote(dyingPassed))}${owedNote}`, "cue-battle");
+    // The lair's count passed is said as on the plain line, which the
+    // console's end_turn posted before it took this one.
+    tableNote(campaign, `${options.announce(landedOn, dyingNote(dyingPassed))}${lairOpen(encounter) ? LAIR_NOTE : ""}${owedNote}`, "cue-battle");
   } else if (options?.announce !== false) {
     announceTurn(campaign, encounter, `${lairOpen(encounter) ? LAIR_NOTE : ""}${owedNote}`);
   }
@@ -2067,6 +2071,12 @@ function passTurnLine(opening: string, from: OrderEntry | undefined, next: Order
   return `${opening}${dying} It is ${again ? `${next.name}'s turn again` : `now ${next.name}'s turn`}.`;
 }
 
+// A hero's turn ended by whoever may end it: the End Turn button
+// (endOwnTurn) and the console's end_turn (handleEndTurn) post this one line.
+function endsTurnAnnounce(from: OrderEntry): PassAnnounce {
+  return (next, dying) => passTurnLine(`${from.name} ends their turn.`, from, next, dying);
+}
+
 // The names of the characters among these who roll a death save as the turn
 // passes them (src/lib/dm/death.ts rollDeathSave): at 0 HP, neither stable
 // nor dead.
@@ -2329,12 +2339,11 @@ export function endOwnTurn(campaignId: string, userId: string): boolean {
   if (enemiesOwedTurn(encounter).length) {
     return false;
   }
-  const name = current.name;
   const couldRise = partyCanRise(encounter);
   // A person moved the fight on: the rounds it may go round alone start
   // again (idledOut). The pass below saves it.
   delete encounter.legendary.idle;
-  if (!advancePointer(campaign, encounter, { announce: (next, dying) => passTurnLine(`${name} ends their turn.`, current, next, dying) })) {
+  if (!advancePointer(campaign, encounter, { announce: endsTurnAnnounce(current) })) {
     return false;
   }
   // The death saves the pass rolled may have left nobody able to rise.

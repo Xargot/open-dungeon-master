@@ -511,6 +511,28 @@ await test("End Turn past two dying heroes names both death saves in one sentenc
   assert.deepEqual([deathSavesOf(world, brom.id).length, deathSavesOf(world, cade.id).length], [2, 2], "each rolled once a pass");
 });
 
+await test("The GM console's end_turn past a dying hero posts the line End Turn posts", async () => {
+  // The same table twice: Kara ends her turn past dying Brom, once from the
+  // console and once with the End Turn button.
+  const passed = async (end) => {
+    const { world, kit, heroes: [kara, brom] } = await table(["Kara", "Brom", "Cade"]);
+    stun(world, brom.id, "0 hp");
+    world.dice(5);
+    await end(world, kit, kara);
+    world.clearDice();
+    assert.equal(currentName(world), "Cade");
+    assert.equal(deathSavesOf(world, brom.id).length, 1, "Brom rolled for his turn");
+    return listRecentMessages(world.campaignId, 200).filter((message) => message.glyph === "cue-battle").at(-1)?.content;
+  };
+  const fromConsole = await passed(async (world, kit, kara) => {
+    const ended = await world.invoke("end_turn", { characterId: kara.id });
+    assert.equal(ended.ok, true, ended.error);
+  });
+  const fromButton = await passed(async (world, kit, kara) => assert.equal(kit.endTurn(userOf(world, kara.id)), true));
+  assert.match(fromConsole, /^Kara ends their turn\. Brom is dying: their turn is a death save\. It is now Cade's turn\./);
+  assert.equal(fromConsole, fromButton, "the console and the button say one line");
+});
+
 await test("Every wake leaves a note: the model's end_turn landing on a companion wakes the DM to play it", async () => {
   const { world, heroes: [kara] } = await table(["Kara"]);
   const pip = companion(world, "Pip", 18, kara);
