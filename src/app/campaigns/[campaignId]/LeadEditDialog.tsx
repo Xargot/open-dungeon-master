@@ -13,6 +13,7 @@ import { SectionHead } from "@/components/ui/SectionHead";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Switch } from "@/components/ui/Switch";
 import { KitButton, PanelError } from "./PanelKit";
+import { GiveStats, useUnknownGear } from "./GiveStats";
 import {
   ChipList,
   ItemFlags,
@@ -125,6 +126,8 @@ export function LeadEditDialog({
   const [saves, setSaves] = useState<Ability[]>(sheet.proficiencies.saves);
   const [skillLevels, setSkillLevels] = useState(() => skillLevelsOf(sheet.proficiencies));
   const experts = Object.values(skillLevels).filter((level) => level === "expert").length;
+  // Items the table has no stats for, each offered a workshop entry.
+  const unknownGear = useUnknownGear(campaignId, sheet.id);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -414,6 +417,7 @@ export function LeadEditDialog({
                 </KitButton>
               </div>
               <ItemFlags item={row.base} />
+              <GiveStats name={row.base.name} gear={unknownGear} />
               </div>
             ))}
             <div className="mt-1">

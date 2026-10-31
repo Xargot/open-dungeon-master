@@ -129,6 +129,35 @@ await test("F06: forgetting an item keeps its rules on a sheet that carries it; 
   assert.equal(gear(), undefined, "a ring deleted for good still carries rules");
 });
 
+// ---- loot the model named that no list holds ----
+
+await test("an item the table has no stats for is named to the lead, and a workshop item of its name gives it them", async () => {
+  const unknownGear = await world.route("campaigns/[campaignId]/sheets/[sheetId]/unknown-gear");
+  world.patch(player.sheet.id, {
+    equipment: [
+      { name: "Ring of Whispers", qty: 1 },
+      { name: "ring of whispers", qty: 1 },
+      { name: "Longsword", qty: 1 },
+      { name: "Odd glass orb", qty: 1, identified: false },
+      { name: "Lucky Coin", qty: 1, srdName: "Stone of Good Luck (Luckstone)" },
+    ],
+  });
+  const ask = async (user) => {
+    world.signIn(user);
+    const params = { campaignId: world.campaignId, sheetId: player.sheet.id };
+    return call(unknownGear, "GET", undefined, params, `http://test/api/campaigns/${world.campaignId}/sheets/${player.sheet.id}/unknown-gear`);
+  };
+  const owner = await ask(world.owner);
+  assert.equal(owner.status, 200, JSON.stringify(owner.json));
+  assert.deepEqual(owner.json.names, ["Ring of Whispers"], "only the item no list, catalog row or workshop knows, once");
+  assert.equal(owner.json.canAuthor, true, "the owner runs the table");
+  const outsider = await ask({ id: player.id });
+  assert.ok(outsider.status !== 200 || outsider.json.canAuthor === false, "a player is not offered the workshop");
+  await keep(world.owner, "item", "Ring of Whispers", { desc: "It hums.", itemKind: "magic_item", rarity: "uncommon", requiresAttunement: false, effects: [{ kind: "ac_bonus", amount: 1 }] });
+  assert.deepEqual((await ask(world.owner)).json.names, [], "the workshop item gave it stats");
+  assert.equal(world.sheet(player.sheet.id).equipment[0].gear?.magic?.effects?.[0]?.amount, 1, "the carried ring reads its stats");
+});
+
 // ---- no pack ----
 
 await test("F08: the catalog answers with or without the pack, and says which; with none it serves the bundled book whole.", async () => {
