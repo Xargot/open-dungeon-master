@@ -437,6 +437,7 @@ const FOR_A_PERSON_ONLY = {
   set_quest: ["visibility"],
   dismiss_handout: ["handoutId"],
   show_handout: ["imagePath"],
+  add_companion: ["background", "skills"],
 };
 
 function formDrift(entry) {
