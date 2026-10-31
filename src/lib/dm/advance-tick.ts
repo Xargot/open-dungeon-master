@@ -25,6 +25,7 @@ import { getNpcByName } from "@/lib/db/npcs";
 import { attractionBlank } from "@/lib/attraction";
 import { abilityMod } from "@/lib/srd";
 import { livingHero } from "@/lib/characters/fallen-logic";
+import { exclusiveBetween } from "@/lib/dm/romance-exclusive";
 
 // The roll for NPC advances (issue 501), after every AI turn that finished,
 // beside the world tick rather than inside it: the world tick runs only
@@ -120,6 +121,10 @@ export function advanceDirectorNotes(campaign: Campaign): string[] {
     }
     const sheet = sheets.find((entry) => entry.id === relationship.characterId);
     if (!sheet?.openToAdvances || !livingHero(sheet)) {
+      return [];
+    }
+    // Someone spoken for since the window opened is not courted (issue 642).
+    if (exclusiveBetween(campaign.id, sheet.id, relationship.subjectName, { relationships: context.relationships, sheets })) {
       return [];
     }
     const row = getNpcByName(campaign.id, relationship.subjectName);

@@ -2312,6 +2312,16 @@ function ensureSchema(db: SqliteDatabase) {
   // the bond.
   addColumns("relationships", [["held_step_json", `TEXT NOT NULL DEFAULT ''`]]);
 
+  // What wrongs cost a bond and no amends has repaired yet (issue 642,
+  // src/lib/dm/amends-logic.ts): an amends gives back at most this. A bond
+  // from before it starts owing what its meter sits below neutral, the least
+  // its history must have cost it.
+  const relationshipsOwed = (db.prepare(`PRAGMA table_info(relationships)`).all() as Array<{ name: string }>).some((column) => column.name === "owed");
+  addColumns("relationships", [["owed", `INTEGER NOT NULL DEFAULT 0`]]);
+  if (!relationshipsOwed) {
+    db.exec(`UPDATE relationships SET owed = MAX(0, -approval)`);
+  }
+
   addColumns("campaigns", [
     // AI turns finished at this table, the clock NPC advances count in
     // (issue 501). Bumped after every successful AI turn, whatever the

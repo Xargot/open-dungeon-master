@@ -6,7 +6,7 @@ import { matchEntity, mergeAliases, normalizeName, type EntityMatch } from "@/li
 import { normalizeNpcVoice, type NpcDraft, type NpcVoice } from "@/lib/npcs/forge";
 import { isUploadedImagePath } from "@/lib/uploads";
 import { storedGender, type Gender } from "@/lib/gender";
-import { attractionBlank, attractionJson, normalizeAttraction, type Attraction } from "@/lib/attraction";
+import { attractionJson, keptAttraction, normalizeAttraction, type Attraction } from "@/lib/attraction";
 import {
   parseBonds,
   parseGoals,
@@ -252,7 +252,7 @@ export function upsertNpc(input: {
       normalizeName(input.name) === normalizeName(existing.name)
         ? existing.aliases
         : mergeAliases(existing.aliases, input.name);
-    const attraction = attractionBlank(existing.attraction) && input.attraction ? input.attraction : existing.attraction;
+    const attraction = keptAttraction(existing.attraction, input.attraction);
     db.prepare(
       `UPDATE npcs
        SET attitude = ?, trait = ?, location = ?, gender = ?, attraction_json = ?, aliases_json = ?, updated_at = ?

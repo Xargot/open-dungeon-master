@@ -1,6 +1,6 @@
 "use client";
 
-import { attractionWords } from "@/lib/attraction";
+import { attractionWords, openToMore } from "@/lib/attraction";
 import { TravelFormation } from "@/app/campaigns/[campaignId]/TravelFormation";
 import { PartyStory } from "@/app/campaigns/[campaignId]/PartyStory";
 import type { PartyState } from "@/lib/dm/party-logic";
@@ -1071,12 +1071,15 @@ function RomanceNote({ sheet }: { sheet: CharacterSheet }) {
   const drawn = attractionWords(sheet.attraction);
   // A hero who fell is courted by nobody (issue 657), so the chip goes.
   const open = livingHero(sheet) && Boolean(sheet.openToAdvances);
-  if (!drawn && !open) {
+  // Romance is exclusive unless they are open to more (issue 642).
+  const more = openToMore(sheet.attraction);
+  if (!drawn && !open && !more) {
     return null;
   }
   return (
     <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-stone-400" data-romance-note={sheet.id}>
       {drawn ? <span>Drawn to {drawn}</span> : null}
+      {more ? <span data-open-relationship-note>Open to more than one partner</span> : null}
       {open ? (
         <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 text-rose-200">Open to advances</span>
       ) : null}

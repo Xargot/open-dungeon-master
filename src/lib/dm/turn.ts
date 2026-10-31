@@ -178,6 +178,7 @@ import { storyMoved } from "@/lib/dm/world-tick-logic";
 import { conversationInFlight } from "@/lib/dm/conversation-logic";
 import { advanceDirectorNotes, advanceWindowOpen, tickAdvances } from "@/lib/dm/advance-tick";
 import { heldStepNotes, romanceAnswerOwed } from "@/lib/dm/romance-held";
+import { exclusiveLinesForPrompt } from "@/lib/dm/romance-exclusive";
 import { storytellerLinesForPrompt } from "@/lib/dm/scheme-tools";
 import { isStorytellerFact } from "@/lib/dm/fact-logic";
 import { bumpAiTurns } from "@/lib/db/advances";
@@ -927,7 +928,11 @@ async function openTurn(
       relationships:
         campaign.gameSettings.relationships === "off"
           ? []
-          : relationshipRosterForPrompt(campaignId, { storyteller: !oocOnly, leaving: souredLeaving(campaign) }),
+          : [
+              ...relationshipRosterForPrompt(campaignId, { storyteller: !oocOnly, leaving: souredLeaving(campaign) }),
+              // Who is spoken for, and exclusive (issue 642): only while anyone is.
+              ...(romanceEnabled(campaign) ? exclusiveLinesForPrompt(campaignId) : []),
+            ],
       recentWhispers: listRecentWhispersForPrompt(campaignId, 10),
       pendingPlayerWhispers: pendingWhispers.map((whisper) => ({
         from: whisper.characterName,
