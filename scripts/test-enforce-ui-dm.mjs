@@ -246,6 +246,33 @@ await test("an Adjust save can set a shared spell slot maximum to zero and clamp
   assert.deepEqual(leadEdit.editedSpellSlots(original, {}), original);
 });
 
+// A GM-made companion can come with the wrong skills and no expertise, and
+// the lead had no way to put that right short of editing the database.
+await test("an Adjust save sets saves and each skill's training, and keeps the training it does not show", () => {
+  const stored = {
+    saves: ["dex", "int"],
+    skills: ["Stealth", "acrobatics", "perception", "Pack Lore"],
+    expertise: ["stealth", "thieves' tools"],
+    languages: ["Common"],
+    tools: ["thieves' tools"],
+    armor: ["light armor"],
+    weapons: ["simple weapons"],
+  };
+  const levels = leadEdit.skillLevelsOf(stored);
+  assert.equal(levels.stealth, "expert");
+  assert.equal(levels.acrobatics, "trained");
+  assert.equal(levels.arcana, "none");
+  assert.equal(Object.keys(levels).length, 18);
+  const saved = leadEdit.trainingFrom(stored, { ...levels, perception: "expert", acrobatics: "none", insight: "trained" }, ["dex", "wis"]);
+  assert.deepEqual(saved.saves, ["dex", "wis"]);
+  assert.deepEqual(saved.skills, ["Pack Lore", "insight", "perception", "stealth"]);
+  assert.deepEqual(saved.expertise, ["thieves' tools", "perception", "stealth"]);
+  assert.deepEqual(saved.tools, stored.tools);
+  assert.deepEqual(saved.languages, stored.languages);
+  // Untouched, the levels read back as they were.
+  assert.deepEqual(leadEdit.skillLevelsOf(leadEdit.trainingFrom(stored, levels, stored.saves)), levels);
+});
+
 // ---- U:UD9 the human DM corrects an enemy's hit points ----
 
 const { enemyHpCorrection } = await import("../src/lib/dm/catalog-enemy-hp.ts");
