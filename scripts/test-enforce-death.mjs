@@ -1017,5 +1017,30 @@ await test("the table's log keeps its newest fifty changes, however many ticks t
   assert.equal(snapshot.auditLog.filter((entry) => entry.kind === "condition_clock" && entry.reason === "time counted down on their conditions").length, 200);
 });
 
+// Prayer of Healing takes ten minutes to cast (SRD 5.1), and those minutes
+// roll a dying creature's death saves. The heal tool read its target before
+// the casting moved the clock, so a hero who died in those saves was healed
+// back to life by a spell that cannot raise the dead.
+await test("A hero who dies in the death saves Prayer of Healing's ten minutes roll stays dead: the spell is spent and heals nothing.", async () => {
+  // A fight above is still running, and ten minutes of casting is no turn's.
+  await world.invoke("end_encounter", { outcome: "truce" });
+  const priest = world.addHero({ name: "Prior", class: "cleric", level: 5, maxHp: 30 });
+  world.patch(priest.id, {
+    spellcasting: { ability: "wis", slots: { 1: { max: 4, used: 0 }, 2: { max: 3, used: 0 } }, prepared: ["Prayer of Healing"], known: [], cantrips: [] },
+  });
+  const fallen = world.addHero({ name: "Fallen", class: "fighter", level: 4, maxHp: 30 });
+  world.patch(fallen.id, { currentHp: 0, deathSaves: { successes: 0, failures: 2, stable: false, dead: false } });
+  // The casting's first death save fails: her third failure.
+  world.dice(5, 5, 5, 5);
+  const prayed = await world.invoke("heal", { characterId: fallen.id, casterId: priest.id, spell: "Prayer of Healing" });
+  world.clearDice();
+  assert.equal(prayed.ok, true, prayed.error);
+  const after = world.sheet(fallen.id);
+  assert.equal(after.deathSaves?.dead, true, `the prayer raised the dead: ${JSON.stringify(prayed.result)}`);
+  assert.equal(after.currentHp, 0);
+  assert.equal(prayed.result.healed, 0);
+  assert.match(prayed.result.note, /died while Prayer of Healing was being cast/);
+});
+
 world.close();
 finish();

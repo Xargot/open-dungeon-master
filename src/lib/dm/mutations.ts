@@ -830,6 +830,22 @@ export function applyDmMutation(
           healNote = outcome.note;
         }
       }
+      // A healing spell that takes longer than an action (Prayer of Healing's
+      // ten minutes) moved the clock, and those minutes rolled the dying's
+      // death saves (src/lib/db/clock.ts). The sheet read before the casting
+      // still showed a creature who died in them alive, and healed her back:
+      // read it again.
+      const target = healSpell ? (getSheetById(sheet.id) ?? sheet) : sheet;
+      if (healNote && target.deathSaves?.dead && !sheet.deathSaves?.dead) {
+        return {
+          result: {
+            ok: true,
+            healed: 0,
+            spell: healNote,
+            note: `${target.name} died while ${healSpell} was being cast: the death saves its casting time rolled are in the chronicle. The spell is spent and heals nothing; narrate it.`,
+          },
+        };
+      }
       if (amount < 1) {
         return {
           result: {
@@ -838,75 +854,75 @@ export function applyDmMutation(
           },
         };
       }
-      if (sheet.deathSaves?.dead) {
+      if (target.deathSaves?.dead) {
         return {
           result: {
-            error: `${sheet.name} is DEAD. Healing cannot help; only the party lead can reverse a death.`,
+            error: `${target.name} is DEAD. Healing cannot help; only the party lead can reverse a death.`,
             refused: "rules",
           },
         };
       }
-      const blocked = args.temp ? null : regainBlockedBy(sheet);
+      const blocked = args.temp ? null : regainBlockedBy(target);
       if (blocked) {
         return {
           result: {
             error:
               blocked === SUFFOCATING
-                ? `${sheet.name} is still without air and cannot regain hit points until they can breathe. Get them to air, clear the suffocating condition, then heal them.`
-                : `${sheet.name} is gripped by Chill Touch and cannot regain hit points until its caster's next turn starts.`,
+                ? `${target.name} is still without air and cannot regain hit points until they can breathe. Get them to air, clear the suffocating condition, then heal them.`
+                : `${target.name} is gripped by Chill Touch and cannot regain hit points until its caster's next turn starts.`,
             refused: "rules",
           },
         };
       }
       // Temporary HP: 5e non-stacking, the higher value wins.
       if (args.temp) {
-        const tempHp = Math.max(sheet.tempHp, Math.min(amount, 200));
-        if (tempHp === sheet.tempHp) {
+        const tempHp = Math.max(target.tempHp, Math.min(amount, 200));
+        if (tempHp === target.tempHp) {
           return {
             result: {
               ok: true,
               tempHp,
-              note: `${sheet.name} keeps their existing ${tempHp} temp HP (temporary hit points do not stack; the higher value wins).`,
+              note: `${target.name} keeps their existing ${tempHp} temp HP (temporary hit points do not stack; the higher value wins).`,
             },
           };
         }
-        patchSheet(sheet.id, { tempHp });
-        audit(campaign, turnId, sheet, "grant_temp_hp", { tempHp }, reason, { tempHp });
-        publishSheet(campaign, sheet.id);
+        patchSheet(target.id, { tempHp });
+        audit(campaign, turnId, target, "grant_temp_hp", { tempHp }, reason, { tempHp });
+        publishSheet(campaign, target.id);
         return { result: { ok: true, tempHp, note: "Temporary hit points; they absorb damage first and vanish on a long rest." } };
       }
       // Healing in a beast form restores the beast: the druid's own hit
       // points wait, untouched, for the form to end.
-      if (sheet.wildShape) {
-        const shape = sheet.wildShape;
+      if (target.wildShape) {
+        const shape = target.wildShape;
         const beast = healMath(shape.beastHp, shape.beastMaxHp, Math.min(amount, 200));
         const patch: FullPatchSheetInput = { wildShape: { ...shape, beastHp: beast.currentHp } };
-        patchSheet(sheet.id, patch);
-        audit(campaign, turnId, sheet, "heal", { amount, form: shape.form, beastHp: beast.currentHp }, reason, patch);
-        publishSheet(campaign, sheet.id);
+        patchSheet(target.id, patch);
+        audit(campaign, turnId, target, "heal", { amount, form: shape.form, beastHp: beast.currentHp }, reason, patch);
+        publishSheet(campaign, target.id);
         return {
           result: {
             ok: true,
             form: `${shape.form}: ${beast.currentHp}/${shape.beastMaxHp} HP`,
             healed: beast.currentHp - shape.beastHp,
             ...(healNote ? { spell: healNote } : {}),
-            note: `The healing restores the beast form; ${sheet.name}'s own ${sheet.currentHp}/${effectiveMaxHp(sheet)} is untouched.`,
+            note: `The healing restores the beast form; ${target.name}'s own ${target.currentHp}/${effectiveMaxHp(target)} is untouched.`,
           },
         };
       }
       // Exhaustion level 4 halves the maximum healing can reach; Pale
       // Tincture's damage is beyond it (afflictions.ts healCeiling).
-      const ceiling = healCeiling(campaign.id, sheet);
-      const math = healMath(Math.min(sheet.currentHp, ceiling), ceiling, Math.min(amount, 200));
+      const ceiling = healCeiling(campaign.id, target);
+      const math = healMath(Math.min(target.currentHp, ceiling), ceiling, Math.min(amount, 200));
       // A regained hit point ends a caltrops wound in patchSheet itself
       // (condition-logic.ts endedByRegain), whichever path healed.
-      patchSheet(sheet.id, { currentHp: math.currentHp });
-      audit(campaign, turnId, sheet, "heal", { amount, newHp: math.currentHp }, reason, {
+      patchSheet(target.id, { currentHp: math.currentHp });
+      audit(campaign, turnId, target, "heal", { amount, newHp: math.currentHp }, reason, {
         currentHp: math.currentHp,
       });
-      publishSheet(campaign, sheet.id);
+      publishSheet(campaign, target.id);
       {
-        const pos = tokenPosition(campaign.id, sheet.id);
+        const pos = tokenPosition(campaign.id, target.id);
         if (pos && amount > 0) {
           publishFx(
             campaign.id,
@@ -915,7 +931,7 @@ export function applyDmMutation(
         }
       }
       // Any healing ends the dying state.
-      const deathInfo = healDeathHook(campaign, turnId, sheet);
+      const deathInfo = healDeathHook(campaign, turnId, target);
       return {
         result: {
           ok: true,
