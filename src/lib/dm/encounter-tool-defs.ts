@@ -124,6 +124,7 @@ export const enemyAttackTool: ToolDef = {
           type: "boolean",
           description: "Melee, to take them alive: dropped to 0 HP they are stable, not dying.",
         },
+        targetMount: { type: "boolean", description: "At the target's mount instead." },
       },
       required: ["enemyId", "targetCharacterId"],
     },
