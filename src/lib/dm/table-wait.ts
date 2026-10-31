@@ -216,7 +216,9 @@ function clearTimer(entry: WaitMemory) {
 export function settleTableWait(campaignId: string, now = Date.now(), holdUntilDeadline = false): boolean {
   // A turn is already requested or running (a released spotlight's answers,
   // say): it reads everything so far, and the gather opens again only once
-  // its narration lands, when turn.ts settles the table.
+  // its narration lands, when turn.ts settles the table. Other work (a
+  // chapter closing, the arc being planned) settles nothing as it ends; the
+  // queue running dry reads the table again (src/lib/dm/loop.ts, issue 636).
   if (getDmStatus(campaignId) !== "idle") {
     publishView(campaignId, null);
     return false;
@@ -268,7 +270,16 @@ export function tableWaitTurnStarted(campaignId: string, readSeq: number) {
   publishView(campaignId, null);
 }
 
-export type PassResult = { ok: true; fire: boolean } | { ok: false; status: number; error: string };
+// A rewind took the transcript back to a chapter's start, and the turn that
+// opened this window with it: the window opens again at the restored
+// narration, so a move still waiting there counts (issue 636).
+export function tableWaitRewound(campaignId: string) {
+  const entry = memory(campaignId);
+  entry.readSeq = undefined;
+  clearTimer(entry);
+}
+
+export type PassResult ={ ok: true; fire: boolean } | { ok: false; status: number; error: string };
 
 // A player says "go on without me" for this beat. Refused where there is no
 // waiting to pass on, and once the player has already acted or passed.
