@@ -275,7 +275,7 @@ export function LeadEditDialog({
             </Dialog.Close>
           </div>
           <p className="mb-3 text-xs text-stone-500">
-            Party lead correction of stats, items, and spells. Changes are logged to the session
+            Party lead correction of stats, scores, skills, items, and spells. Changes are logged to the session
             event log.
           </p>
           <SectionHead title="Numbers" glyph="rest-hp" level="h3" />
