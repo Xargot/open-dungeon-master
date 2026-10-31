@@ -61,7 +61,9 @@ function rulesOf(attack: GrantedAttack, rides: boolean): string {
       : "Comes with the casting: no second bonus action."
     : attack.bonusAction
       ? "A bonus action."
-      : "";
+      : attack.wholeAction
+        ? "Takes your action: no swing of the Attack action, so Extra Attack adds none."
+        : "";
   return [where, cost].filter(Boolean).join(" ");
 }
 
@@ -105,6 +107,7 @@ export function grantedAttackCards(sheet: CharacterSheet, turn: HandTurn, allowe
       spent: false,
       compose: false,
       intent: { card: "attack", weapon: attack.name },
+      ...(attack.wholeAction ? { wholeAction: true } : {}),
     };
     const noBonus = toHit === null
       ? { reason: `${sheet.name}'s sheet has no spell attack bonus (no spellcasting ability), so ${attack.name} cannot be rolled.`, spent: false }
@@ -114,7 +117,13 @@ export function grantedAttackCards(sheet: CharacterSheet, turn: HandTurn, allowe
         card,
         standingGate(sheet, turn, attack.bonusAction ? "bonus" : "attack"),
         noBonus,
-        rides ? null : attack.bonusAction ? costGate("bonus", turn, sheet, `the ${attack.name} attack`) : attackGate(turn, allowed, sheet),
+        rides
+          ? null
+          : attack.bonusAction
+            ? costGate("bonus", turn, sheet, `the ${attack.name} attack`)
+            : attack.wholeAction
+              ? costGate("action", turn, sheet, `the ${attack.name} attack`)
+              : attackGate(turn, allowed, sheet),
       ),
     );
   }

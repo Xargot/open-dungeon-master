@@ -46,6 +46,9 @@ export function spendAttackEconomy(input: {
   budget: TurnBudget | null;
   options: AttackOptions;
   grantedBonusAction: BuiltAttack["grantedBonusAction"];
+  // A granted attack that is the whole action (Flame Blade): no swing of the
+  // Attack action, so Extra Attack gives it no second.
+  grantedWholeAction?: boolean;
   // A swing that is itself the bonus action (Quick Toss), by its name.
   bonusSwing?: string;
   // A granted attack that comes with its activation (pc-attack-profile.ts),
@@ -90,7 +93,7 @@ export function spendAttackEconomy(input: {
   }
   if (budget) {
     const usesAttackAction =
-      !grantedBonusAction && !bonusSwing && !args.offHand && !options.bonusAttack && !options.hordeBreaker && kind !== "spell" && !multiattack;
+      !grantedBonusAction && !input.grantedWholeAction && !bonusSwing && !args.offHand && !options.bonusAttack && !options.hordeBreaker && kind !== "spell" && !multiattack;
     if (usesAttackAction) {
       const loading = loadingProblem({ who: sheet.name, profile, budget, feats: sheet.feats, campaignId: sheet.campaignId });
       // A new action (Action Surge, Haste) reloads; only a swing that would
@@ -114,6 +117,8 @@ export function spendAttackEconomy(input: {
         }
       : grantedBonusAction
       ? spendAction(budget, "bonus", `the ${profile.weapon} attack`, sheet.name)
+      : input.grantedWholeAction
+      ? spendAction(budget, "action", `the ${profile.weapon} attack`, sheet.name)
       : bonusSwing
       ? spendAction(budget, "bonus", bonusSwing, sheet.name)
       : options.bonusAttack

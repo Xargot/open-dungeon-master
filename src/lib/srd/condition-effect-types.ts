@@ -20,6 +20,11 @@ export type GrantedAttack = {
   abilityToDamage: boolean;
   ranged: boolean;
   bonusAction: boolean;
+  // The attack is the whole action, not a swing of the Attack action: Flame
+  // Blade's "you can use your action to make a melee spell attack" (SRD 5.1).
+  // Extra Attack adds no second strike, and Haste's one weapon attack is no
+  // spell attack to spend on it.
+  wholeAction?: boolean;
   // The first attack comes with the activation itself (Starry Form's Archer,
   // Tentacle of the Deep, Spiritual Weapon: "when you cast the spell, you can
   // make..."), so it costs no second bonus action. The number is the

@@ -452,7 +452,8 @@ export function afterCommit(turn: HandTurn, card: HandCard, allowed = 1): HandTu
   const intent = card.intent;
   // A strike a condition grants is a swing only when it costs the action
   // (Flame Blade); Spiritual Weapon's is a bonus action, or rides its casting.
-  const swing = intent.card === "attack" && !intent.offHand && !intent.attack?.bonusAttack && card.cost !== "bonus" && card.cost !== "free";
+  // Flame Blade's is the whole action, which Extra Attack does not repeat.
+  const swing = intent.card === "attack" && !intent.offHand && !intent.attack?.bonusAttack && card.cost !== "bonus" && card.cost !== "free" && !card.wholeAction;
   const contest = intent.card === "basic" && (intent.action === "grapple" || intent.action === "shove");
   // The engine's own spend functions do the counting (Extra Attack, Haste's
   // one weapon attack, Action Surge, Flurry of Blows).

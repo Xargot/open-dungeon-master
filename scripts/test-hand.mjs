@@ -711,4 +711,34 @@ test("Arcane Sword's first strike comes with its casting action, the bonus actio
   assert.equal(blade.dice, "4d6 fire", "1d6 more for the two slot levels above 2nd, and no modifier");
 });
 
+// Flame Blade: "you can use your action to make a melee spell attack with the
+// fiery blade" (SRD 5.1). That is the action, not the Attack action, so a
+// fighter's Extra Attack gives it no second strike, and no weapon swing
+// follows it.
+test("A fighter-druid's Flame Blade strike takes the whole action: Extra Attack adds no second strike and no weapon swing after it", () => {
+  const bladesman = caster({
+    name: "Thorn", class: "fighter", level: 8,
+    classes: [{ id: "fighter", level: 5, subclass: "" }, { id: "druid", level: 3, subclass: "" }],
+    features: [{ name: "Extra Attack", source: "class" }],
+    abilities: { str: 16, dex: 10, con: 14, int: 10, wis: 16, cha: 10 },
+    spellcasting: { ability: "wis", slots: { 1: { max: 4, used: 0 }, 2: { max: 2, used: 1 } }, prepared: ["Flame Blade"], known: [] },
+    conditions: ["flame blade"],
+    conditionMeta: { "flame blade": { rounds: 99, spell: "Flame Blade", slotLevel: 2 } },
+  });
+  const allowed = attacksAllowed(bladesman);
+  assert.equal(allowed, 2, "the fighter's Extra Attack");
+  const blade = byId(deriveHand(bladesman, FRESH_TURN), "attack:granted:flame-blade");
+  assert.equal(blade.cost, "action");
+  assert.equal(blade.disabled, null);
+  assert.match(blade.rules, /Takes your action/);
+  const after = afterCommit(FRESH_TURN, blade, allowed);
+  assert.equal(after.actionUsed, true);
+  assert.equal(after.attacksMade, 0, "no swing of the Attack action");
+  const again = byId(deriveHand(bladesman, after), "attack:granted:flame-blade");
+  assert.ok(again.disabled, "Extra Attack gave the blade a second strike");
+  // Once the Attack action is under way, the action is gone for the blade.
+  const swung = { ...FRESH_TURN, actionUsed: true, attacksMade: 1 };
+  assert.ok(byId(deriveHand(bladesman, swung), "attack:granted:flame-blade").disabled, "a blade strike rode the Attack action's second swing");
+});
+
 console.log(`test-hand: ${passed} passed`);
