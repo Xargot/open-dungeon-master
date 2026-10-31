@@ -93,6 +93,20 @@ const scenario = {
         await eventually(async () => (await name.inputValue().catch(() => "")) === item, { timeoutMs: 30_000, label: `the workshop's item editor named ${item}` });
         await tab.close();
       } else {
+        // In place, the workshop takes the table's place: a change made in
+        // the dialog and not saved is not dropped. The link says to save or
+        // cancel it first, and the dialog stays.
+        const strength = dialog.getByRole("switch", { name: "Strength saving throw" });
+        await t.tap(strength);
+        await t.tap(give);
+        const held = dialog.getByRole("status").filter({ hasText: "Save or cancel your changes first" });
+        await eventually(() => held.count(), { label: "the link holding back while a change is unsaved" });
+        check((await t.url()).pathname.startsWith("/campaigns/"), "the table stays, with the dialog and its change");
+        check((await strength.getAttribute("aria-checked")) === "true", "the unsaved change is still there");
+        await untilStill(page);
+        await t.shot("app-unsaved");
+        await t.tap(strength);
+        await eventually(async () => !(await held.count()), { label: "the note going once nothing is unsaved" });
         await t.tap(give);
         const name = page.getByLabel("Name", { exact: true }).locator("visible=true").first();
         await eventually(async () => (await name.inputValue().catch(() => "")) === item, { timeoutMs: 30_000, label: `the workshop's item editor named ${item}, in the app` });

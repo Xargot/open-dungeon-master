@@ -41,7 +41,11 @@ export function useUnknownGear(campaignId: string, sheetId: string): UnknownGear
   return offered ? found : null;
 }
 
-export function GiveStats({ name, gear }: { name: string; gear: UnknownGear | null }) {
+export function GiveStats({ name, gear, unsaved = false }: { name: string; gear: UnknownGear | null; unsaved?: boolean }) {
+  // Asked to leave with changes in the dialog not saved yet (in the apps,
+  // where the workshop takes the table's place): the changes stay, and the
+  // line says to save or cancel them first.
+  const [heldBack, setHeldBack] = useState(false);
   if (!gear || !gear.names.some((entry) => textKey(entry) === textKey(name))) {
     return null;
   }
@@ -52,6 +56,10 @@ export function GiveStats({ name, gear }: { name: string; gear: UnknownGear | nu
       ? {
           onClick: (event: MouseEvent<HTMLAnchorElement>) => {
             event.preventDefault();
+            if (unsaved) {
+              setHeldBack(true);
+              return;
+            }
             navigateTo(href);
           },
         }
@@ -76,6 +84,11 @@ export function GiveStats({ name, gear }: { name: string; gear: UnknownGear | nu
           Make a workshop to give it stats
         </a>
       )}
+      {inApp && gear.canAuthor ? (
+        <span role="status" className={heldBack && unsaved ? "basis-full text-amber-200" : "sr-only"}>
+          {heldBack && unsaved ? "Save or cancel your changes first: the workshop opens in place of the table." : ""}
+        </span>
+      ) : null}
     </p>
   );
 }

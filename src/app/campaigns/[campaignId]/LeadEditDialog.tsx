@@ -34,7 +34,7 @@ import { ABILITY_NAMES } from "@/lib/srd/legality/types";
 import { isCantripName } from "@/lib/srd/spell-lists";
 import { spellStyleFor } from "@/lib/srd/spell-prep";
 import MultiContentPicker from "@/app/characters/builder/MultiContentPicker";
-import { ABILITIES, type Ability, type CharacterSheet } from "@/lib/schemas/sheet";
+import { ABILITIES, type Ability, type CharacterSheet, type Proficiencies } from "@/lib/schemas/sheet";
 
 const ABILITY_SHORT: Record<string, string> = { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" };
 
@@ -144,10 +144,10 @@ export function LeadEditDialog({
       .filter(Boolean);
   }
 
-  function save() {
-    setBusy(true);
-    setError("");
-    const patch: Record<string, unknown> = { reason };
+  // The fields this correction changes, as the route takes them: what Save
+  // sends, and what is lost if the dialog is left without saving.
+  function correction(): Record<string, unknown> {
+    const patch: Record<string, unknown> = {};
     const numbers: Array<[string, string, number]> = [
       ["currentHp", currentHp, sheet.currentHp],
       ["tempHp", tempHp, sheet.tempHp],
@@ -222,13 +222,24 @@ export function LeadEditDialog({
     }
     const savesChanged = [...saves].sort().join("|") !== [...sheet.proficiencies.saves].sort().join("|");
     if (savesChanged || JSON.stringify(skillLevels) !== JSON.stringify(skillLevelsOf(sheet.proficiencies))) {
-      const training = trainingFrom(sheet.proficiencies, skillLevels, ABILITIES.filter((ability) => saves.includes(ability)));
-      if ((training.expertise ?? []).length > EXPERTISE_MAX) {
-        setError(`Expertise holds ${EXPERTISE_MAX} at most; set some back to Trained.`);
-        setBusy(false);
-        return;
-      }
-      patch.proficiencies = training;
+      patch.proficiencies = trainingFrom(sheet.proficiencies, skillLevels, ABILITIES.filter((ability) => saves.includes(ability)));
+    }
+    return patch;
+  }
+  // What the dialog would send as it opened: a sheet the dialog tidies on
+  // the way (a wizard's prepared spells written into the book) is not an
+  // edit until the lead makes one.
+  const [opened] = useState(() => JSON.stringify(correction()));
+  const unsaved = JSON.stringify(correction()) !== opened;
+
+  function save() {
+    setBusy(true);
+    setError("");
+    const patch: Record<string, unknown> = { reason, ...correction() };
+    if (((patch.proficiencies as Proficiencies | undefined)?.expertise?.length ?? 0) > EXPERTISE_MAX) {
+      setError(`Expertise holds ${EXPERTISE_MAX} at most; set some back to Trained.`);
+      setBusy(false);
+      return;
     }
     void (async () => {
       try {
@@ -421,7 +432,7 @@ export function LeadEditDialog({
                 </KitButton>
               </div>
               <ItemFlags item={row.base} />
-              <GiveStats name={row.base.name} gear={unknownGear} />
+              <GiveStats name={row.base.name} gear={unknownGear} unsaved={unsaved} />
               </div>
             ))}
             <div className="mt-1">
