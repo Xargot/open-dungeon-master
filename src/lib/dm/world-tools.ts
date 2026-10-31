@@ -685,6 +685,11 @@ export function handleTravel(
   const results: Array<{ name: string; saves: HourSave[]; failed: boolean; exhaustion?: number }> = [];
   for (const stale of targets) {
     const sheet = getSheetById(stale.id) ?? stale;
+    // The road's hours rolled the dying's death saves before these (clock.ts):
+    // one who died in them was listed holding up, saves and all.
+    if (sheet.deathSaves?.dead) {
+      continue;
+    }
     const saves = hourlyConSaves({
       campaign,
       turn,

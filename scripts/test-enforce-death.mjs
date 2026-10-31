@@ -1042,5 +1042,23 @@ await test("A hero who dies in the death saves Prayer of Healing's ten minutes r
   assert.match(prayed.result.note, /died while Prayer of Healing was being cast/);
 });
 
+// A forced march rolls its Constitution saves after the road's hours, which
+// rolled the dying's death saves first: one who died on the road was listed
+// among the marchers, holding up.
+await test("A hero who dies in the death saves a long road rolls is left out of its forced march saves.", async () => {
+  // The table's seats are taken by now: the owner plays both.
+  const walker = world.addHero({ name: "Walker", class: "fighter", level: 4, maxHp: 40, user: world.owner });
+  const carried = world.addHero({ name: "Carried", class: "fighter", level: 4, maxHp: 30, user: world.owner });
+  world.patch(carried.id, { currentHp: 0, deathSaves: { successes: 0, failures: 2, stable: false, dead: false } });
+  // Her first save on the road fails; the walker's two Constitution saves pass.
+  world.dice(5, 19, 19);
+  const marched = await world.invoke("travel", { hours: 10, characterIds: [walker.id, carried.id] });
+  world.clearDice();
+  assert.equal(marched.ok, true, marched.error);
+  assert.equal(world.sheet(carried.id).deathSaves?.dead, true, "the road's hours rolled her death save");
+  const names = (marched.result.results ?? []).map((entry) => entry.name);
+  assert.deepEqual(names, ["Walker"], `the dead are among the marchers: ${JSON.stringify(marched.result.results)}`);
+});
+
 world.close();
 finish();
