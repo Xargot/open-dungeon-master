@@ -1141,10 +1141,14 @@ function handleEndTurn(
     const live = getActiveEncounter(campaign.id) ?? encounter;
     const earlier = live.legendary.handoff?.turnId === turn.id ? live.legendary.handoff : null;
     const wrapped = advanced.wrapped || earlier?.wrapped === true;
+    // The dying it walked past, named in the pass line said after the
+    // narration, as a person's End Turn names them.
+    const dying = [...(earlier?.dying ?? []), ...advanced.dyingPassed];
     live.legendary.handoff = {
       turnId: turn.id,
       enemyIds: [...(earlier?.enemyIds ?? []), ...passed.map((enemy) => enemy.id)],
       ...(wrapped ? { wrapped } : {}),
+      ...(dying.length ? { dying } : {}),
     };
     saveEncounter(live);
   }
@@ -1156,7 +1160,7 @@ function handleEndTurn(
     ...(acting.length
       ? { enemiesToAct: acting.map((enemy) => ({ enemyId: enemy.id, name: enemy.displayName })) }
       : {}),
-    note: `${sheet.name}'s turn is over.${
+    note: `${sheet.name}'s turn is over.${dyingNote(advanced.dyingPassed)}${
       names.length
         ? ` ${names.join(" and ")} act${names.length === 1 ? "s" : ""} before ${next?.name}${
             turn.actor === "ai"
@@ -1420,7 +1424,7 @@ function advancePointer(
   // dyingPassed: the dying a first step walked past, named in the note the
   // last step posts.
   options?: { announce?: boolean | PassAnnounce; leaving?: OrderEntry; hold?: boolean; chained?: boolean; dyingPassed?: string[] },
-): { enemiesPassed: string[]; wrapped: boolean } | null {
+): { enemiesPassed: string[]; wrapped: boolean; dyingPassed: string[] } | null {
   const enemiesById = new Map(listEnemies(encounter.id).map((enemy) => [enemy.id, enemy]));
   const leaving = options?.leaving ?? encounter.order[encounter.turnIndex];
   const acts = (entry: OrderEntry) => entryActs(entry, enemiesById, encounter.surprisedIds);
@@ -1592,6 +1596,7 @@ function advancePointer(
     return {
       enemiesPassed: [...next.enemiesPassed, ...(after?.enemiesPassed ?? [])],
       wrapped: next.wrapped || Boolean(after?.wrapped),
+      dyingPassed: after?.dyingPassed ?? dyingPassed,
     };
   }
   setInitiativeFloor(campaign, encounter);
@@ -1611,7 +1616,7 @@ function advancePointer(
     // console's end_turn posted before it took this one.
     tableNote(campaign, `${options.announce(landedOn, dyingNote(dyingPassed))}${lairOpen(encounter) ? LAIR_NOTE : ""}${owedNote}`, "cue-battle");
   } else if (options?.announce !== false) {
-    announceTurn(campaign, encounter, `${lairOpen(encounter) ? LAIR_NOTE : ""}${owedNote}`);
+    announceTurn(campaign, encounter, `${lairOpen(encounter) ? LAIR_NOTE : ""}${owedNote}`, dyingNote(dyingPassed));
   }
   if (options?.hold !== false) {
     sayLostTurns(campaign, encounter);
@@ -1626,7 +1631,7 @@ function advancePointer(
   if (!next.acts) {
     rollDeathSave(campaign, orderEntryId(landed.order[landed.turnIndex]));
   }
-  return { enemiesPassed: next.enemiesPassed, wrapped: next.wrapped };
+  return { enemiesPassed: next.enemiesPassed, wrapped: next.wrapped, dyingPassed };
 }
 
 // The creatures the GM keeps off the board now (the tracker's "someone
@@ -1900,7 +1905,7 @@ function advanceAfterNarration(campaign: Campaign, turn?: DmTurn) {
     // The pass the model's end_turn made, said now that the narration is in.
     const live = getActiveEncounter(campaign.id);
     if (live) {
-      announceTurn(campaign, live, lairOpen(live) ? LAIR_NOTE : "");
+      announceTurn(campaign, live, lairOpen(live) ? LAIR_NOTE : "", dyingNote(handoff.dying ?? []));
     }
     // The turn they led to is one its owner cannot take: it is ended below,
     // now. A wake alone could find nothing posted since this turn's
@@ -2109,10 +2114,15 @@ function dyingNote(names: string[]): string {
     : ` ${listed} are dying: each of their turns is a death save.`;
 }
 
-function announceTurn(campaign: Campaign, encounter: Encounter, extra = "") {
+// The plain pass line, for a move no hero's End Turn made (the GM's step
+// forward, a companion the server played, a turn its owner cannot take, the
+// AI's end_turn after its narration). `dying` names those walked past, as the
+// worded line does (dyingNote): without it the death save posted beside the
+// pass read as the turn skipping a hero for no reason.
+function announceTurn(campaign: Campaign, encounter: Encounter, extra = "", dying = "") {
   const current = encounter.order[encounter.turnIndex];
   if (current) {
-    tableNote(campaign, `It is now ${current.name}'s turn (round ${encounter.round}).${extra}`, "cue-battle");
+    tableNote(campaign, `${dying ? `${dying.trim()} ` : ""}It is now ${current.name}'s turn (round ${encounter.round}).${extra}`, "cue-battle");
   }
 }
 
@@ -2474,12 +2484,18 @@ export function playCompanionTurn(campaign: Campaign, turn: DmTurn): string | nu
 
 // The DM's "on a turn": the same move End Turn makes, with everything a new
 // turn brings (conditions, reactions, movement, death saves, a new round).
-export function stepTurnForward(campaign: Campaign): string | null {
+// `opening` words its one pass line ("The GM moved the turn on from Kara."),
+// the dying it walks past named as End Turn names them: the caller posted a
+// line of its own beside the plain one, and the table read whose turn it was
+// twice.
+export function stepTurnForward(campaign: Campaign, opening?: string): string | null {
   const encounter = getActiveEncounter(campaign.id);
   if (!encounter || !encounter.orderReady) {
     return "No fight is running.";
   }
-  return advancePointer(campaign, encounter) ? null : "Nobody is left standing to take the next turn.";
+  const from = encounter.order[encounter.turnIndex];
+  const announce: PassAnnounce | undefined = opening ? (next, dying) => passTurnLine(opening, from, next, dying) : undefined;
+  return advancePointer(campaign, encounter, announce ? { announce } : undefined) ? null : "Nobody is left standing to take the next turn.";
 }
 
 // Lead escape hatch: advance past an absent player's turn. Inserts a table

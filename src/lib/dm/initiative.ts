@@ -67,14 +67,15 @@ export function editInitiative(campaign: Campaign, edit: InitiativeEdit): Initia
   // with nobody able to move and every condition frozen.
   if (edit.op === "step" && edit.direction === "forward") {
     const leaving = encounter.order[encounter.turnIndex]?.name;
-    const error = stepTurnForward(campaign);
+    // The pass posts this opening in its own line, with the dying it walked
+    // past; a second note here said whose turn it was twice.
+    const error = stepTurnForward(campaign, `The GM moved the turn on${leaving ? ` from ${leaving}` : ""}.`);
     if (error) {
       return { error };
     }
     const now = getActiveEncounter(campaign.id);
     const next = now?.order[now.turnIndex]?.name;
     const note = `The GM moved the turn on${leaving ? ` from ${leaving}` : ""}.${next ? ` It is now ${next}'s turn.` : ""}`;
-    announce(campaign, note);
     settleTurn(campaign, holder);
     return { ok: true, note };
   }

@@ -53,7 +53,7 @@ export type LegendaryState = {
   // them again (src/lib/dm/encounter-tools.ts). `wrapped`: that end_turn
   // began a new round, which the turn's table note says once the narration
   // is in.
-  handoff?: { turnId: string; enemyIds: string[]; wrapped?: boolean };
+  handoff?: { turnId: string; enemyIds: string[]; wrapped?: boolean; dying?: string[] };
   // The enemies that have taken a bonus action in `round` (Nimble Escape's
   // Disengage or Hide).
   bonus?: { round: number; ids: string[] };
@@ -138,7 +138,14 @@ export function normalizeLegendaryState(raw: unknown): LegendaryState {
     ...(stringList(record.strikes).length ? { strikes: stringList(record.strikes) } : {}),
     ...(Object.keys(abilities).length ? { abilities } : {}),
     ...(handoff && typeof handoff.turnId === "string"
-      ? { handoff: { turnId: handoff.turnId, enemyIds: stringList(handoff.enemyIds), ...(handoff.wrapped === true ? { wrapped: true } : {}) } }
+      ? {
+          handoff: {
+            turnId: handoff.turnId,
+            enemyIds: stringList(handoff.enemyIds),
+            ...(handoff.wrapped === true ? { wrapped: true } : {}),
+            ...(stringList(handoff.dying).length ? { dying: stringList(handoff.dying) } : {}),
+          },
+        }
       : {}),
     ...(bonus ? { bonus: { round: Number(bonus.round) || 0, ids: stringList(bonus.ids) } } : {}),
     ...(stringList(record.due).length ? { due: stringList(record.due) } : {}),

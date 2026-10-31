@@ -533,6 +533,42 @@ await test("The GM console's end_turn past a dying hero posts the line End Turn 
   assert.equal(fromConsole, fromButton, "the console and the button say one line");
 });
 
+// The GM's step forward posted the plain pass line and a note of its own
+// beside it, each saying whose turn it was, and neither named the death save
+// Brom's skipped turn became.
+await test("The GM's step forward past a dying hero says the pass once, naming the death save that is his turn", async () => {
+  const { world, heroes: [, brom] } = await table(["Kara", "Brom", "Cade"]);
+  stun(world, brom.id, "0 hp");
+  const cues = () => listRecentMessages(world.campaignId, 200).filter((message) => message.glyph === "cue-battle");
+  const before = cues().length;
+  world.dice(5);
+  const stepped = editInitiative(world.campaign(), { op: "step", direction: "forward" });
+  world.clearDice();
+  assert.equal(stepped.ok, true, stepped.error);
+  assert.equal(currentName(world), "Cade");
+  const said = cues().slice(before).map((message) => message.content);
+  assert.equal(said.length, 1, `the pass was said ${said.length} times: ${said.join(" | ")}`);
+  assert.match(said[0], /^The GM moved the turn on from Kara\. Brom is dying: their turn is a death save\. It is now Cade's turn\./);
+});
+
+// The model's pass is said after its narration, on the plain line, which
+// named nobody the pointer walked past.
+await test("The model's end_turn past a dying hero names the death save in the pass said after its narration, and in its result", async () => {
+  const { world, heroes: [kara, brom] } = await table(["Kara", "Brom", "Cade"]);
+  stun(world, brom.id, "0 hp");
+  const turn = createDmTurn(world.campaignId, [], "ai");
+  world.say("player", "That's my turn.", world.sheet(kara.id));
+  world.dice(5);
+  const ended = await aiEndTurn(world, kara.id, turn);
+  world.clearDice();
+  assert.equal(ended.ok, true, ended.error);
+  assert.match(ended.result.note, /Brom is dying: their turn is a death save\./, "the model hears of the death save");
+  dmTurnEnds(world, getDmTurn(turn.id));
+  const lines = listRecentMessages(world.campaignId, 20).filter((message) => /It is now Cade's turn/.test(message.content));
+  assert.equal(lines.length, 1, "the move is said once");
+  assert.match(lines[0].content, /^Brom is dying: their turn is a death save\. It is now Cade's turn \(round 1\)\./);
+});
+
 await test("Every wake leaves a note: the model's end_turn landing on a companion wakes the DM to play it", async () => {
   const { world, heroes: [kara] } = await table(["Kara"]);
   const pip = companion(world, "Pip", 18, kara);
