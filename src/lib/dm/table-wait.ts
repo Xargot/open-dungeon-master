@@ -279,7 +279,7 @@ export function tableWaitRewound(campaignId: string) {
   clearTimer(entry);
 }
 
-export type PassResult ={ ok: true; fire: boolean } | { ok: false; status: number; error: string };
+export type PassResult = { ok: true; fire: boolean } | { ok: false; status: number; error: string };
 
 // A player says "go on without me" for this beat. Refused where there is no
 // waiting to pass on, and once the player has already acted or passed.
