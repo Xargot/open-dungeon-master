@@ -144,6 +144,7 @@ import { agendaLinesForPrompt } from "@/lib/dm/companion-agenda";
 import { pactLinesForPrompt } from "@/lib/dm/pacts";
 import { returnDirectorNotes } from "@/lib/dm/companion-revenge";
 import { noteUnrecordedDeeds } from "@/lib/dm/deed-claims";
+import { settleStoryMoves } from "@/lib/dm/story-moves-settle";
 import {
   buildDmMessages,
   type DmGameState,
@@ -2415,6 +2416,10 @@ async function runAdvance(context: TurnContext, turn: DmTurn) {
     // A deed the narration showed that no relationship_beat recorded is
     // noted for the DM (issue 503, src/lib/dm/deed-claims.ts).
     noteUnrecordedDeeds(campaign, turn.conversation, guarded.deeds);
+    // A romantic move or a kindness the story showed and no call recorded:
+    // the engine records a declared one, or the GM reads a note next turn
+    // (issue 641, src/lib/dm/story-moves-settle.ts).
+    settleStoryMoves(campaign, { turn, sheets, claims: [...guarded.deeds, ...(guarded.bonds ?? [])], record: true });
     // The narration told the table a player's turn is over ("It is now
     // Bram's turn") and no call ended it: it ends after the narration, as
     // the table was told, and the enemies it passes act then

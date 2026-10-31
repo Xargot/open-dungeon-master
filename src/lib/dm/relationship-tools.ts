@@ -70,6 +70,7 @@ import { exclusiveBetween, landPartnerReactions, momentText, partnerResult } fro
 import { exclusiveRefusal } from "@/lib/dm/romance-exclusive-logic";
 import { amendsNote } from "@/lib/dm/amends-logic";
 import { recordRomanceStep, romanceStepTooSoon } from "@/lib/dm/romance-scenes";
+import { settleMoveNotes } from "@/lib/dm/story-moves";
 
 export { publishRelationshipsUpdated };
 
@@ -408,6 +409,7 @@ export function handleRelationshipBeat(
   if (deedKind) {
     settleUnrecordedDeeds(campaign.id, sheet);
   }
+  settleMoveNotes(campaign.id, sheet.name, subject.name);
   publishRelationshipsUpdated(campaign.id);
   // A composed companion the deed left uneasy keeps it in, and the party
   // reads them now (issue 615): whoever's Insight beats it is told alone.
@@ -770,6 +772,8 @@ export function handleRomanceAdvance(
     return { ...tooSoon, romance: relationship.romance, ...actResult(subject.name, sheet.name, relationship) };
   }
 
+  // The ask is answered, either way (issue 641's note, story-moves.ts).
+  settleMoveNotes(campaign.id, sheet.name, subject.name);
   const warmth = subject.personality?.warmth ?? 0;
   const consent = consentCheck(
     shown,
