@@ -35,8 +35,10 @@ import {
   rollDraconicAncestry,
   takesDraconicAncestry,
 } from "@/lib/srd/racial-grants";
-import { abilityMod, findClass, findRace, suggestedStartingHp, type SrdClass } from "@/lib/srd";
-import { abilityPriority } from "@/lib/srd/companion-build";
+import { abilityMod, findClass, findRace, SRD_SKILLS, suggestedStartingHp, type SrdClass } from "@/lib/srd";
+import { offeredBackgrounds } from "@/lib/characters/catalog";
+import { tableAuthors } from "@/lib/db/homebrew";
+import { abilityPriority, companionBackground, companionSkillPicks, skillIdOf } from "@/lib/srd/companion-build";
 import { startingKitFor } from "@/lib/srd/starting-kit";
 import { legalCompanionSheet } from "@/lib/dm/companion-level";
 import { portraitStatus, queueCompanionPortrait } from "@/lib/portrait";
@@ -260,6 +262,11 @@ const addArgsSchema = z.object({
   personality: z.string().trim().min(1).max(500),
   kind: z.enum(["party", "guest"]).default("guest"),
   spells: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
+  // The GM's console only (src/lib/dm/catalog-party.ts): the model's tool set
+  // sits at the line where a 48K window drops to the trimmed set, so the
+  // model is not offered these, and the engine chooses for it.
+  background: z.string().trim().max(60).optional(),
+  skills: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
   alignment: z.enum(ALIGNMENT_CODES).optional(),
   values: valuesArgSchema.optional(),
   agenda: z.object({ employer: z.string().trim().max(80).optional(), aim: z.string().trim().max(200).optional() }).optional(),
@@ -416,7 +423,50 @@ export function handleAddCompanion(
   const equipment = startingKitFor(klass, null).items;
   const ac = 10 + abilityMod(abilities.dex);
 
-  const skills = klass.skillChoices.from.slice(0, klass.skillChoices.count);
+  // Where they come from and what they are good at: the background named,
+  // else the one their scores suit, and the class's skills (and the race's
+  // open picks) chosen for the companion as a player would choose them.
+  const backgrounds = offeredBackgrounds(tableAuthors(campaign.id), false);
+  const named = args.background
+    ? backgrounds.find((entry) => textKey(entry.id) === textKey(slugify(args.background ?? "")) || textKey(entry.name) === textKey(args.background ?? ""))
+    : undefined;
+  const genre = campaign.gameSettings.genre;
+  const fitting = backgrounds.filter((entry) => !entry.genres?.length || (genre ? entry.genres.includes(genre) : false));
+  const steered = genre ? backgrounds.filter((entry) => entry.genres?.includes(genre)) : [];
+  if (args.background && !named) {
+    return {
+      error: `"${args.background}" is not a background this table offers. Call add_companion again with one of: ${(steered.length ? steered : fitting).map((entry) => entry.name).join(", ")}; or leave background out and one is chosen for them.`,
+      retry: true,
+    };
+  }
+  const background = named ?? companionBackground(steered.length ? steered : fitting, abilities);
+  const fixedSkills = [...(background?.skills ?? []), ...(chosenRace.skills ?? [])];
+  const classSkills = companionSkillPicks({
+    from: klass.skillChoices.from,
+    count: klass.skillChoices.count,
+    abilities,
+    taken: fixedSkills,
+    wanted: args.skills,
+  });
+  const raceSkills = chosenRace.skillChoice
+    ? companionSkillPicks({
+        from: chosenRace.skillChoice.from?.length ? chosenRace.skillChoice.from : SRD_SKILLS.map((entry) => entry.id),
+        count: chosenRace.skillChoice.count,
+        abilities,
+        taken: [...fixedSkills, ...classSkills],
+        wanted: args.skills,
+      })
+    : [];
+  const passedSkills = (args.skills ?? []).filter((name) => {
+    const id = skillIdOf(name);
+    return !id || ![...fixedSkills, ...classSkills, ...raceSkills].includes(id);
+  });
+  if (passedSkills.length) {
+    notes.push(
+      `${passedSkills.join(", ")} ${passedSkills.length === 1 ? "is" : "are"} not among the skills a ${klass.name}${background ? ` with the ${background.name} background` : ""} picks from, or past the number they pick, so ${passedSkills.length === 1 ? "it was" : "they were"} left off.`,
+    );
+  }
+  const skills = [...classSkills, ...raceSkills];
 
   // A dragonborn's ancestry: the one the recruiter names, else a roll on the
   // SRD's table, so an engine-made dragonborn is not always red.
@@ -431,7 +481,7 @@ export function handleAddCompanion(
     name: args.name,
     race: chosenRace.id,
     class: klass.id,
-    background: "",
+    background: background?.id ?? "",
     // What they hold to starts from it (src/lib/dm/companion-values-logic.ts).
     alignment: args.alignment ?? "",
     gender: toldGender(args.gender) ?? "",
