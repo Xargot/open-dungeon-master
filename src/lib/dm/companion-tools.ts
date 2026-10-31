@@ -214,15 +214,6 @@ function companionToolDefs(campaign: Campaign): ToolDef[] {
               items: { type: "string" },
               description: "Casters only: the spells they know (level-appropriate).",
             },
-            background: {
-              type: "string",
-              description: "Where they come from (soldier, sage, urchin...), when the story says. Omit it and the server picks the one their stats suit.",
-            },
-            skills: {
-              type: "array",
-              items: { type: "string" },
-              description: "The skills they are trained in, to fit who they are (e.g. Stealth, Insight). The server keeps the ones their class offers and picks the rest.",
-            },
             // What a party member holds to (issue 503).
             alignment: {
               type: "string",
@@ -271,6 +262,9 @@ const addArgsSchema = z.object({
   personality: z.string().trim().min(1).max(500),
   kind: z.enum(["party", "guest"]).default("guest"),
   spells: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
+  // The GM's console only (src/lib/dm/catalog-party.ts): the model's tool set
+  // sits at the line where a 48K window drops to the trimmed set, so the
+  // model is not offered these, and the engine chooses for it.
   background: z.string().trim().max(60).optional(),
   skills: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
   alignment: z.enum(ALIGNMENT_CODES).optional(),
