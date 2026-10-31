@@ -82,7 +82,18 @@ export default {
       const notice = page.locator(`${root}[data-staged-halt]`).locator("visible=true").first();
       const retry = notice.getByRole("button", { name: /Retry the turn/ });
       for (const pass of ["live", "reloaded"]) {
-        if (pass === "reloaded") await t.open(`/campaigns/${tableId}`);
+        // A test table is in no campaign list, so the app has no tile to
+        // open it by: the way back is the workshop's "Return to it", as the
+        // author takes it there (OpenTestFight.tsx).
+        if (pass === "reloaded" && t.app) {
+          await t.open(`/workshop/${workshopId}?system=encounters`);
+          const back = page.locator(`${root}[data-testid="open-test-fight"] a`).filter({ hasText: /Return to it/ }).locator("visible=true").first();
+          await eventually(() => back.count(), { timeoutMs: 30_000, label: "the workshop's way back to the test table" });
+          await t.tap(back);
+          await eventually(async () => (await t.url()).pathname.startsWith(`/campaigns/${tableId}`), { timeoutMs: 30_000, label: "the test table again" });
+        } else if (pass === "reloaded") {
+          await t.open(`/campaigns/${tableId}`);
+        }
         await eventually(() => board.isVisible(), { timeoutMs: 30_000, label: `the board on the stage (${pass})` });
         await eventually(() => notice.isVisible(), { timeoutMs: 30_000, label: `the halted notice on the stage (${pass})` });
         const said = (await notice.innerText()).replace(/\s+/g, " ");
