@@ -72,6 +72,9 @@ const scenario = {
     // console waits on the GM for the answer. The GM narrates between, as at
     // any table a person runs: a step answered holds the scene until then
     // (issue 638).
+    // A week on the road first: being betrothed needs that long after
+    // becoming partners (issue 643), so the held ask can be answered.
+    await invoke("pass_time", { amount: 8, unit: "days", reason: "The road north." });
     const narrated = await api.post(`${campaign}/dm/narrate`, { data: { content: "Goblins spill out of the ditch, blades bared." } });
     check(narrated.ok(), `the narration answered ${narrated.status()}`);
     await invoke("start_encounter", { enemies: [{ monster: "goblin" }] });

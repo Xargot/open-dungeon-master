@@ -42,7 +42,7 @@ function binding(relationship: Relationship, fallen: ReadonlySet<string>): boole
 // Whether someone is open to more than one partner: a player character's or
 // a companion's own sheet first, else the row behind the companion or the
 // NPC, as who they are drawn to is read (src/lib/db/companion-npcs.ts).
-function personOpen(campaignId: string, name: string, sheets: readonly CharacterSheet[]): boolean {
+export function personOpen(campaignId: string, name: string, sheets: readonly CharacterSheet[]): boolean {
   const sheet = sheets.find((candidate) => textKey(candidate.name) === textKey(name));
   if (sheet) {
     return openToMore(sheet.attraction) || (sheet.isCompanion && openToMore(companionNpcFor(sheet)?.attraction));

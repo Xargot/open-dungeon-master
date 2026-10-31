@@ -41,6 +41,7 @@ import { publicItemProposal } from "@/lib/dm/proposal-intercept";
 import { heldMoveError, stepTakenThisExchange } from "@/lib/dm/step-exchange";
 import { exclusiveBetween } from "@/lib/dm/romance-exclusive";
 import { exclusiveRefusal } from "@/lib/dm/romance-exclusive-logic";
+import { recordRomanceStep, romanceStepTooSoon } from "@/lib/dm/romance-scenes";
 
 // An NPC's first move toward a character whose player opened them to it
 // (issue 501): romance_advance with initiator "npc", one tool per intent
@@ -181,6 +182,11 @@ export function handleNpcAdvance(
   if (problem) {
     return { error: problem, refused: "rules" };
   }
+  // Courting needs a day after a player's own first step (issue 643).
+  const tooSoon = romanceStepTooSoon(campaign, relationship, ADVANCE_TARGET, turn);
+  if (tooSoon) {
+    return tooSoon;
+  }
 
   // The suitor's own words, bare: the card and the memory quote them.
   const line = unquoted(args.note ?? "").slice(0, 200);
@@ -261,6 +267,7 @@ export function settleNpcAdvance(
       at: new Date().toISOString(),
     }),
   });
+  recordRomanceStep(campaign.id, relationship.id);
   const npc = args.subjectKind === "npc" ? getNpcByName(campaign.id, args.subject) : null;
   recordMilestone(campaign, sheet, { name: args.subject, npc }, ADVANCE_TARGET);
   publishRelationshipsUpdated(campaign.id);

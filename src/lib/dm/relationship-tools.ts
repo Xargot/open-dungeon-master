@@ -69,6 +69,7 @@ import { holdForTheFight, settleHeldStep } from "@/lib/dm/romance-held";
 import { exclusiveBetween, landPartnerReactions, momentText, partnerResult } from "@/lib/dm/romance-exclusive";
 import { exclusiveRefusal } from "@/lib/dm/romance-exclusive-logic";
 import { amendsNote } from "@/lib/dm/amends-logic";
+import { recordRomanceStep, romanceStepTooSoon } from "@/lib/dm/romance-scenes";
 
 export { publishRelationshipsUpdated };
 
@@ -763,6 +764,11 @@ export function handleRomanceAdvance(
       ...actResult(subject.name, sheet.name, relationship),
     };
   }
+  // A rung needs some story time after the last (issue 643).
+  const tooSoon = romanceStepTooSoon(campaign, relationship, to, turn);
+  if (tooSoon) {
+    return { ...tooSoon, romance: relationship.romance, ...actResult(subject.name, sheet.name, relationship) };
+  }
 
   const warmth = subject.personality?.warmth ?? 0;
   const consent = consentCheck(
@@ -814,6 +820,7 @@ export function handleRomanceAdvance(
       }),
     }) ?? relationship;
 
+  recordRomanceStep(campaign.id, relationship.id);
   recordMilestone(campaign, sheet, subject, to, args.note);
   publishRelationshipsUpdated(campaign.id);
 

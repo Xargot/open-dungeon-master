@@ -1216,6 +1216,45 @@ const conscience = {};
   }
 }
 
+// A romance's own scene (issue 643): one table per viewport, run by the lead
+// as its GM, where the player's Kael is courting Lyra Wren, a party
+// companion, and the engine has made her ask him for help with something of
+// her own. The scenario reads the line on her Bonds row and plays it.
+const ROMANCE_PACE_TITLE = "Romance Pace Table";
+const romancePace = {};
+{
+  const { companionNpcFor } = await import("../../src/lib/db/companion-npcs.ts");
+  const { patchNpcAgency } = await import("../../src/lib/db/npcs.ts");
+  const { ensureRelationship, patchRelationship } = await import("../../src/lib/db/relationships.ts");
+  const { writePacing } = await import("../../src/lib/db/romance-pacing.ts");
+  const { NO_PACING } = await import("../../src/lib/dm/romance-scene-logic.ts");
+  for (const viewport of ["desktop", "phone"]) {
+    const table = campaigns.createCampaign(world.owner.id, {
+      title: `${ROMANCE_PACE_TITLE} (${viewport})`,
+      description: "A bard who has her own troubles.",
+      theme: "high-fantasy",
+      maxPlayers: 6,
+      startingLevel: 3,
+      difficulty: "normal",
+      gameSettings: { ttsEnabled: false, dmMode: "human" },
+    });
+    const seated = campaigns.joinByInviteCode(player.id, campaigns.getCampaignById(table.id).inviteCode);
+    if (seated.error) {
+      throw new Error(`the player could not join ${table.title}: ${seated.error}`);
+    }
+    campaigns.setCampaignStatus(table.id, "active");
+    const kael = sheets.createSheet(table.id, player.id, 3, heroInput({ name: "Kael Ashvale", class: "rogue", level: 3 }));
+    const bot = createCompanionUser("Lyra Wren");
+    const lyra = sheets.createSheet(table.id, bot.id, 3, heroInput({ name: "Lyra Wren", class: "bard", level: 3 }));
+    sheets.markSheetAsCompanion(lyra.id, "party", "Bright, restless, quick to laugh.");
+    patchNpcAgency(companionNpcFor(sheets.getSheetById(lyra.id)).id, { personality: { drive: 0, diligence: 0, boldness: 0, warmth: 1, empathy: 0, composure: 0 } });
+    const bond = ensureRelationship({ campaignId: table.id, characterId: kael.id, characterName: kael.name, subjectKind: "companion", subjectName: lyra.name, subjectId: lyra.id });
+    patchRelationship(bond.id, { approval: 80, romance: "courting" });
+    writePacing(bond.id, { ...NO_PACING, due: { kind: "asks_help", stage: "courting", rival: "", handed: 0 } });
+    romancePace[viewport] = { id: table.id, kael: kael.name, lyra: lyra.name };
+  }
+}
+
 // Scheming NPCs (issue 501): one table per viewport that the seed's player
 // runs as its storyteller, where the lead plays Kael, open to advances, and
 // Senna keeps up an act toward him (the ferry ledger), already played up to
@@ -2282,6 +2321,8 @@ const ids = {
   pip: pip.id,
   // Issue 548's made-up world, one table per viewport.
   regionTables,
+  // Issue 643's courting companion with a scene due, one per viewport.
+  romancePace,
   // Every campaign a scenario opens, by id, for the app's home tiles.
   titles: {
     [levelTable.id]: "Level Table",
@@ -2309,6 +2350,7 @@ const ids = {
     [quiet.id]: QUIET_TITLE,
     [marketTable.id]: MARKET_TITLE,
     ...Object.fromEntries(Object.entries(regionTables).map(([viewport, id]) => [id, `${REGION_TITLE} (${viewport})`])),
+    ...Object.fromEntries(Object.entries(romancePace).map(([viewport, table]) => [table.id, `${ROMANCE_PACE_TITLE} (${viewport})`])),
     [prepared.id]: PREP_TITLE,
     [tourTable.id]: TOUR_TITLE,
     [prepSource.id]: PREP_SOURCE_TITLE,

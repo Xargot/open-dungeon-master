@@ -60,6 +60,9 @@ type RelationshipView = {
   unmasked?: boolean;
   // The storyteller's own view of an act (never sent to a player).
   act?: { motive: string; shown: number; shownTier: FriendshipTier; seenThroughBy: string[]; revealed: boolean };
+  // A scene the subject is due to start (issue 643), for whoever runs the
+  // story to play; an older host never sends it.
+  scene?: string;
 };
 
 // Warm for regard, cold for its absence; mirrors how the tiers read.
@@ -246,6 +249,15 @@ function BondRow({ bond }: { bond: RelationshipView }) {
         </p>
       ) : null}
       {bond.act ? <ActLine bond={bond} act={bond.act} /> : null}
+      {bond.scene ? (
+        <p className="reveal mt-1 flex items-start gap-1.5 text-xs leading-5 text-rose-200" data-bond-scene={bond.subjectName}>
+          <Heart className="mt-0.5 size-3 shrink-0" aria-hidden />
+          <span>
+            <span className="font-medium text-rose-300">Their move, yours to play:</span> {bond.scene}
+            <span className="sr-only"> Only you see this.</span>
+          </span>
+        </p>
+      ) : null}
       {bond.history.length ? (
         <p className="reveal mt-1 text-xs leading-5 text-stone-400">
           {bond.history[bond.history.length - 1]}

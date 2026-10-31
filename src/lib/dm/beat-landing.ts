@@ -9,6 +9,7 @@ import { departureNote, settleBreakingPoint, type DepartureOutcome } from "@/lib
 import { clockDay, RUNG_WORD, stepLadder, type LadderStep } from "@/lib/dm/conscience-logic";
 import { deedVerdict, doneToDelta, SEVERITY_FACTOR, type DeedKind, type DeedSeverity, type DeedVerdict } from "@/lib/dm/companion-values-logic";
 import { openLedger, type Subject } from "@/lib/dm/relationship-subject";
+import { fadedValueSwing, honourRepeats } from "@/lib/dm/romance-pace-logic";
 import { actAfterBeat, actFaceValue, actRunning, outwardApproval } from "@/lib/dm/scheme-logic";
 import {
   addFlag,
@@ -113,10 +114,12 @@ export function landBeat(
     hostile: subject.hostile,
   });
   const companion = conscienceOn(campaign) ? liveCompanion(subject) : null;
-  const values = companion && subject.npc
-    ? deedVerdict(companionValues(subject.npc.id), beat, deed?.severity ?? "serious", deed?.faction ?? "")
-    : null;
-  const moved = Math.round(weighed * (deed ? SEVERITY_FACTOR[deed.severity] : 1)) + (values?.approval ?? 0);
+  const held = companion && subject.npc ? companionValues(subject.npc.id) : null;
+  const values = held ? deedVerdict(held, beat, deed?.severity ?? "serious", deed?.faction ?? "") : null;
+  // What they hold wears as the personality read does (issue 643): the
+  // third deed honouring one value is worth well under the first.
+  const swing = held && values ? fadedValueSwing(values.approval, honourRepeats(held, relationship.beats, beat, deed?.faction ?? "")) : 0;
+  const moved = Math.round(weighed * (deed ? SEVERITY_FACTOR[deed.severity] : 1)) + swing;
   // An amends repairs what wrongs cost this bond, never more (issue 642).
   const delta = beat === "amends" ? amendsDelta(moved, relationship.owed) : moved;
   const sheets = listSheets(campaign.id);
