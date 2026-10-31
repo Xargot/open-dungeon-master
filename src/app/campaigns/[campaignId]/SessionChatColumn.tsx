@@ -304,6 +304,9 @@ export function SessionChatColumn({
         open={askOpen}
         onOpenChange={onAskOpenChange}
         onAsked={refreshAsks}
+        sheets={sheets}
+        cast={state.cast}
+        places={locations}
       />
 
       {/* Directly above the composer, so the answer to "why is nothing

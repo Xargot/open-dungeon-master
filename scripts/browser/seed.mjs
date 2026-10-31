@@ -465,6 +465,72 @@ const bondTables = {};
   }
 }
 
+// A table per viewport for the composer's @ menu (issue 650): a person runs
+// it as its GM and the lead plays at it, so the lead's seat holds only the
+// people the story has named. Sildar was named in the GM's narration; Iarno
+// is prepared and never named, and no player's menu or device may hold him.
+// Two places are on the map, one of them with an accent and an apostrophe.
+const nameTables = {};
+{
+  const npcs = await import("../../src/lib/db/npcs.ts");
+  const { upsertCurrentLocation, insertKnownLocation } = await import("../../src/lib/db/locations.ts");
+  for (const viewport of ["desktop", "phone"]) {
+    const gm = world.addUser("names-gm");
+    const table = campaigns.createCampaign(gm.id, {
+      title: `Names Table (${viewport})`,
+      description: "A town with too many names to spell.",
+      theme: "high-fantasy",
+      maxPlayers: 6,
+      startingLevel: 3,
+      difficulty: "normal",
+      gameSettings: { ttsEnabled: false, dmMode: "human" },
+    });
+    for (const user of [world.owner, player]) {
+      const seated = campaigns.joinByInviteCode(user.id, campaigns.getCampaignById(table.id).inviteCode);
+      if (seated.error) {
+        throw new Error(`a player could not join ${table.title}: ${seated.error}`);
+      }
+    }
+    campaigns.setCampaignStatus(table.id, "active");
+    sheets.createSheet(table.id, world.owner.id, 3, heroInput({ name: "Rowan Ashby", class: "fighter", level: 3 }));
+    sheets.createSheet(table.id, player.id, 3, heroInput({ name: "Bree Underhill", class: "rogue", level: 3 }));
+    npcs.upsertNpc({ campaignId: table.id, name: "Sildar Hallwinter", aliases: ["Sildar"] });
+    npcs.upsertNpc({ campaignId: table.id, name: "Iarno Albrek" });
+    upsertCurrentLocation({ campaignId: table.id, name: "Phandalin" });
+    insertKnownLocation({ campaignId: table.id, name: "Thundertree's Côte" });
+    messages.insertCampaignMessage({
+      campaignId: table.id,
+      seq: campaigns.allocateSeq(table.id),
+      authorType: "dm",
+      userId: gm.id,
+      content: "Sildar Hallwinter waves you over to the fire.",
+      speech: [],
+    });
+    nameTables[viewport] = table.id;
+    // And one the lead runs as its GM, holding the whole cast: Narrate
+    // offers Iarno too, marked as not introduced yet.
+    const run = campaigns.createCampaign(world.owner.id, {
+      title: `Names GM Table (${viewport})`,
+      description: "The same town, from behind the screen.",
+      theme: "high-fantasy",
+      maxPlayers: 6,
+      startingLevel: 3,
+      difficulty: "normal",
+      gameSettings: { ttsEnabled: false, dmMode: "human" },
+    });
+    const seated = campaigns.joinByInviteCode(player.id, campaigns.getCampaignById(run.id).inviteCode);
+    if (seated.error) {
+      throw new Error(`the player could not join ${run.title}: ${seated.error}`);
+    }
+    campaigns.setCampaignStatus(run.id, "active");
+    sheets.createSheet(run.id, player.id, 3, heroInput({ name: "Bree Underhill", class: "rogue", level: 3 }));
+    npcs.upsertNpc({ campaignId: run.id, name: "Sildar Hallwinter" });
+    npcs.markNpcMet(npcs.getNpcByName(run.id, "Sildar Hallwinter").id);
+    npcs.upsertNpc({ campaignId: run.id, name: "Iarno Albrek" });
+    nameTables[`${viewport}Gm`] = run.id;
+  }
+}
+
 // A table per viewport for the DM's Stop (issue 383): its turn runs against
 // a model the scenario starts and never lets answer.
 const stopTables = {};
@@ -2246,6 +2312,7 @@ const ids = {
   dominate,
   conduct,
   bondTables,
+  nameTables,
   pacts: pactTables,
   pip: pip.id,
   // Issue 548's made-up world, one table per viewport.
@@ -2283,6 +2350,7 @@ const ids = {
     [offerTable.id]: OFFER_TITLE,
     ...Object.fromEntries(Object.entries(closing).map(([viewport, id]) => [id, `Closing Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(bondTables).map(([viewport, table]) => [table.id, `Bonds Table (${viewport})`])),
+    ...Object.fromEntries(Object.entries(nameTables).map(([key, id]) => [id, key.endsWith("Gm") ? `Names GM Table (${key.slice(0, -2)})` : `Names Table (${key})`])),
     ...Object.fromEntries(Object.entries(stopTables).map(([viewport, id]) => [id, `Stop Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(questTables).map(([viewport, table]) => [table.id, `Quest Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(wardrobe).map(([viewport, id]) => [id, `Wardrobe (${viewport})`])),

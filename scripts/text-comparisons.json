@@ -14,6 +14,7 @@
     "lib/db/core.ts"
   ],
   "sites": {
+    "app/campaigns/[campaignId]/NameMenu.tsx#str-eq": [["key",5,"UI: ids, fixed choices, DOM and keyboard names, stored values"]],
     "lib/battlemap/card-art.ts#str-eq": [["key",1,"Canonical unarmed-strike action id selects the genre fist asset; no player-authored text is compared"]],
     "lib/battlemap/card-art.ts#str-list": [["key",2,"Supported core-action asset ids and fixed campaign genre ids"]],
     "app/AuthForm.tsx#str-eq": [["key",2,"UI: ids, fixed choices, DOM and keyboard names, stored values"]],
@@ -1930,7 +1931,7 @@
     "lib/jobs.ts#str-eq": [["key",1,"campaign status"]],
     "lib/language/language.ts#.normalize(": [["human",1,"the language helper"]],
     "lib/language/language.ts#toLowerCase": [["human",2,"the language helper"]],
-    "lib/language/text-logic.ts#.normalize(": [["human",4,"the shared helpers themselves"]],
+    "lib/language/text-logic.ts#.normalize(": [["human",5,"the shared helpers themselves"]],
     "lib/language/text-logic.ts#Intl.Collator": [["human",1,"the shared helpers themselves"]],
     "lib/language/text-logic.ts#RegExp i": [["human",1,"the shared helpers themselves"]],
     "lib/language/text-logic.ts#[a-z]": [["human",1,"the shared helpers themselves"]],
