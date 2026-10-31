@@ -154,6 +154,11 @@ await test("At a table of two, a line said while the chapter closes starts the w
   const leave = [subscribe(world.campaignId, () => {}, karaUser.id), subscribe(world.campaignId, () => {}, bramUser.id)];
   const release = await closingChapter(setup);
   assert.equal((await act(world, karaUser, LINE, "say")).status, 202);
+  // Nobody is being answered while the chapter closes, so a pass is refused
+  // for that reason, not for a narration under way.
+  const pass = await call(world, bramUser, "campaigns/[campaignId]/pass", "POST");
+  assert.equal(pass.status, 409);
+  assert.match(pass.json.error, /closing the chapter/);
   release();
   await settleQueue(world.campaignId);
   assert.equal(model.served(), 3, "one answer of two woke the GM");

@@ -299,7 +299,13 @@ export function passTable(campaignId: string, userId: string): PassResult {
   if (campaign.floor.mode !== "open") {
     return { ok: false, status: 409, error: "Only an open table waits for passes." };
   }
-  if (getDmStatus(campaignId) !== "idle") {
+  const status = getDmStatus(campaignId);
+  if (status === "writing_chapter" || status === "plotting_arc") {
+    // Nobody is being answered while a chapter closes; what was posted waits
+    // for it to close (issue 636).
+    return { ok: false, status: 409, error: "The GM is closing the chapter. Pass once it has closed if you have nothing to add." };
+  }
+  if (status !== "idle") {
     return { ok: false, status: 409, error: "The GM is answering now. Pass after the narration if you have nothing to add." };
   }
   const decision = decisionFor(campaignId, Date.now());
