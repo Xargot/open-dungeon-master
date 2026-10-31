@@ -25,6 +25,7 @@ import { ensureRelationship, patchRelationship } from "@/lib/db/relationships";
 import {
   applyApproval,
   approvalRollModifier,
+  demoteRomance,
   friendshipTier,
   SOCIAL_CHECK_SWING,
   TIER_LABEL,
@@ -488,7 +489,14 @@ export function handleSocialCheck(
         approval,
         outcome.direction === "down" ? -SOCIAL_CHECK_SWING : SOCIAL_CHECK_SWING,
       );
-      patchRelationship(relationship.id, { approval });
+      const moved = patchRelationship(relationship.id, { approval });
+      // A romance the meter no longer holds slips back, as it does under a
+      // beat (beat-landing.ts): bullied below a rung's grace, a courtship
+      // stayed "courting" until some later beat noticed (issue 640). An act
+      // reads the warmth it shows, which the patch moved with the meter.
+      if (moved && moved.romance !== "none") {
+        patchRelationship(moved.id, { romance: demoteRomance(moved.romance, outwardApproval(moved)) });
+      }
       publishRelationshipsUpdated(campaign.id);
       const personality =
         npc.agency.personality ?? derivePersonality(npc.name, npc.attitude, npc.trait);

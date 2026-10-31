@@ -465,6 +465,37 @@ const bondTables = {};
   }
 }
 
+// A table per viewport for a romance the table hears of (issue 640): the
+// lead runs it as its GM, the player's Kael is courting the companion Sir
+// Hollis, who adores him, so every step asked of him is a certain yes.
+const romanceTables = {};
+{
+  const bonds = await import("../../src/lib/db/relationships.ts");
+  for (const viewport of ["desktop", "phone"]) {
+    const table = campaigns.createCampaign(world.owner.id, {
+      title: `Romance Table (${viewport})`,
+      description: "A road with someone dear on it.",
+      theme: "high-fantasy",
+      maxPlayers: 6,
+      startingLevel: 3,
+      difficulty: "normal",
+      gameSettings: { ttsEnabled: false, dmMode: "human", companions: "full" },
+    });
+    const seated = campaigns.joinByInviteCode(player.id, campaigns.getCampaignById(table.id).inviteCode);
+    if (seated.error) {
+      throw new Error(`the player could not join ${table.title}: ${seated.error}`);
+    }
+    campaigns.setCampaignStatus(table.id, "active");
+    const kael = sheets.createSheet(table.id, player.id, 3, heroInput({ name: "Kael Ashvale", class: "rogue", level: 3 }));
+    const hollisBot = createCompanionUser("Sir Hollis Stonebridge");
+    const hollis = sheets.createSheet(table.id, hollisBot.id, 3, heroInput({ name: "Sir Hollis Stonebridge", class: "paladin", level: 3 }));
+    sheets.markSheetAsCompanion(hollis.id, "party", "Keeps his word.");
+    const courtship = bonds.ensureRelationship({ campaignId: table.id, characterId: kael.id, characterName: kael.name, subjectKind: "companion", subjectName: hollis.name });
+    bonds.patchRelationship(courtship.id, { approval: 100, romance: "courting" });
+    romanceTables[viewport] = { id: table.id, kael: kael.id };
+  }
+}
+
 // A table per viewport for the DM's Stop (issue 383): its turn runs against
 // a model the scenario starts and never lets answer.
 const stopTables = {};
@@ -2246,6 +2277,7 @@ const ids = {
   dominate,
   conduct,
   bondTables,
+  romanceTables,
   pacts: pactTables,
   pip: pip.id,
   // Issue 548's made-up world, one table per viewport.
@@ -2283,6 +2315,7 @@ const ids = {
     [offerTable.id]: OFFER_TITLE,
     ...Object.fromEntries(Object.entries(closing).map(([viewport, id]) => [id, `Closing Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(bondTables).map(([viewport, table]) => [table.id, `Bonds Table (${viewport})`])),
+    ...Object.fromEntries(Object.entries(romanceTables).map(([viewport, table]) => [table.id, `Romance Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(stopTables).map(([viewport, id]) => [id, `Stop Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(questTables).map(([viewport, table]) => [table.id, `Quest Table (${viewport})`])),
     ...Object.fromEntries(Object.entries(wardrobe).map(([viewport, id]) => [id, `Wardrobe (${viewport})`])),

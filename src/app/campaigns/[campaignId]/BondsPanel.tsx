@@ -63,7 +63,7 @@ type RelationshipView = {
 };
 
 // Warm for regard, cold for its absence; mirrors how the tiers read.
-const TIER_STYLES: Record<FriendshipTier, string> = {
+export const TIER_STYLES: Record<FriendshipTier, string> = {
   hostile: "border-red-900/60 bg-red-950/30 text-red-300",
   disliked: "border-red-900/40 bg-red-950/20 text-red-400/90",
   wary: "border-stone-700 bg-stone-900/40 text-stone-400",
@@ -86,7 +86,7 @@ const TIER_GLYPH: Record<FriendshipTier, string> = {
   devoted: "attitude-allied",
 };
 
-const TIER_WORD: Record<FriendshipTier, string> = {
+export const TIER_WORD: Record<FriendshipTier, string> = {
   hostile: "Hostile",
   disliked: "Dislikes",
   wary: "Wary",
@@ -97,7 +97,7 @@ const TIER_WORD: Record<FriendshipTier, string> = {
   devoted: "Devoted",
 };
 
-const ROMANCE_WORD: Record<RomanceStage, string> = {
+export const ROMANCE_WORD: Record<RomanceStage, string> = {
   none: "",
   interested: "Interested",
   courting: "Courting",

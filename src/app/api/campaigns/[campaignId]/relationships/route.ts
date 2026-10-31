@@ -9,6 +9,7 @@ import { heldIntents } from "@/lib/dm/departure";
 import { conductViews } from "@/lib/dm/party-conduct";
 import { heldAgendas } from "@/lib/dm/companion-agenda";
 import { playerPactsPossible } from "@/lib/dm/pacts";
+import { heldAsks } from "@/lib/dm/romance-held";
 import { textKey } from "@/lib/language/text-logic";
 
 export const runtime = "nodejs";
@@ -59,6 +60,10 @@ export async function GET(
   const agendas = storyteller ? heldAgendas(context.campaign) : new Map<string, string>();
   const viewer = { storyteller, ownedCharacterIds };
   const names = new Map(sheets.map((sheet) => [sheet.id, sheet.name]));
+  // A romantic step asked in a fight now over, still waiting for its answer
+  // (issue 640): the console's Waiting on you lists it. It was asked aloud at
+  // the table, so it is no seat's secret.
+  const held = heldAsks(context.campaign);
   return Response.json({
     enabled: true,
     romanceEnabled: context.campaign.gameSettings.romance !== "off",
@@ -89,6 +94,7 @@ export async function GET(
         // The three most recent remembered beats read as a short history.
         history: relationship.memories.slice(-3).map((memory) => memory.text),
         ...(lead ? { approval: truth.approval } : {}),
+        ...(held.has(relationship.id) ? { heldStep: { to: held.get(relationship.id) } } : {}),
         ...(truth.seenThrough ? { seenThrough: true } : {}),
         ...(truth.unmasked ? { unmasked: true } : {}),
         ...(truth.act
