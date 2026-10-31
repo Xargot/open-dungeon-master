@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import type { CampaignMember, SessionUser } from "@/lib/campaign-types";
+import { isHaltedTurnNotice, type CampaignMember, type SessionUser } from "@/lib/campaign-types";
 import type { CoordinationPhase } from "@/lib/dm/coordination-logic";
 import type { TableWaitView } from "@/lib/dm/table-wait-logic";
 import { coalesceRefresh } from "@/app/campaigns/[campaignId]/coalesce";
@@ -1130,9 +1130,10 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
 }
 
 // A DM passage, or the system notice that a turn was halted, ends the turn
-// and with it the streaming draft.
+// and with it the streaming draft. A lair action the turn's tool posts is
+// linked to the turn as well, and the turn runs on past it.
 function endsDmTurn(message: CampaignMessage): boolean {
-  return message.authorType === "dm" || (message.authorType === "system" && Boolean(message.dmTurnId));
+  return message.authorType === "dm" || isHaltedTurnNotice(message);
 }
 
 const PERSISTED_EVENTS = [

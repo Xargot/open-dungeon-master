@@ -1,7 +1,7 @@
 // What the Chronicle beside the battle map shows, and when it moves
 // (issues 212 and 213). Pure: scripts/test-chronicle.mjs.
 import type { CampaignMessage } from "@/lib/db/messages";
-import { LEAD_NOTE_PREFIX, haltedTurnPrefix, systemNoteWords } from "@/lib/campaign-types";
+import { LEAD_NOTE_PREFIX, isHaltedTurnNotice, systemNoteWords } from "@/lib/campaign-types";
 import { isOocAnswer } from "@/lib/dm/ooc-question";
 
 // The newest entries the scroll holds. It held 14 beside a short board; the
@@ -13,12 +13,13 @@ type Entry = Pick<CampaignMessage, "id" | "authorType" | "dmTurnId" | "content">
 
 // Narration, the party's lines and the table's notes: every message but the
 // system line a halted DM turn leaves (it belongs to the turn, not the tale).
+// A lair action is linked to its turn as well, and is the tale's.
 // `earlier` counts what the window leaves out.
 export function chronicleWindow<M extends Entry>(
   messages: readonly M[],
   limit = CHRONICLE_ENTRIES,
 ): { recent: M[]; earlier: number } {
-  const eligible = messages.filter((message) => message.authorType !== "system" || !message.dmTurnId);
+  const eligible = messages.filter((message) => !isHaltedTurnNotice(message));
   return { recent: eligible.slice(-limit), earlier: Math.max(0, eligible.length - limit) };
 }
 
@@ -35,7 +36,7 @@ export function stagedHaltedTurn<M extends Entry>(messages: readonly M[]): M | n
     if (message.authorType === "dm" && !isOocAnswer(message.content)) {
       return null;
     }
-    if (message.authorType === "system" && message.dmTurnId && haltedTurnPrefix(message.content)) {
+    if (isHaltedTurnNotice(message)) {
       return message;
     }
   }

@@ -5,6 +5,7 @@ import type { GeneratedImage, ImageRequest } from "@/lib/types";
 import { parseMessageIntent, type MessageIntent } from "@/lib/dm/intent-logic";
 import { isSystemGlyph, type SystemGlyph } from "@/lib/system-glyphs";
 import { noteNamesHeard } from "@/lib/dm/cast";
+import { isHaltedTurnNotice } from "@/lib/campaign-types";
 
 export type CampaignMessage = {
   id: string;
@@ -291,11 +292,15 @@ export function clearMessageDmTurn(messageId: string, dmTurnId: string): Campaig
 }
 
 // The halted notice pointing at a turn, if it is still offering a retry.
+// The notice alone: a lair action the turn posted carries the same link, and
+// sits after the notice when the notice took the narration's earlier slot
+// (src/lib/dm/narration-slot.ts), so the newest linked row was the lair's
+// and the Retry cleared its link while the notice kept offering itself.
 export function findMessageForDmTurn(dmTurnId: string): CampaignMessage | null {
-  const row = getDatabase()
-    .prepare(`SELECT * FROM campaign_messages WHERE dm_turn_id = ? ORDER BY seq DESC LIMIT 1`)
-    .get(dmTurnId) as MessageRow | undefined;
-  return row ? mapMessage(row) : null;
+  const rows = getDatabase()
+    .prepare(`SELECT * FROM campaign_messages WHERE dm_turn_id = ? AND author_type = 'system' ORDER BY seq DESC`)
+    .all(dmTurnId) as MessageRow[];
+  return rows.map(mapMessage).find(isHaltedTurnNotice) ?? null;
 }
 
 // A card no call of its turn carried out goes back to its player (issue

@@ -906,7 +906,7 @@
     "lib/build-info.ts#toLowerCase": [["key",1,"release channel word"]],
     "lib/campaign-defaults.ts#str-eq": [["key",2,"settings field names"]],
     "lib/campaign-defaults.ts#str-key": [["key",1,"settings field names"]],
-    "lib/campaign-types.ts#str-eq": [["key",1,"stored enums and author types"]],
+    "lib/campaign-types.ts#str-eq": [["key",2,"stored enums and author types"]],
     "lib/campaign-types.ts#str-list": [["key",2,"stored enums and author types"]],
     "lib/capabilities.ts#re-affix": [["key",2,"backend ids, host names and HTTP Authorization scheme"]],
     "lib/capabilities.ts#re-word": [["key",2,"backend ids, host names and HTTP Authorization scheme"]],

@@ -36,8 +36,21 @@ test("the window holds the newest entries and counts what it leaves out", () => 
 });
 
 test("a halted turn's system line is the turn's, not the tale's", () => {
-  const messages = [message(1), message(2, { authorType: "system", dmTurnId: "t1" }), message(4, { authorType: "system" })];
+  const messages = [
+    message(1),
+    message(2, { authorType: "system", dmTurnId: "t1", content: "The GM ran into a problem: timeout." }),
+    message(4, { authorType: "system" }),
+  ];
   assert.deepEqual(chronicleWindow(messages).recent.map((entry) => entry.id), ["m1", "m4"]);
+});
+
+// A lair action the GM's turn posts is linked to that turn as well. Read as
+// a halt by its link alone, it was on no screen beside a staged board: the
+// scroll left it out and the board hid the transcript.
+test("a lair action linked to its turn is the tale's, and no halt", () => {
+  const lair = message(5, { authorType: "system", dmTurnId: "t5", content: "Lair action (initiative 20, round 2): The ceiling sheds stones." });
+  assert.deepEqual(chronicleWindow([message(1), lair]).recent.map((entry) => entry.id), ["m1", "m5"]);
+  assert.equal(stagedHaltedTurn([message(1), lair]), null);
 });
 
 // 0.31.3 playtest: a test fight's GM halted (its program signed out) and the
