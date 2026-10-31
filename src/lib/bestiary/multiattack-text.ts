@@ -185,8 +185,13 @@ function namedCounts(text: string): string {
     .replace(new RegExp(`\\b(${ANY_CASE_COUNT})\\s+((?:[A-Z][\\p{L}'’-]*)(?:\\s+[A-Z][\\p{L}'’-]*)*)(?!\\s+attacks?\\b)(?=\\s*(?:[,.;]|\\s(?:or|and|plus)\\s|$))`, "gu"), "$1 $2 attacks");
 }
 
+// The SRD's own page and a block pasted from it set an aside off with long
+// dashes (U+2014, or U+2013), where the pack prints " - " ("three melee
+// attacks - one with its snake hair and two with its shortsword - or two
+// ranged attacks"): read as they were, the medusa's routines were lost and
+// both counts added to five attacks of anything.
 export function multiattackSentences(desc: string): string[] {
-  return namedCounts(a5eMultiattack(desc.replace(/\s+/g, " ").trim()))
+  return namedCounts(a5eMultiattack(desc.replace(/\s*[\u2013\u2014]\s*/g, " - ").replace(/\s+/g, " ").trim()))
     .replace(new RegExp(`^(?=${COUNT_WORD}\\s)`, "i"), "makes ")
     .replace(/(^|[.;]\s+)(?=(?:[Oo]ne|[Tt]wo|[Tt]hree|[Ff]our|[Ff]ive|[Ss]ix)\s+[A-Z])/g, "$1makes ")
     .replace(new RegExp(`(\\battacks?),\\s+(?=${COUNT_WORD}\\s[^.,;]*?attacks?,?\\s+or\\s+one of each\\b)`, "gi"), "$1 or ")

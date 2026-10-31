@@ -204,6 +204,19 @@ await test("A wererat read from its SRD 5.1 block fires its Hand Crossbow once, 
   assert.deepEqual(swingsOf(snare, "Tentacle"), ["Tentacle", "Tentacle", "Tentacle", "Tentacle"]);
 });
 
+// The SRD 5.1 page sets the medusa's melee routine off with dashes, where the
+// pack prints " - ": read from the page or a block pasted from it, it was
+// five attacks of anything.
+await test("A medusa whose Multiattack sets its melee routine off with dashes, as the SRD 5.1 page prints it, makes its three melee attacks or two longbow shots.", () => {
+  const names = ["Snake Hair", "Shortsword", "Longbow"];
+  const pack = readAs("The medusa makes either three melee attacks - one with its snake hair and two with its shortsword - or two ranged attacks with its longbow.", names);
+  for (const dash of ["\u2014", "\u2013", " \u2014 "]) {
+    const page = readAs(`The medusa makes either three melee attacks${dash}one with its snake hair and two with its shortsword${dash}or two ranged attacks with its longbow.`, names);
+    assert.deepEqual(page.routines, ["Snake Hair x1 + Shortsword x2", "Longbow x2"]);
+    assert.deepEqual(page, pack);
+  }
+});
+
 await test("A Multiattack's groups name the block's attacks by whole name, \"+1\" and a bracket note set aside, either side plural.", () => {
   assert.deepEqual(readAs("The vila makes two shortsword attacks or two shortbow attacks.", ["+1 Shortsword", "+1 Shortbow"]).routines, ["+1 Shortsword x2", "+1 Shortbow x2"]);
   assert.deepEqual(readAs("It makes two talon attacks and one beak attack.", ["Talons (Eagle Form Only)", "Beak (Eagle Form Only)"]).routines, ["Talons (Eagle Form Only) x2 + Beak (Eagle Form Only) x1"]);
