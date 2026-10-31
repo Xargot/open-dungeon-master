@@ -32,6 +32,7 @@ import {
 } from "@/app/workshop/homebrew/types";
 import { textKey } from "@/lib/language/text-logic";
 import { workshopClassId } from "@/lib/homebrew/class-data";
+import { HOMEBREW_NAME_MAX } from "@/lib/schemas/homebrew";
 
 // The Homebrew system: the user's items, spells and character options, one
 // kind at a time, with the editor in a sheet. User-scoped like the bestiary,
@@ -172,6 +173,25 @@ export function HomebrewPanel({
       live = false;
     };
   }, [start]);
+
+  // "Give it stats" from the lead's Adjust dialog (src/app/campaigns/
+  // [campaignId]/GiveStats.tsx): ?item=<name> opens a new item of that
+  // name, unsaved. Saved, it gives the table's item of the same name its
+  // stats (hydrateHomebrewGear). The parameter is dropped as ?start= is.
+  const itemName = params.get("item")?.trim() ?? "";
+  const [openedItem, setOpenedItem] = useState("");
+  if (itemName && itemName !== openedItem) {
+    setOpenedItem(itemName);
+    setKind("item");
+    setError("");
+    setEditing({ id: null, draft: { ...blankDraft("item"), name: itemName.slice(0, HOMEBREW_NAME_MAX) } });
+  }
+  useEffect(() => {
+    if (!itemName) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("item");
+    window.history.replaceState(null, "", url.toString());
+  }, [itemName]);
 
   const ofKind = entries.filter((entry) => entry.kind === kind);
   const needle = textKey(query);
