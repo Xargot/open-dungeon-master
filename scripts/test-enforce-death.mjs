@@ -593,6 +593,27 @@ await test("a rest or a march that settles a dying character's saves tells the G
   kit.reset(hero.id);
 });
 
+await test("a march posts its own line to the chronicle after the death saves it rolled, as a rest does", async () => {
+  const name = world.sheet(hero.id).name;
+  dying({ ...FRESH, failures: 1 });
+  const march = await kit.withDice([11, 9, 20], "travel", { hours: 2, pace: "normal", characterIds: [ally.id], reason: "Up the old mill road" });
+  assert.equal(march.outcome.ok, true, march.outcome.error);
+  assert.equal(hp(), 1, JSON.stringify(march.result));
+  const lines = messages.listRecentMessages(world.campaignId, 20).map((row) => row.content);
+  const journey = lines.findLastIndex((content) => content.startsWith("The party travels"));
+  assert.ok(journey >= 0, `no journey line: ${lines.slice(-6).join(" | ")}`);
+  assert.match(lines[journey], /^The party travels for 2 hours: Up the old mill road\. It is now .+\.$/);
+  assert.equal(lines[journey], `The party travels for 2 hours: Up the old mill road. It is now ${march.result.now}.`);
+  const lastSave = lines.findLastIndex((content) => content.includes(`${name} death save: rolled`));
+  assert.ok(lastSave >= 0 && lastSave < journey, `the journey line is not after the saves: ${lines.slice(-6).join(" | ")}`);
+
+  // And time passing reads as English: "10 minutes pass", "1 hour passes".
+  await world.invoke("pass_time", { amount: 10, unit: "minutes", reason: "Catching breath" });
+  const passed = messages.listRecentMessages(world.campaignId, 5).map((row) => row.content).at(-1);
+  assert.match(passed, /^10 minutes pass: Catching breath\. It is now /);
+  kit.reset(hero.id);
+});
+
 await test("the stable and the dead roll nothing as time passes", async () => {
   for (const saves of [{ ...FRESH, stable: true }, DEAD]) {
     dying(saves);
