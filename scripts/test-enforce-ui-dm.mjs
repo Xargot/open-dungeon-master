@@ -289,6 +289,23 @@ await test("a rogue 6 / bard 10 keeps eight expertise, and the dialog counts wha
   assert.equal(leadEdit.earnedExpertise({ class: "fighter", level: 20, classes: [] }), 0);
 });
 
+// The apps' Adjust dialog can open a host from before the cap was raised,
+// whose schema refuses a seventh expertise with its own message ("Too big:
+// expected array to have <=6 items"). The dialog stops at six there and says
+// why in plain words; a host that holds more takes the eight.
+await test("past six expertise, an older host gets a plain sentence before the save, and this one takes it", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { SERVER_FEATURES } = await import("../src/lib/capabilities.ts");
+  assert.equal(leadEdit.expertiseOverCap(6, false), null);
+  assert.match(leadEdit.expertiseOverCap(7, false) ?? "", /^This server's version holds expertise in 6 skills at most; set some back to Trained, or update the server\.$/);
+  assert.equal(leadEdit.expertiseOverCap(8, true), null);
+  assert.match(leadEdit.expertiseOverCap(20, true) ?? "", /at most; set some back to Trained/);
+  assert.equal(SERVER_FEATURES.moreExpertise, true, "this server says it holds more than six");
+  const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+  assert.match(read("src/lib/use-capabilities.ts"), /features\?: \{[^}]*moreExpertise\?: boolean/);
+  assert.match(read("src/app/campaigns/[campaignId]/LeadEditDialog.tsx"), /hostOffers\(useCapabilities\(\), "moreExpertise"\)/);
+});
+
 // ---- U:UD9 the human DM corrects an enemy's hit points ----
 
 const { enemyHpCorrection } = await import("../src/lib/dm/catalog-enemy-hp.ts");

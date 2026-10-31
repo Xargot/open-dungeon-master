@@ -73,6 +73,10 @@ export const SERVER_FEATURES = {
   // stats" into the workshop: GET /api/campaigns/[id]/sheets/[sheetId]/
   // unknown-gear, which an older host answers with a 404.
   unknownGear: true,
+  // More than six expertise on a sheet (a rogue 6 / bard 10 holds eight):
+  // an older host's sheet schema refuses the save with its raw message, so
+  // the Adjust dialog stops at six there and says why in plain words.
+  moreExpertise: true,
   // "Hopes for this story" on a character (the builder's Hero step and the
   // sheet in play): the `hopes` field an older host drops while answering
   // the save as done.

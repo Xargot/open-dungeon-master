@@ -76,6 +76,19 @@ export type SkillLevel = "none" | "trained" | "expert";
 
 // Expertise holds this many entries at most (the sheet schema's cap).
 export const EXPERTISE_MAX = EXPERTISE_CAP;
+// What a host from before that cap was raised holds (0.31.3 and older).
+export const OLDER_HOST_EXPERTISE_MAX = 6;
+
+// Why a correction with this much expertise cannot be saved here, in plain
+// words, or null when it can. An older host refuses past six with its
+// schema's own message ("Too big: expected array to have <=6 items").
+export function expertiseOverCap(count: number, hostHoldsMore: boolean): string | null {
+  const cap = hostHoldsMore ? EXPERTISE_MAX : OLDER_HOST_EXPERTISE_MAX;
+  if (count <= cap) return null;
+  return hostHoldsMore
+    ? `Expertise holds ${cap} at most; set some back to Trained.`
+    : `This server's version holds expertise in ${cap} skills at most; set some back to Trained, or update the server.`;
+}
 
 // The expertise a sheet's classes have given by their levels (SRD 5.1: a
 // rogue's at 1st and 6th, a bard's at 3rd and 10th, two skills each), for

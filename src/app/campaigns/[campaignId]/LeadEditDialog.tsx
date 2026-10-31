@@ -28,13 +28,14 @@ import {
   type ItemRow,
   type SlotEdits,
 } from "./LeadEditParts";
-import { earnedExpertise, EXPERTISE_MAX, skillLevelsOf, trainingFrom, type SkillLevel } from "./lead-edit-logic";
+import { earnedExpertise, expertiseOverCap, skillLevelsOf, trainingFrom, type SkillLevel } from "./lead-edit-logic";
 import { acBreakdownFor, effectiveAcFor, SRD_SKILLS } from "@/lib/srd";
 import { ABILITY_NAMES } from "@/lib/srd/legality/types";
 import { isCantripName } from "@/lib/srd/spell-lists";
 import { spellStyleFor } from "@/lib/srd/spell-prep";
 import MultiContentPicker from "@/app/characters/builder/MultiContentPicker";
 import { ABILITIES, type Ability, type CharacterSheet, type Proficiencies } from "@/lib/schemas/sheet";
+import { hostOffers, useCapabilities } from "@/lib/use-capabilities";
 
 const ABILITY_SHORT: Record<string, string> = { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" };
 
@@ -127,6 +128,9 @@ export function LeadEditDialog({
   const [skillLevels, setSkillLevels] = useState(() => skillLevelsOf(sheet.proficiencies));
   const experts = Object.values(skillLevels).filter((level) => level === "expert").length;
   const earned = earnedExpertise(sheet);
+  // An older host's sheet schema holds six expertise at most and refuses
+  // more with its own raw message (SERVER_FEATURES moreExpertise).
+  const holdsMoreExpertise = hostOffers(useCapabilities(), "moreExpertise");
   // Items the table has no stats for, each offered a workshop entry.
   const unknownGear = useUnknownGear(campaignId, sheet.id);
   const [reason, setReason] = useState("");
@@ -236,8 +240,9 @@ export function LeadEditDialog({
     setBusy(true);
     setError("");
     const patch: Record<string, unknown> = { reason, ...correction() };
-    if (((patch.proficiencies as Proficiencies | undefined)?.expertise?.length ?? 0) > EXPERTISE_MAX) {
-      setError(`Expertise holds ${EXPERTISE_MAX} at most; set some back to Trained.`);
+    const over = expertiseOverCap((patch.proficiencies as Proficiencies | undefined)?.expertise?.length ?? 0, holdsMoreExpertise);
+    if (over) {
+      setError(over);
       setBusy(false);
       return;
     }
