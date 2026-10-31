@@ -74,7 +74,7 @@ const scenario = {
       check((await dialog.getByText("No stats at this table yet.").count()) === 1, "only the item with no stats is marked");
       if (viewport === "phone") {
         const box = await give.boundingBox();
-        check(Boolean(box && box.height >= 24), `a link a finger can press (${box?.height}px)`);
+        check(Boolean(box && box.height >= 39.5), `a link a finger can press (${box?.height}px)`);
       }
       await give.scrollIntoViewIfNeeded();
       await untilStill(page);

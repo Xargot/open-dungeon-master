@@ -68,8 +68,10 @@ const scenario = {
     await eventually(() => skillsField.count(), { label: "the Skills field, labelled" });
     check((await background.inputValue()) === "", "Background is empty by default");
     if (viewport === "phone") {
-      const box = await background.boundingBox();
-      check(Boolean(box && box.height >= 32), `a field a finger can reach (${box?.height}px)`);
+      for (const [label, field] of [["Background", background], ["Skills", skillsField]]) {
+        const box = await field.boundingBox();
+        check(Boolean(box && box.height >= 39.5), `${label} is a field a finger can reach (${box?.height}px)`);
+      }
     }
     await skillsField.scrollIntoViewIfNeeded();
     await untilStill(page);

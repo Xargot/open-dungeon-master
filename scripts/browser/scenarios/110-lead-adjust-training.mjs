@@ -42,6 +42,19 @@ const scenario = {
       "every one of the eighteen skills has its training",
     );
     check((await dialog.getByRole("switch", { name: /saving throw$/ }).count()) === 6, "a switch for each saving throw");
+    if (t.viewport === "phone") {
+      // A finger's height on a phone (AGENTS.md): each kind of control here,
+      // measured once the dialog's entrance has finished.
+      await untilStill(page);
+      for (const [label, control] of [
+        ["Insight's Expert", insight.getByRole("radio", { name: "Expert" })],
+        ["the Strength saving throw's row", dialog.getByRole("switch", { name: "Strength saving throw" }).locator("xpath=..")],
+        ["Strength's stepper", dialog.getByRole("button", { name: "Raise Strength" }).locator("xpath=..")],
+      ]) {
+        const box = await control.boundingBox();
+        check(Boolean(box && box.height >= 39.5), `${label} is a finger's height on a phone (${box?.height}px)`);
+      }
+    }
     await dialog.getByRole("heading", { name: "Scores and training" }).scrollIntoViewIfNeeded();
     await untilStill(page);
     await t.shot("training");

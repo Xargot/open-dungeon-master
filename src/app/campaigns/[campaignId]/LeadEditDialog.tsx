@@ -357,14 +357,16 @@ export function LeadEditDialog({
               <span className="text-stone-400">Saving throws</span>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
                 {ABILITIES.map((ability) => (
-                  <span key={ability} className="flex items-center gap-2">
+                  // The whole row is the switch's label, a finger's height
+                  // on a phone (pk-tap), where the switch alone is 24 px.
+                  <label key={ability} className="pk-tap flex items-center gap-2">
                     <Switch
                       on={saves.includes(ability)}
                       onChange={(on) => setSaves((list) => (on ? [...list, ability] : list.filter((entry) => entry !== ability)))}
                       label={`${ABILITY_NAMES[ability]} saving throw`}
                     />
                     <span className="text-stone-300">{ABILITY_NAMES[ability]}</span>
-                  </span>
+                  </label>
                 ))}
               </div>
             </div>
@@ -388,6 +390,7 @@ export function LeadEditDialog({
                       size="sm"
                       label={skill.name}
                       className="shrink-0"
+                      optionClassName="pointer-coarse:min-h-10"
                     />
                   </li>
                 ))}
