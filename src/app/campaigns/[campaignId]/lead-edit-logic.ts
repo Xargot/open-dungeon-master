@@ -3,7 +3,9 @@
 // Database-free and JSX-free so scripts/test-lead-edit.mjs drives it.
 import { spellClassFor } from "@/lib/classes";
 import { thirdCasterList, thirdCasterProfileOf } from "@/lib/srd/third-caster";
-import type { CharacterSheet, EquipmentItem } from "@/lib/schemas/sheet";
+import type { CharacterSheet, EquipmentItem, Proficiencies } from "@/lib/schemas/sheet";
+import { SRD_SKILLS } from "@/lib/srd";
+import { findNamed } from "@/lib/language/text-logic";
 
 // The highest spell level this sheet can actually cast, read from the slots
 // it has stored: the multiclass table, a third caster's slots and a
@@ -66,4 +68,43 @@ export function equipmentFrom(rows: ItemRow[]): EquipmentItem[] {
       qty: Math.min(999, Math.max(1, Math.round(Number(row.qty)) || 1)),
     }))
     .filter((item) => item.name);
+}
+
+// How far a character is trained in a skill, as the Adjust dialog sets it.
+export type SkillLevel = "none" | "trained" | "expert";
+
+// Expertise holds this many skills at most (the sheet schema's cap).
+export const EXPERTISE_MAX = 6;
+
+// The skill a stored entry names, by id or by name ("Sleight of Hand",
+// "sleight_of_hand"); null for anything else (a rogue's thieves' tools).
+function skillOf(entry: string): string | null {
+  return findNamed(SRD_SKILLS, entry, (skill) => [skill.id, skill.name])?.id ?? null;
+}
+
+// Every skill's level on the sheet, keyed by skill id.
+export function skillLevelsOf(proficiencies: Proficiencies): Record<string, SkillLevel> {
+  const trained = new Set(proficiencies.skills.map(skillOf));
+  const expert = new Set((proficiencies.expertise ?? []).map(skillOf));
+  return Object.fromEntries(
+    SRD_SKILLS.map((skill) => [skill.id, expert.has(skill.id) && trained.has(skill.id) ? "expert" : trained.has(skill.id) ? "trained" : "none"]),
+  );
+}
+
+// The training the dialog saves: the saves and skill levels set, and every
+// other entry kept as stored (a skill a content pack names, a rogue's
+// expertise in thieves' tools, languages, tools, armor and weapons).
+export function trainingFrom(
+  proficiencies: Proficiencies,
+  levels: Record<string, SkillLevel>,
+  saves: Proficiencies["saves"],
+): Proficiencies {
+  const other = (entries: string[]) => entries.filter((entry) => !skillOf(entry));
+  const at = (wanted: SkillLevel[]) => SRD_SKILLS.filter((skill) => wanted.includes(levels[skill.id] ?? "none")).map((skill) => skill.id);
+  return {
+    ...proficiencies,
+    saves,
+    skills: [...other(proficiencies.skills), ...at(["trained", "expert"])],
+    expertise: [...other(proficiencies.expertise ?? []), ...at(["expert"])],
+  };
 }

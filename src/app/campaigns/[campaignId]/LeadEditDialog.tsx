@@ -10,6 +10,7 @@ import { ui } from "@/lib/ui";
 import { GameIcon } from "@/components/ui/GameIcon";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { SectionHead } from "@/components/ui/SectionHead";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Switch } from "@/components/ui/Switch";
 import { KitButton, PanelError } from "./PanelKit";
 import {
@@ -26,13 +27,24 @@ import {
   type ItemRow,
   type SlotEdits,
 } from "./LeadEditParts";
-import { acBreakdownFor, effectiveAcFor } from "@/lib/srd";
+import { EXPERTISE_MAX, skillLevelsOf, trainingFrom, type SkillLevel } from "./lead-edit-logic";
+import { acBreakdownFor, effectiveAcFor, SRD_SKILLS } from "@/lib/srd";
+import { ABILITY_NAMES } from "@/lib/srd/legality/types";
 import { isCantripName } from "@/lib/srd/spell-lists";
 import { spellStyleFor } from "@/lib/srd/spell-prep";
 import MultiContentPicker from "@/app/characters/builder/MultiContentPicker";
-import type { CharacterSheet } from "@/lib/schemas/sheet";
+import { ABILITIES, type Ability, type CharacterSheet } from "@/lib/schemas/sheet";
 
-// Party lead correction of any character's numbers, items, and spells, for
+const ABILITY_SHORT: Record<string, string> = { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" };
+
+const SKILL_LEVELS: Array<{ value: SkillLevel; label: string }> = [
+  { value: "none", label: "None" },
+  { value: "trained", label: "Trained" },
+  { value: "expert", label: "Expert" },
+];
+
+// Party lead correction of any character's numbers, scores, training, items
+// and spells, for
 // when the AI DM gets something wrong. Server clamps values and writes an
 // audit entry.
 export function LeadEditDialog({
@@ -107,6 +119,12 @@ export function LeadEditDialog({
     ...(pact ? { pact: { max: String(pact.max), used: String(pact.used) } } : {}),
   }));
   const [feats, setFeats] = useState<string[]>(sheet.feats);
+  // Scores and training: what a GM-made companion or a model's update can
+  // get wrong and nothing in play puts right.
+  const [abilities, setAbilities] = useState(sheet.abilities);
+  const [saves, setSaves] = useState<Ability[]>(sheet.proficiencies.saves);
+  const [skillLevels, setSkillLevels] = useState(() => skillLevelsOf(sheet.proficiencies));
+  const experts = Object.values(skillLevels).filter((level) => level === "expert").length;
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -194,6 +212,19 @@ export function LeadEditDialog({
     }
     if (feats.join("|") !== sheet.feats.join("|")) {
       patch.feats = feats;
+    }
+    if (ABILITIES.some((ability) => abilities[ability] !== sheet.abilities[ability])) {
+      patch.abilities = abilities;
+    }
+    const savesChanged = [...saves].sort().join("|") !== [...sheet.proficiencies.saves].sort().join("|");
+    if (savesChanged || JSON.stringify(skillLevels) !== JSON.stringify(skillLevelsOf(sheet.proficiencies))) {
+      const training = trainingFrom(sheet.proficiencies, skillLevels, ABILITIES.filter((ability) => saves.includes(ability)));
+      if ((training.expertise ?? []).length > EXPERTISE_MAX) {
+        setError(`Expertise holds ${EXPERTISE_MAX} at most; set some back to Trained.`);
+        setBusy(false);
+        return;
+      }
+      patch.proficiencies = training;
     }
     void (async () => {
       try {
@@ -301,6 +332,65 @@ export function LeadEditDialog({
               className={field}
             />
           </label>
+
+          <div className="mt-3 space-y-2 text-xs">
+            <SectionHead title="Scores and training" glyph="rest-level-up" level="h3" />
+            <div className="grid grid-cols-3 gap-2">
+              {ABILITIES.map((ability) => (
+                <div key={ability} className="space-y-1">
+                  <span className="text-stone-400">{ABILITY_NAMES[ability]}</span>
+                  <NumberStepper
+                    size="sm"
+                    value={abilities[ability]}
+                    min={1}
+                    max={30}
+                    onChange={(next) => setAbilities((scores) => ({ ...scores, [ability]: next }))}
+                    label={ABILITY_NAMES[ability]}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="space-y-1">
+              <span className="text-stone-400">Saving throws</span>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
+                {ABILITIES.map((ability) => (
+                  <span key={ability} className="flex items-center gap-2">
+                    <Switch
+                      on={saves.includes(ability)}
+                      onChange={(on) => setSaves((list) => (on ? [...list, ability] : list.filter((entry) => entry !== ability)))}
+                      label={`${ABILITY_NAMES[ability]} saving throw`}
+                    />
+                    <span className="text-stone-300">{ABILITY_NAMES[ability]}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <span className="flex items-baseline justify-between gap-2 text-stone-400">
+                Skills
+                <span className={cn("text-[11px]", experts > EXPERTISE_MAX ? "text-amber-300" : "text-stone-500")}>
+                  Expert in {experts} of {EXPERTISE_MAX} at most
+                </span>
+              </span>
+              <ul className="divide-y divide-stone-800/60">
+                {SRD_SKILLS.map((skill) => (
+                  <li key={skill.id} className="flex items-center justify-between gap-2 py-1">
+                    <span className="min-w-0 text-stone-200">
+                      {skill.name} <span className="text-stone-500">{ABILITY_SHORT[skill.ability]}</span>
+                    </span>
+                    <SegmentedControl
+                      options={SKILL_LEVELS}
+                      value={skillLevels[skill.id] ?? "none"}
+                      onChange={(level) => setSkillLevels((levels) => ({ ...levels, [skill.id]: level }))}
+                      size="sm"
+                      label={skill.name}
+                      className="shrink-0"
+                    />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
 
           <div className="mt-3 space-y-1 text-xs">
             <SectionHead title="Items" glyph="tab-loot" level="h3" aside={items.length || null} />
