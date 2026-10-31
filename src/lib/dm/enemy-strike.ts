@@ -44,7 +44,7 @@ import { conditionRollRiders } from "@/lib/srd/condition-effects";
 import { applyEnemyDamage } from "@/lib/dm/enemy-damage";
 import { approachTarget, spendEnemyAction, standUpIfProne } from "@/lib/dm/enemy-approach";
 import { blowByType } from "@/lib/dm/enemy-hit";
-import { alternativeBlow, attackNamed, enemyAttackProfile, plannedSwings, swingMode, type EnemyAttackProfile } from "@/lib/dm/enemy-profile";
+import { alternativeBlow, attackNamed, enemyAttackProfile, pastRangedLimit, plannedSwings, swingMode, type EnemyAttackProfile } from "@/lib/dm/enemy-profile";
 import { critDamageExpression } from "@/lib/dm/encounter-logic";
 import { publishFx, tokenPosition } from "@/lib/dm/fx";
 import { hasTrait } from "@/lib/dm/monster-abilities";
@@ -137,6 +137,8 @@ export function enemyStrikesEnemy(
   const swings: Array<Record<string, unknown>> = [];
   let totalDamage = 0;
   let last: Record<string, unknown> = {};
+  // The swings made at range (enemy-profile.ts rangedSwingsAllowed).
+  let shots = 0;
   for (const [index, plannedAttack] of planned.entries()) {
     const now = getEnemy(target.id);
     if (!now || now.status !== "alive" || last.dead || last.down) {
@@ -147,6 +149,12 @@ export function enemyStrikesEnemy(
       swings.push({ attack: plannedAttack.name, skipped: `${now.displayName} is out of this attack's reach` });
       continue;
     }
+    const past = mode.ranged ? pastRangedLimit(attacker.stats.traits, plannedAttack, shots) : null;
+    if (past) {
+      swings.push({ attack: plannedAttack.name, skipped: past });
+      continue;
+    }
+    shots += mode.ranged ? 1 : 0;
     const attack: EnemyAttack = alternativeBlow(plannedAttack, { ranged: mode.ranged, bloodied: enemy.currentHp <= enemy.maxHp / 2 });
     const odds = enemyRowSwingOdds({
       campaign,

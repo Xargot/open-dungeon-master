@@ -195,6 +195,30 @@ await test("Played for the lead, a thug that cannot reach anyone in melee fires 
   assert.match(made[0].detail, /Heavy Crossbow/);
 });
 
+// A cult fanatic's "two melee attacks" count no thrown dagger, and a
+// gladiator's "three melee attacks or two ranged attacks" throw two spears
+// (SRD 5.1). A dagger or a spear is melee or thrown by where its target
+// stands, so the plan held both swings, and the fanatic threw two.
+const thrower = (name, multiattack, count, weapon) => ({
+  attacks: [{ name: weapon, toHit: 4, damage: "1d4+2", type: "piercing", mode: "both", reach: 5, range: { normal: 20, long: 60 } }],
+  attacksPerTurn: count,
+  traits: [`Multiattack: The ${name} makes ${multiattack}.`],
+});
+
+await test("Played for the lead, a cult fanatic out of melee reach throws one dagger, not two for its two melee attacks; a gladiator throws two spears, not three.", async () => {
+  for (const [stats, weapon, expected] of [
+    [thrower("fanatic", "two melee attacks", 2, "Dagger"), "Dagger", 1],
+    [thrower("gladiator", "three melee attacks or two ranged attacks", 3, "Spear"), "Spear", 2],
+  ]) {
+    const [enemy] = await stage();
+    const before = enemyRolls(enemy).length;
+    await playTheRest(enemy, [11, 2], stats);
+    const made = enemyRolls(enemy).slice(0, enemyRolls(enemy).length - before);
+    assert.equal(made.length, expected, `the ${weapon} was thrown ${made.length} times`);
+    assert.ok(made.every((roll) => roll.detail.includes(weapon)));
+  }
+});
+
 await test("Played for the lead, a thug that can walk into melee still swings its Mace twice.", async () => {
   const [enemy] = await stage();
   const before = enemyRolls(enemy).length;

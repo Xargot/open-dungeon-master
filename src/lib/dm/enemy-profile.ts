@@ -177,6 +177,38 @@ function outsideMultiattackCount(stats: { traits?: string[] }, attack: EnemyAtta
   return meleeOnly && !enemyAttackProfile(attack, traits).melee;
 }
 
+const RANGED_COUNT_RE = /\b(one|two|three|four|five|six|\d)\s+ranged attacks?\b/i;
+const COUNT_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+
+// How many of a turn's swings may be made at range when its Multiattack
+// counts melee attacks, or null when it sets no such limit. "The cult
+// fanatic makes two melee attacks" counts no thrown dagger, so a turn of
+// throws is one, as the Attack action's; "three melee attacks or two ranged
+// attacks" throws two (SRD 5.1, Gladiator). plannedSwings cannot tell: a
+// dagger or a spear is melee or thrown by where the target stands, which the
+// caller learns after the walk. An attack the Multiattack names is its own.
+export function rangedSwingsAllowed(traits: string[] | undefined, attack: EnemyAttack): number | null {
+  const multiattack = (traits ?? []).find((trait) => /^multiattack\b/i.test(trait)) ?? "";
+  if (!/\bmelee attacks?\b/i.test(multiattack) || multiattackNames(multiattack, attack)) {
+    return null;
+  }
+  const ranged = RANGED_COUNT_RE.exec(multiattack);
+  if (ranged) {
+    return COUNT_WORDS[ranged[1].toLowerCase()] ?? Number(ranged[1]);
+  }
+  return /\branged attacks?\b/i.test(multiattack) ? null : 1;
+}
+
+// Why a swing at range is not made, when the turn has already made the
+// ranged attacks its Multiattack leaves room for; null to make it.
+export function pastRangedLimit(traits: string[] | undefined, attack: EnemyAttack, made: number): string | null {
+  const allowed = rangedSwingsAllowed(traits, attack);
+  if (allowed === null || made < allowed) {
+    return null;
+  }
+  return `its Multiattack's melee attacks leave ${allowed === 1 ? "one attack" : `${allowed} attacks`} at range a turn`;
+}
+
 // A routine's swings with a Loading weapon the Multiattack does not name
 // made once: the wererat's "two attacks, only one of which can be a bite"
 // is read as routines of any two of its attacks, and its Hand Crossbow

@@ -50,7 +50,7 @@ import { approachTarget, reachesThisTurn, spendEnemyAction, standUpIfProne } fro
 import { blowByType, resolveOnHit, scaledParts } from "@/lib/dm/enemy-hit";
 import { applyPcDamage } from "@/lib/dm/pc-damage";
 import { effectOutcome } from "@/lib/dm/effect-tools";
-import { alternativeBlow, attackNamed, charmedBy, enemyAttackProfile, plannedSwings, swingMode, type EnemyAttackProfile } from "@/lib/dm/enemy-profile";
+import { alternativeBlow, attackNamed, charmedBy, enemyAttackProfile, pastRangedLimit, plannedSwings, swingMode, type EnemyAttackProfile } from "@/lib/dm/enemy-profile";
 import { publishFx, tokenPosition } from "@/lib/dm/fx";
 import { hasTrait } from "@/lib/dm/monster-abilities";
 import { enemySwingOdds, hasFeatureNamed } from "@/lib/dm/enemy-swing-odds";
@@ -408,11 +408,18 @@ export function handleEnemyAttack(
   // rider's own wards and reactions answer attacks on the rider only.
   if (args.targetMount) {
     const bloodied = standing.currentHp <= standing.maxHp / 2;
+    let shotsAtMount = 0;
     const swingsAtMount = planned.map((attack, index) => {
       const mode = swingMode(profiles[index], spatial.distance);
-      return mode
-        ? { attack: alternativeBlow(attack, { ranged: mode.ranged, bloodied }), ranged: mode.ranged }
-        : { attack, skipped: `${target.name}'s mount is out of this attack's reach` };
+      if (!mode) {
+        return { attack, skipped: `${target.name}'s mount is out of this attack's reach` };
+      }
+      const past = mode.ranged ? pastRangedLimit(found.stats.traits, attack, shotsAtMount) : null;
+      if (past) {
+        return { attack, skipped: past };
+      }
+      shotsAtMount += mode.ranged ? 1 : 0;
+      return { attack: alternativeBlow(attack, { ranged: mode.ranged, bloodied }), ranged: mode.ranged };
     });
     return strikeMount({
       campaign,
@@ -453,6 +460,9 @@ export function handleEnemyAttack(
   // after a miss.
   let previousHit = false;
   const attackerSubmerged = isImmersed(campaign.id, enemy.id);
+  // The swings made at range, held to what a Multiattack of melee attacks
+  // leaves room for (enemy-profile.ts rangedSwingsAllowed).
+  let shots = 0;
   planned.forEach((plannedAttack: EnemyAttack, index) => {
     let attack = plannedAttack;
     if (dropped) {
@@ -468,6 +478,12 @@ export function handleEnemyAttack(
       swings.push({ attack: attack.name, skipped: `${target.name} is out of this attack's reach` });
       return;
     }
+    const past = mode.ranged ? pastRangedLimit(standing.stats.traits, plannedAttack, shots) : null;
+    if (past) {
+      swings.push({ attack: attack.name, skipped: past });
+      return;
+    }
+    shots += mode.ranged ? 1 : 0;
     const ranged = mode.ranged;
     // What the block deals instead at half its hit points or at range (a
     // swarm's weaker bite, a spear thrown), from here on the swing's blow.
