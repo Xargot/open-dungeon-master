@@ -116,7 +116,15 @@ export async function POST(
   // on (src/lib/dm/enemies-due.ts, src/lib/dm/invoke.ts handOnFromBanner).
   if (floor.mode === "hold" && floor.next.mode === "initiative" && getActiveEncounter(campaignId)?.legendary.due?.length) {
     const error = handOnFromBanner(context.campaign);
-    return error ? Response.json({ error }, { status: 409 }) : Response.json({ ok: true });
+    if (error) {
+      return Response.json({ error }, { status: 409 });
+    }
+    // The turn handed on turned the round over into the next round's
+    // enemies (issue 713): where the AI runs them, it is woken to play them.
+    if (getActiveEncounter(campaignId)?.legendary.due?.length) {
+      requestDmTurn(campaignId);
+    }
+    return Response.json({ ok: true });
   }
   // A hold opens into its stored spotlight; anything else opens into the
   // fight's floor while a fight runs (read fresh from the pointer, which may

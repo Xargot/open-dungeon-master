@@ -11,7 +11,7 @@ import {
 import { insertCampaignMessage } from "@/lib/db/messages";
 import { publishPersisted, publishWithSeq } from "@/lib/events";
 import { publishEncounter } from "@/lib/dm/enemy-damage";
-import { setInitiativeFloor, settleTurn, stepTurnForward, turnHolder } from "@/lib/dm/encounter-tools";
+import { finishPassBeforeMove, setInitiativeFloor, settleTurn, stepTurnForward, turnHolder } from "@/lib/dm/encounter-tools";
 import { d20Expression } from "@/lib/dice";
 import { dmRoll } from "@/lib/dm/roll-card";
 import {
@@ -58,7 +58,7 @@ export function editInitiative(campaign: Campaign, edit: InitiativeEdit): Initia
   if (!encounter.orderReady) {
     return { error: "The initiative order is still being collected." };
   }
-  const holder = turnHolder(campaign.id);
+  let holder = turnHolder(campaign.id);
   // On a turn is a turn ending, not a correction: it goes through the turn
   // engine End Turn uses, so conditions tick, reactions and movement come
   // back, a downed character rolls their death save, the round turns over,
@@ -79,7 +79,7 @@ export function editInitiative(campaign: Campaign, edit: InitiativeEdit): Initia
     settleTurn(campaign, holder);
     return { ok: true, note };
   }
-  const outcome = applyInitiativeEdit(
+  let outcome = applyInitiativeEdit(
     { order: encounter.order, turnIndex: encounter.turnIndex, round: encounter.round },
     edit,
   );
@@ -89,7 +89,21 @@ export function editInitiative(campaign: Campaign, edit: InitiativeEdit): Initia
   // The turn is a combatant's, not a slot's: an edit around the one acting
   // (an insert above them, a re-sort) shifts their slot and keeps their
   // turn. Taking them out is a turn ending, settled below.
-  const acting = orderEntryId(encounter.order[encounter.turnIndex]);
+  let acting = orderEntryId(encounter.order[encounter.turnIndex]);
+  // An edit that moves the turn while the last pass still waits for its
+  // enemies to turn the round over (issue 713) finishes that pass first, as
+  // a turn ending does, and is made on the order it leaves.
+  const movesTurn = !outcome.state.order.some((entry) => orderEntryId(entry) === acting) || turnKey(outcome.state) !== turnKey(encounter);
+  if (encounter.legendary.rest && movesTurn) {
+    finishPassBeforeMove(campaign);
+    Object.assign(encounter, getActiveEncounter(campaign.id) ?? encounter);
+    holder = turnHolder(campaign.id);
+    outcome = applyInitiativeEdit({ order: encounter.order, turnIndex: encounter.turnIndex, round: encounter.round }, edit);
+    if ("error" in outcome) {
+      return outcome;
+    }
+    acting = orderEntryId(encounter.order[encounter.turnIndex]);
+  }
   const stays = outcome.state.order.some((entry) => orderEntryId(entry) === acting);
   const moved = stays && turnKey(outcome.state) !== turnKey(encounter);
   encounter.order = outcome.state.order;
@@ -143,8 +157,10 @@ export function resetInitiative(campaign: Campaign): InitiativeResult {
   encounter.surprisedIds = [];
   // The enemies a pass left due were owed their turns in the old order, and
   // their hold goes with the floor below; kept, they would stand before
-  // whoever the new order puts first (src/lib/dm/enemies-due.ts).
+  // whoever the new order puts first (src/lib/dm/enemies-due.ts). So does
+  // what that pass left for after them (issue 713).
   delete encounter.legendary.due;
+  delete encounter.legendary.rest;
   saveEncounter(encounter);
   // The initiative floor named an order that no longer exists, so the table
   // goes back to open until the new one locks.

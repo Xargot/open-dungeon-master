@@ -219,7 +219,10 @@ await test("the initiative pointer passes a character who cannot act", async () 
   kit.reset(caster.id, { conditions: ["stunned"] });
   assert.equal(kit.pointer().id, hero.id);
   assert.equal(kit.endOwnTurn(world.owner.id), true);
-  // The stunned cleric is passed over and the fighter is up again, a round on.
+  // The stunned cleric is passed over and the fighter is up again, a round
+  // on, once the enemies after them have had their turns (issue 713).
+  assert.equal(kit.pointer().id, null, "the enemies' turns come first");
+  assert.equal(kit.handOn(), true);
   assert.equal(kit.pointer().id, hero.id);
   assert.equal(kit.endOwnTurn(caster.userId), false);
   kit.reset(caster.id);

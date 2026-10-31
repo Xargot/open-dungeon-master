@@ -33,7 +33,7 @@ import { suite } from "./lib/enforce-harness.mjs";
 import { combatKit } from "./lib/enforce-combat.mjs";
 import { caster, closeTables, enemyOf, field, FIGHTER, table } from "./lib/enforce-spell-kit.mjs";
 import { layMap } from "./lib/enforce-spells.mjs";
-import { board, holdTurn, mapOf, nextTurn, place, stride, tokenOf, walk, zonesOf } from "./lib/enforce-zones.mjs";
+import { board, handOnDue, holdTurn, mapOf, nextTurn, place, stride, tokenOf, walk, zonesOf } from "./lib/enforce-zones.mjs";
 
 const { test, finish } = suite("test-enforce-zones");
 const { buildPlayerMapView } = await import("../src/lib/battlemap/view.ts");
@@ -277,6 +277,9 @@ await test("Cloudkill moves 10 feet away from its caster at the start of each of
   assert.equal(cast.ok, true, cast.error);
   holdTurn(world, fighter.id);
   nextTurn(world);
+  // The goblins after the fighter go first; the caster's turn begins once
+  // they have (issue 713).
+  handOnDue(world);
   world.clearDice();
   const cloud = zonesOf(world).find((zone) => zone.spell === "Cloudkill");
   assert.deepEqual(cloud.origin, { x: 14, y: 4 });
