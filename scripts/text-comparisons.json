@@ -2185,7 +2185,7 @@
     "lib/srd/class-roles.ts#str-list": [["english-source",1,"class rows and ODM's role labels (bundled data)"]],
     "lib/srd/class-roles.ts#toLowerCase": [["english-source",1,"class rows and ODM's role labels (bundled data)"]],
     "lib/srd/companion-build.ts#str-includes": [["english-source",1,"SRD spell names and ability ids (bundled data)"]],
-    "lib/srd/companion-build.ts#str-list": [["english-source",1,"SRD spell names and ability ids (bundled data)"]],
+    "lib/srd/companion-build.ts#str-list": [["english-source",2,"SRD spell names, ability ids and skill ids (bundled data)"]],
     "lib/srd/condition-effect-queries.ts#str-eq": [["key",6,"action kinds"]],
     "lib/srd/condition-effect-queries.ts#toLowerCase": [["key",2,"condition labels and creature types"]],
     "lib/srd/condition-effects-last.ts#str-list": [["key",7,"condition labels and spell names the directive pins to the game's own writing (engine vocabulary)"]],

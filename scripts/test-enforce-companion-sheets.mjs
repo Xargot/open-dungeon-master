@@ -394,7 +394,7 @@ await test("a recruited companion has a background, its class's count of skills 
   }
 });
 
-await test("the background and skills a recruiter names are kept, and one off the list is passed over with a note", async () => {
+await test("the background and skills a recruiter names are kept, a skill off the list is passed over with a note, and an unknown background is refused with the options", async () => {
   const world = await table();
   const { id, note } = await recruit(world, "fighter", { background: "Sailor", skills: ["Intimidation", "Arcana"] });
   const sheet = world.sheet(id);
@@ -402,9 +402,10 @@ await test("the background and skills a recruiter names are kept, and one off th
   assert.ok(sheet.proficiencies.skills.includes("intimidation"));
   assert.ok(!sheet.proficiencies.skills.includes("arcana"));
   assert.match(note, /Arcana is not among the skills/);
-  const other = await recruit(world, "fighter", { name: "Other", background: "Astronaut" });
-  assert.match(other.note, /"Astronaut" is not a background this table offers/);
-  assert.notEqual(world.sheet(other.id).background, "");
+  const refused = await world.invoke("add_companion", {
+    gender: "Unknown", name: "Other", class: "fighter", personality: "Quiet.", kind: "guest", background: "Astronaut",
+  });
+  assert.match(refused.error ?? refused.result?.error ?? "", /"Astronaut" is not a background this table offers\. Call add_companion again with one of: .*Soldier/);
 });
 
 await test("a half-elf companion takes the two skills its race leaves to it", async () => {

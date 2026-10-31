@@ -436,12 +436,15 @@ export function handleAddCompanion(
   const named = args.background
     ? backgrounds.find((entry) => textKey(entry.id) === textKey(slugify(args.background ?? "")) || textKey(entry.name) === textKey(args.background ?? ""))
     : undefined;
-  if (args.background && !named) {
-    notes.push(`"${args.background}" is not a background this table offers, so one was chosen for them.`);
-  }
   const genre = campaign.gameSettings.genre;
   const fitting = backgrounds.filter((entry) => !entry.genres?.length || (genre ? entry.genres.includes(genre) : false));
   const steered = genre ? backgrounds.filter((entry) => entry.genres?.includes(genre)) : [];
+  if (args.background && !named) {
+    return {
+      error: `"${args.background}" is not a background this table offers. Call add_companion again with one of: ${(steered.length ? steered : fitting).map((entry) => entry.name).join(", ")}; or leave background out and one is chosen for them.`,
+      retry: true,
+    };
+  }
   const background = named ?? companionBackground(steered.length ? steered : fitting, abilities);
   const fixedSkills = [...(background?.skills ?? []), ...(chosenRace.skills ?? [])];
   const classSkills = companionSkillPicks({
