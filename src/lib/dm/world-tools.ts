@@ -711,18 +711,23 @@ export function handleTravel(
 
   const worn = results.filter((entry) => entry.failed).map((entry) => entry.name);
   journeyNote(campaign, minutesOnRoad, args.reason, now);
+  // The same account of the road a day within 8 hours gives (the clock, the
+  // weather and its exposure, the companions, the death saves the hours
+  // rolled), with the forced march's saves on top: the GM narrates the march
+  // from this result, and a long day left a hero's death unsaid.
   return {
     ok: true,
     pace,
     hours: legHours,
-    miles: weatherOutcome.miles,
     forcedMarch: true,
     forcedMarchHours: extra,
     dc,
     results,
+    ...(now ? { now } : {}),
+    ...weatherOutcome,
     note:
       (worn.length
         ? `Forced march (${extra}h past 8, one save an hour up to DC ${dc}): ${worn.join(", ")} failed and gained a level of exhaustion for each failed hour (server-applied).`
-        : `Forced march (${extra}h past 8, one save an hour up to DC ${dc}): everyone holds up.`) + ` ${paceNote}`,
+        : `Forced march (${extra}h past 8, one save an hour up to DC ${dc}): everyone holds up.`) + ` ${paceNote}${weatherNotes.length ? ` ${weatherNotes.join(" ")}` : ""}`,
   };
 }

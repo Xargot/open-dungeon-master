@@ -593,6 +593,19 @@ await test("a rest or a march that settles a dying character's saves tells the G
   kit.reset(hero.id);
 });
 
+// A day past 8 hours returned the forced march's saves alone: the death
+// saves its hours rolled, the clock, and the weather never reached the GM.
+await test("a forced march tells the GM the death saves its hours rolled and the time it is now, as a shorter march does", async () => {
+  dying({ ...FRESH, failures: 2 });
+  const march = await kit.withDice([4], "travel", { hours: 10, pace: "normal", characterIds: [ally.id] });
+  assert.equal(march.outcome.ok, true, march.outcome.error);
+  assert.equal(march.result.forcedMarch, true, JSON.stringify(march.result));
+  assert.match(String(march.result.deathSaves?.at(-1)), /dies/, JSON.stringify(march.result));
+  assert.match(String(march.result.now), /\S/, JSON.stringify(march.result));
+  assert.equal(typeof march.result.miles, "number");
+  kit.reset(hero.id);
+});
+
 await test("a march posts its own line to the chronicle after the death saves it rolled, as a rest does", async () => {
   const name = world.sheet(hero.id).name;
   dying({ ...FRESH, failures: 1 });
