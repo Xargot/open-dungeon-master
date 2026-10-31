@@ -608,8 +608,9 @@ export const PARTY_ADJUDICATIONS: CatalogEntry[] = [
       ] },
       { name: "personality", label: "Personality", kind: "text", required: true },
       { name: "spells", label: "Spells they know", kind: "list", placeholder: "Cure Wounds, Bless", help: "For a caster, comma separated; the server keeps what their level allows." },
-      { name: "background", label: "Background", kind: "text", placeholder: "Soldier", help: "Chosen to suit their stats when left empty." },
-      { name: "skills", label: "Skills", kind: "list", placeholder: "Stealth, Insight", help: "Comma separated; the server keeps the ones their class offers and picks the rest." },
+      // An older host drops both unread (SERVER_FEATURES companionTraining).
+      { name: "background", label: "Background", kind: "text", placeholder: "Soldier", help: "Chosen to suit their stats when left empty.", host: { feature: "companionTraining" } },
+      { name: "skills", label: "Skills", kind: "list", placeholder: "Stealth, Insight", help: "Comma separated; the server keeps the ones their class offers and picks the rest.", host: { feature: "companionTraining" } },
       {
         name: "alignment",
         label: "Alignment",

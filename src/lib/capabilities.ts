@@ -61,6 +61,10 @@ export const SERVER_FEATURES = {
   // "Paint a portrait" on a companion's card (issue 569):
   // POST /api/campaigns/[id]/companions/[characterId]/portrait.
   companionPortrait: true,
+  // A companion's Background and Skills in the GM console's "Add a
+  // companion": add_companion's `background` and `skills`, which an older
+  // host drops unread and picks the first skills on the class's list.
+  companionTraining: true,
   // "Save to my characters" on a companion's card, and a companion built at
   // the table kept in its builder's characters (the builder says so):
   // POST /api/campaigns/[id]/companions/[characterId]/keep.

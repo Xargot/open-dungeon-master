@@ -1078,6 +1078,21 @@ test("take_action's destination fields ask for the host, and the enemy field rea
   assert.match(read("src/lib/use-capabilities.ts"), /features\?: \{[^}]*moveWithAction\?: boolean/);
 });
 
+// The console's Background and Skills for a new companion: an older host's
+// add_companion strips both unread and recruits by the class list's first
+// skills, so the app's console shows them only to a host that reads them.
+test("add_companion's background and skills ask for the host", () => {
+  const fields = adjudication("add_companion").fields;
+  for (const name of ["background", "skills"]) {
+    const field = fields.find((entry) => entry.name === name);
+    assert.ok(field, name);
+    assert.ok(fieldForHost(field, () => true), `${name} on a host that has it`);
+    assert.equal(fieldForHost(field, () => false), null, `${name} hidden on an older host`);
+  }
+  assert.ok(read("src/lib/capabilities.ts").match(/^\s*companionTraining: true,$/m), "the server flags it");
+  assert.match(read("src/lib/use-capabilities.ts"), /features\?: \{[^}]*companionTraining\?: boolean/);
+});
+
 // A human GM fields an invented foe by its challenge rating and renames a
 // monster from the console's "Start a fight" box: the form used to keep the
 // monster and count alone, so "pass cr" in the refusal could not be done.
