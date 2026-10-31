@@ -1323,6 +1323,19 @@ export function refreshesBattleMap(eventType: string, boardUp: boolean): boolean
   );
 }
 
+// Events after which a seat pulls the encounter projection again, coalesced.
+// - encounter_updated: only the seats allowed real numbers need their own
+//   projection; for everyone else the stream payload already applied.
+// - roll_result: an attack roll is when a reaction becomes possible (the
+//   engine's last-hit record) and when a turn's count moves, and an enemy's
+//   attack publishes no encounter_updated. Every seat pulls it, the GM's too:
+//   a GM who plays heroes at a table they run (a workshop test fight) is
+//   offered a hit hero's reaction under the monsters' hand, and without the
+//   pull it showed only after a reload.
+export function refreshesEncounter(eventType: string, enemyNumbers: boolean): boolean {
+  return eventType === "roll_result" || (eventType === "encounter_updated" && enemyNumbers);
+}
+
 // Events the stream cannot apply by itself, after which the snapshot is read
 // again. A rewind and imported prep change more rows than an event carries.
 // A seat change and a new party lead change what each seat may see and do:
@@ -1723,16 +1736,7 @@ export function useCampaignStream(campaignId: string) {
               dispatch({ type: "mapPing", ping });
             }
           }
-          // Only the seats allowed real numbers need their own projection;
-          // for everyone else the stream payload already applied above.
-          if (eventType === "encounter_updated" && capsRef.current.enemyNumbers) {
-            void refreshEncounter();
-          }
-          // An attack roll is when a reaction becomes possible (the engine's
-          // last-hit record) and when a turn's count moves; the projection
-          // carrying both is pulled again, coalesced, so the Hand's reaction
-          // prompt and its pips arrive with the roll.
-          if (eventType === "roll_result" && !capsRef.current.enemyNumbers) {
+          if (refreshesEncounter(eventType, capsRef.current.enemyNumbers)) {
             void refreshEncounter();
           }
           if (
