@@ -56,6 +56,21 @@ await test("A 12-hour march is four forced-march hours: four Constitution saves 
   assert.equal(world.sheet(walker.id).exhaustion, 4);
 });
 
+// A march that named no one at the table found out only on its forced
+// hours, after the clock, the world, the sky and the water had moved, and
+// the retry it asked for moved them all again. Within 8 hours it walked on
+// with nobody.
+await test("A march naming nobody at the table is refused before anything moves: the clock, the water and the pace stay as they were.", async () => {
+  const { getClock: clockNow } = await import("../src/lib/db/clock.ts");
+  const before = clockNow(world.campaignId);
+  for (const hours of [2, 12]) {
+    const out = await world.invoke("travel", { hours, pace: "fast", water: "none", characterIds: ["nobody-at-this-table"] });
+    assert.equal(out.ok, false, `${hours} hours: ${JSON.stringify(out.result ?? {})}`);
+    assert.match(out.error, /names nobody at this table.*Nothing moved/, `${hours} hours`);
+    assert.deepEqual(clockNow(world.campaignId), before, `${hours} hours moved the clock`);
+  }
+});
+
 // Passive Perception exactly 15: WIS 16 (+3) and proficiency (+2).
 const lookout = world.addHero({ user: world.owner, class: "ranger", level: 1, race: "human", abilities: { wis: 16 }, proficiencies: profs({ skills: ["perception"] }) });
 // The clock set to an hour of the next day, so a case reads the light it

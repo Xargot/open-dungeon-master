@@ -555,8 +555,14 @@ export function handleTravel(
   } catch {
     return { error: "Invalid arguments: travel needs hours or miles.", retry: true };
   }
-  if (args.water) {
-    setWaterRation(campaign.id, args.water);
+  // Who travels, settled before anything moves. A forced march with no
+  // traveller used to find out only after the clock, the world, the sky and
+  // the water had moved, and its retry moved them all again.
+  const travellers = resolveTargets(args.characterIds, sheets, sheetsById);
+  if (!travellers.length) {
+    return args.characterIds?.length
+      ? { error: "No traveller: characterIds names nobody at this table. Use characterIds from GAME STATE, or leave it out for the whole party. Nothing moved: the clock and the march are as they were.", retry: true }
+      : { error: "Nobody at this table can travel: it has no characters yet. Nothing moved: the clock and the march are as they were.", refused: "rules" };
   }
   const pace: TravelPace = args.pace ?? "normal";
   const effect = paceEffect(pace);
@@ -567,6 +573,9 @@ export function handleTravel(
   const leg = travelLeg({ pace, terrain, hours: args.hours, miles: args.miles, weatherFactor: before.weather ? weatherTravelFactor(before.weather) : 1 });
   if ("error" in leg) {
     return leg;
+  }
+  if (args.water) {
+    setWaterRation(campaign.id, args.water);
   }
   const legHours = leg.hours;
   const extra = forcedMarchHours(legHours);
@@ -611,7 +620,7 @@ export function handleTravel(
         turn,
         JSON.stringify({
           type: exposure,
-          characterIds: resolveTargets(args.characterIds, sheets, sheetsById).map((sheet) => sheet.id),
+          characterIds: travellers.map((sheet) => sheet.id),
           // One save for every hour on the road in it.
           hours: legHours,
           reason: exposure === "extreme_cold" ? "hours in the bitter cold" : "hours in the heat",
@@ -674,16 +683,12 @@ export function handleTravel(
   // DC 10 + 1 for each hour past 8 (SRD 5.1, Travel Pace), each failure a
   // level of exhaustion through the real exhaustion track.
   const dc = forcedMarchSaveDc(extra);
-  const targets = resolveTargets(args.characterIds, sheets, sheetsById);
-  if (!targets.length) {
-    return { error: "No travellers; use characterIds from GAME STATE.", retry: true };
-  }
   const hours = Array.from({ length: extra }, (_, index) => ({
     hour: index + 1,
     dc: forcedMarchSaveDc(index + 1),
   }));
   const results: Array<{ name: string; saves: HourSave[]; failed: boolean; exhaustion?: number }> = [];
-  for (const stale of targets) {
+  for (const stale of travellers) {
     const sheet = getSheetById(stale.id) ?? stale;
     // The road's hours rolled the dying's death saves before these (clock.ts):
     // one who died in them was listed holding up, saves and all.
