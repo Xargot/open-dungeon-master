@@ -209,6 +209,28 @@ export function pastRangedLimit(traits: string[] | undefined, attack: EnemyAttac
   return `its Multiattack's melee attacks leave ${allowed === 1 ? "one attack" : `${allowed} attacks`} at range a turn`;
 }
 
+// The count a Multiattack prints for this attack ("two hand crossbow
+// attacks"), or null. A Multiattack whose routine was not read (the Tome of
+// Beasts scheznyki's "four war pick attacks or two hand crossbow attacks"
+// names a war pick its block calls Heavy Pick) still says how many of a
+// named attack a turn is: the crossbow shot four times for the count of the
+// first group.
+function printedCount(multiattack: string, attack: EnemyAttack): number | null {
+  const words = textKey(multiattack).split(" ");
+  const bare = attackKey(attack.name);
+  for (const form of bare ? [bare, ...pluralForms(bare)] : []) {
+    const parts = form.split(" ");
+    for (let index = 1; index + parts.length < words.length; index += 1) {
+      const said = parts.every((part, offset) => words[index + offset] === part) && /^attacks?$/.test(words[index + parts.length]);
+      const count = said ? (COUNT_WORDS[words[index - 1]] ?? Number(words[index - 1])) : NaN;
+      if (count >= 1) {
+        return count;
+      }
+    }
+  }
+  return null;
+}
+
 // A routine's swings with a Loading weapon the Multiattack does not name
 // made once: the wererat's "two attacks, only one of which can be a bite"
 // is read as routines of any two of its attacks, and its Hand Crossbow
@@ -247,8 +269,12 @@ export function plannedSwings(
     const chosen = landing ?? holding[0];
     return chosen ? loadedOnce(stats, chosen) : [asked ?? attacks[0]];
   }
-  const count = Math.max(1, Math.min(10, Math.floor(stats.attacksPerTurn ?? 1)));
   const swing = asked ?? attacks[0];
+  const multiattack = (stats.traits ?? []).find((trait) => /^multiattack\b/i.test(trait)) ?? "";
+  // Only for an attack asked for: the turn no attack is named for keeps the
+  // whole count, its first attack the one swung.
+  const printed = asked && multiattack ? printedCount(multiattack, asked) : null;
+  const count = Math.max(1, Math.min(10, printed ?? Math.floor(stats.attacksPerTurn ?? 1)));
   return new Array<EnemyAttack>(outsideMultiattackCount(stats, swing) ? 1 : count).fill(swing);
 }
 

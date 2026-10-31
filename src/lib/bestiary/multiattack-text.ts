@@ -179,10 +179,14 @@ function a5eMultiattack(text: string): string {
 // The count in either case, the name only capitalized.
 const ANY_CASE_COUNT = "(?:[Aa]n?|[Oo]ne|[Tt]wo|[Tt]hree|[Ff]our|[Ff]ive|[Ss]ix|[Ss]even|[Ee]ight|[Nn]ine|[Tt]en|\\d{1,2})";
 
+// A count before a choice of names that the noun closes ("two Rapier or
+// Hand Crossbow attacks", Black Flag) is that many of either: the noun is not
+// added after the first name, or the second lost its count and was no
+// routine, and the crossbow shot once.
 function namedCounts(text: string): string {
   return text
     .replace(new RegExp(`\\bthen\\s+(?=${COUNT_WORD}\\s)`, "gi"), "then makes ")
-    .replace(new RegExp(`\\b(${ANY_CASE_COUNT})\\s+((?:[A-Z][\\p{L}'’-]*)(?:\\s+[A-Z][\\p{L}'’-]*)*)(?!\\s+attacks?\\b)(?=\\s*(?:[,.;]|\\s(?:or|and|plus)\\s|$))`, "gu"), "$1 $2 attacks");
+    .replace(new RegExp(`\\b(${ANY_CASE_COUNT})\\s+((?:[A-Z][\\p{L}'’-]*)(?:\\s+[A-Z][\\p{L}'’-]*)*)(?!\\s+attacks?\\b)(?!\\s+or\\s+(?:[A-Z][\\p{L}'’-]*\\s+)+attacks?\\b)(?=\\s*(?:[,.;]|\\s(?:or|and|plus)\\s|$))`, "gu"), "$1 $2 attacks");
 }
 
 // The SRD's own page and a block pasted from it set an aside off with long

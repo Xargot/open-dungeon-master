@@ -239,6 +239,29 @@ await test("A bandit captain's Multiattack reads as its melee routine or two thr
   }
 });
 
+// Black Flag prints "two Rapier or Hand Crossbow attacks": two of either.
+// The count stayed with the first name only, so the crossbow was no routine
+// and shot once. The Tome of Beasts scheznyki's "four war pick attacks or two
+// hand crossbow attacks" names a war pick its block calls Heavy Pick, so no
+// routine is read; its crossbow shot four times for the first group's count.
+await test("A count before a choice of attacks is that many of either, and a Multiattack's printed count of a named attack holds where no routine is read (Black Flag; Tome of Beasts' scheznyki).", () => {
+  assert.deepEqual(readAs("The bard makes two Rapier or Hand Crossbow attacks. It can replace one attack with a use of Spellcasting.", ["Rapier", "Hand Crossbow"]).routines, ["Rapier x2", "Hand Crossbow x2"]);
+  assert.deepEqual(readAs("Three Rapier or Light Crossbow attacks.", ["Rapier", "Light Crossbow"]).routines, ["Rapier x3", "Light Crossbow x3"]);
+  // A count before names the noun does not close is still each name's own.
+  assert.deepEqual(readAs("One Bite and two Kicks or three Spit Worms.", ["Bite", "Kick", "Spit Worm"]).routines, ["Bite x1 + Kick x2", "Spit Worm x3"]);
+  const scheznyki = {
+    attacks: [
+      { name: "Heavy Pick", toHit: 6, damage: "1d12+4", type: "piercing", mode: "melee", reach: 5 },
+      { name: "Hand Crossbow", toHit: 6, damage: "1d6+3", type: "piercing", mode: "ranged", range: { normal: 30, long: 120 } },
+    ],
+    attacksPerTurn: 4,
+    traits: ["Multiattack: The scheznyki makes four war pick attacks or two hand crossbow attacks."],
+  };
+  const swingsOf = (name) => plannedSwings(scheznyki, scheznyki.attacks, scheznyki.attacks.find((attack) => attack.name === name)).length;
+  assert.equal(swingsOf("Hand Crossbow"), 2, "the crossbow's printed two shots");
+  assert.equal(swingsOf("Heavy Pick"), 4, "the war pick's four, under the block's own name for it");
+});
+
 await test("A Multiattack's groups name the block's attacks by whole name, \"+1\" and a bracket note set aside, either side plural.", () => {
   assert.deepEqual(readAs("The vila makes two shortsword attacks or two shortbow attacks.", ["+1 Shortsword", "+1 Shortbow"]).routines, ["+1 Shortsword x2", "+1 Shortbow x2"]);
   assert.deepEqual(readAs("It makes two talon attacks and one beak attack.", ["Talons (Eagle Form Only)", "Beak (Eagle Form Only)"]).routines, ["Talons (Eagle Form Only) x2 + Beak (Eagle Form Only) x1"]);
