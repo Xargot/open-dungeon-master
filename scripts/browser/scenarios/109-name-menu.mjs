@@ -7,7 +7,7 @@
 // sending, Escape puts the menu away for that @, and the list hangs above the
 // box, animated, legible night and day, and clean under axe. The Ask box
 // above the composer answers @ the same way. A GM's Narrate holds the whole
-// cast and marks the person not introduced yet.
+// cast and marks the person not introduced yet; its pill says Narrate.
 import { axeViolations, check, eventually, untilStill } from "../lib.mjs";
 
 const scenario = {
@@ -131,6 +131,10 @@ const scenario = {
     }
     const narrate = page.locator(`${root}[data-tour="composer-input"] textarea`).locator("visible=true").first();
     await eventually(() => narrate.count(), { timeoutMs: 20_000, label: "the GM's composer" });
+    // The GM's own pill says Narrate, as the GM's tour does; it read Direct,
+    // the party lead's word for steering an AI table.
+    const pill = (await page.locator(`${root}button[data-mode="narrate"]`).locator("visible=true").first().textContent())?.trim();
+    check(pill === "Narrate", `the GM's mode pill says Narrate (${pill})`);
     await t.tap(narrate);
     await narrate.pressSequentially("@ia");
     await eventually(() => list.count(), { label: "the GM's name menu" });

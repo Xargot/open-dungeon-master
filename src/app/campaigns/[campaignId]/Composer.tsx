@@ -350,7 +350,9 @@ function ComposerInner({
                       ? "Say"
                       : option === "ooc"
                         ? "OOC"
-                        : "Direct"}
+                        : option === "narrate"
+                          ? "Narrate"
+                          : "Direct"}
                 </button>
               </Tooltip>
             ),

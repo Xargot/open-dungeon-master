@@ -2437,7 +2437,7 @@
     "lib/text-models.ts#toLowerCase": [["key",4,"model ids"]],
     "lib/theme-mode.ts#str-eq": [["key",2,"stored theme values"]],
     "lib/tours/account-logic.ts#str-eq": [["key",1,"stored tour state"]],
-    "lib/tours/registry.ts#str-key": [["key",1,"tour ids, for the version each tour is at"]],
+    "lib/tours/registry.ts#str-key": [["key",2,"tour ids, for the version and the edition each tour is at"]],
     "lib/tours/table.ts#str-list": [["key",8,"tour anchor ids"]],
     "lib/tours/tour-store.ts#str-eq": [["key",1,"stored tour state"]],
     "lib/tours/workshop.ts#str-key": [["key",1,"system ids"]],
