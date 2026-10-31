@@ -432,10 +432,15 @@ await test("a rogue or bard companion places the expertise its class has given, 
   const { id: bard } = await recruit(world, "bard");
   check(world.sheet(bard), 0);
   check(await raiseTo(world, bard, 3), 2);
+  check(await raiseTo(world, bard, 9), 2);
+  check(await raiseTo(world, bard, 10), 4);
   await world.invoke("dismiss_companion", { characterId: bard });
   const { id: seasoned } = await recruit(world, "rogue", { name: "Seasoned", level: 6 });
   check(world.sheet(seasoned), 4);
   await world.invoke("dismiss_companion", { characterId: seasoned });
+  const { id: lore } = await recruit(world, "bard", { name: "Lore", level: 10 });
+  check(world.sheet(lore), 4);
+  await world.invoke("dismiss_companion", { characterId: lore });
   const { id: fighter } = await recruit(world, "fighter");
   check(await raiseTo(world, fighter, 4), 0);
 });
