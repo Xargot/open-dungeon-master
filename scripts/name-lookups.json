@@ -1310,7 +1310,7 @@
     "lib/dm/enemy-polymorph.ts#whole-single": [["key",1,"runsAs stored only when it differs from the spell as written"],["identity",1,"concentration, spells, downtime subjects, relationships, trade lines and zones by textKey (zoneKey is textKey plus ODM's English spell aliases) or normalizeName; turn and order keys"]],
     "lib/dm/enemy-profile.ts#fallback": [["identity",2,"the attack asked for (attackNamed: a miss is refused by the caller); with none asked, the block's first, and a single swing of several unnamed is refused"]],
     "lib/dm/enemy-profile.ts#first": [["identity",1,"the attack asked for (attackNamed: a miss is refused by the caller); with none asked, the block's first routine"]],
-    "lib/dm/enemy-profile.ts#partial": [["key",2,"the SRD's English attack names and reach text (a workshop monster's lines: authoring)"]],
+    "lib/dm/enemy-profile.ts#partial": [["key",2,"the SRD's English attack names and reach text (a workshop monster's lines: authoring)"],["key",4,"the SRD's English weapon names (a Loading crossbow or blowgun) and a Multiattack of melee attacks in a block's traits (a workshop monster's lines: authoring)"]],
     "lib/dm/enemy-profile.ts#whole": [["identity",2,"an attack by whole name, with or without its bracket tag"]],
     "lib/dm/enemy-reactions.ts#number": [["key",1,"digits a regex already captured, ids, headers, stored and form numbers (number inputs), dice parts, the pack's English text (\"1,000 feet\", a purse); src/: every site read"]],
     "lib/dm/enemy-reactions.ts#partial": [["identity",1,"invisible or hidden by whole name (anchored)"],["authoring",1,"a Parry reaction line read"]],
