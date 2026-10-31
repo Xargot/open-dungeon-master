@@ -42,8 +42,13 @@ const scenario = {
     await eventually(() => card.count(), { timeoutMs: 30_000, label: "Pip's party card" });
     await untilStill(page);
     const adjust = async () => {
-      await t.tap(card.getByRole("button", { name: /^Options for / }));
-      await t.tap(page.getByRole("menuitem", { name: "Adjust stats" }));
+      // Closing the dialog hands focus back to the menu it came from, which
+      // can still be open: its item is used where it is.
+      const item = page.getByRole("menuitem", { name: "Adjust stats" });
+      if (!(await item.isVisible().catch(() => false))) {
+        await t.tap(card.getByRole("button", { name: /^Options for / }));
+      }
+      await t.tap(item);
       const dialog = page.getByRole("dialog", { name: /^Adjust / });
       await eventually(() => dialog.count(), { label: "the Adjust dialog" });
       return dialog;
