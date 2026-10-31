@@ -9,7 +9,7 @@
 // The table's model is a stand-in here that fails every call until told to
 // answer, so the opening turn halts the way a signed-out program halts it.
 import http from "node:http";
-import { check, eventually, freePort } from "../lib.mjs";
+import { check, eventually, freePort, untilStill } from "../lib.mjs";
 
 function flakyNarrator(port) {
   const state = { fail: true, asked: 0 };
@@ -91,6 +91,13 @@ export default {
         await notice.scrollIntoViewIfNeeded().catch(() => undefined);
         await t.shot(`halted-${pass}`);
       }
+      // The day theme draws it too.
+      const theme = await page.evaluate(() => document.documentElement.dataset.theme ?? "");
+      await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+      await untilStill(page);
+      check(await notice.isVisible(), "the notice in the day theme");
+      await t.shot("halted-day");
+      await page.evaluate((mode) => (document.documentElement.dataset.theme = mode), theme);
 
       // Retry sends the GM back in; once it answers, the notice is gone.
       model.state.fail = false;
