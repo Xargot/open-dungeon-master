@@ -24,6 +24,7 @@ import { awayFromFear, fearSourceAt } from "@/lib/dm/enemy-approach";
 import { abilityNames } from "@/lib/dm/monster-abilities";
 import { applyDmMutation } from "@/lib/dm/mutations";
 import { characterDrag, dragLandings } from "@/lib/dm/drag-move";
+import { walkCostFactor } from "@/lib/dm/drag";
 import { releaseGrapplesOutOfReach } from "@/lib/dm/grapple";
 import { resolveOpportunityAttacks } from "@/lib/dm/opportunity";
 import { resolveSheetRef, unknownSheetRef } from "@/lib/dm/rolls";
@@ -173,8 +174,9 @@ export function walkCharacter(
   // whole: a walk the movement cannot finish is refused, nothing moved
   // (pc_attack's approach walks only when the swing can follow). dryRun:
   // the same walk worked out and nothing moved, to ask whether it can be
-  // made (companion-approach.ts companionShot).
-  options: { drag?: boolean; whole?: boolean; dryRun?: boolean } = {},
+  // made (companion-approach.ts companionShot). careful: at half speed, so
+  // caltrops and ball bearings ask no save.
+  options: { drag?: boolean; whole?: boolean; dryRun?: boolean; careful?: boolean } = {},
 ): ToolResult {
   // Off their turn, the move they readied (SRD 5.1, Ready): their reaction,
   // up to their full speed, their own turn's movement untouched.
@@ -222,7 +224,8 @@ export function walkCharacter(
   if (drag && "error" in drag) {
     return toolError(drag);
   }
-  const factor = drag?.factor ?? 1;
+  // Walking carefully halves the speed as a drag does (drag.ts).
+  const factor = walkCostFactor(drag?.factor ?? 1, Boolean(options.careful));
   // The board's own walking traits: allies' spaces, a swimming or climbing
   // speed, Halfling Nimbleness, and the spell areas underfoot.
   const traits = withZoneSteps(
@@ -296,7 +299,7 @@ export function walkCharacter(
   const landed = opportunity.downedAt ?? walk.at;
   // The walk was made, so the readied move is released, struck down or not.
   const released = readied ? readied.release() : {};
-  const zoneEffects = opportunity.downedAt ? [] : zonesAfterMove(campaign, encounter.id, { kind: "pc", refId: sheet.id }, origin, walked);
+  const zoneEffects = opportunity.downedAt ? [] : zonesAfterMove(campaign, encounter.id, { kind: "pc", refId: sheet.id }, origin, walked, { careful: options.careful });
   return {
     ok: true,
     name: token.name,
