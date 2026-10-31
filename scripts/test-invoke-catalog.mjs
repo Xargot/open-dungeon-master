@@ -258,6 +258,27 @@ test("a label's leading words as far as its value are that option; other words o
   assert.equal(selectValue(save, "dex save"), "dex save");
 });
 
+// "a grapple" is a run from the middle of Escape's label, "Escape a grapple
+// or a spell's hold", and reads as the Grapple action: the refusal pointed it
+// at "escape". Words from a label's middle that hold another option's value
+// name neither option now; the values listed are the answer. A label's
+// start, a run that reaches the value, or one that reads as no other option
+// still names it.
+test("a run from a label's middle that reads as another option points at neither: \"a grapple\" is not sent to Escape", () => {
+  const take = adjudication("take_action");
+  const actions = take.fields.find((field) => field.name === "action").options.map((option) => option.value).join(", ");
+  for (const words of ["a grapple", "the creature they grapple", "grapple or a spell's hold"]) {
+    assert.equal(checkArgs(take, { action: words }), `Action must be one of: ${actions}.`, words);
+  }
+  const ready = take.fields.find((field) => field.name === "readied");
+  assert.equal(checkArgs({ ...take, fields: [ready] }, { readied: "a grapple" }), `Readied action must be one of: ${ready.options.map((option) => option.value).join(", ")}.`);
+  const stash = adjudication("party_stash");
+  assert.match(checkArgs(stash, { ...Object.fromEntries(stash.fields.filter((field) => field.required && field.name !== "do").map((field) => [field.name, "x"])), do: "Take money" }) ?? "", /For "Take money", send "withdraw"/);
+  assert.match(checkArgs(take, { action: "a spell's hold" }) ?? "", /For "a spell's hold", send "escape" \(Escape a grapple or a spell's hold\)\.$/);
+  const scene = adjudication("start_encounter").fields.find((field) => field.name === "scene");
+  assert.match(checkArgs({ ...take, fields: [scene] }, { scene: "street" }) ?? "", /For "street", send "city" \(City street\)\.$/);
+});
+
 test("the console offers every entry exactly once", () => {
   // Not "every visible entry": nothing is hidden. If the engine can do it,
   // the person running the table can reach it.

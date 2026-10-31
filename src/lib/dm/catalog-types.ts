@@ -204,24 +204,42 @@ function optionsLed(field: CatalogField, value: string): Array<{ value: string; 
   );
 }
 
-// The options a value speaks of in their label's words rather than as a
-// value: a run of the label's words ("medicine", "healer's kit"), or the
-// label's leading words up to the value and on past what it says ("Medicine
-// check DC 15"). A handler's own list knows none of these, so checkArgs
-// refuses them with the value to send. A value that only adds its own words
-// to an option's ("fire damage" for "fire") speaks no label and stays for
-// selectAccepts.
+// A label's leading words that reach its option's value and go on past what
+// the label says: "Medicine check DC 15" for "Medicine check, DC 10".
+function pastValue(option: { value: string; label: string }, sent: string): boolean {
+  const lead = sharedLead(textKey(option.label), sent);
+  return lead !== textKey(option.value) && containsPhrase(lead, option.value);
+}
+
+// Whether a value speaks in a label's words rather than as a value: a run of
+// a label's words ("medicine", "healer's kit", "a grapple"), or a label's
+// leading words past its value. A handler's own list knows none of these,
+// so checkArgs refuses them with the values. A value that only adds its own
+// words to an option's ("fire damage" for "fire") speaks no label and stays
+// for selectAccepts.
+function speaksLabel(field: CatalogField, value: string): boolean {
+  const options = field.options ?? [];
+  const sent = textKey(value);
+  return namesHolding(options, value, labelOf).length > 0 || options.some((option) => pastValue(option, sent));
+}
+
+// The options a refusal names for words of their labels: a label the words
+// start ("medicine" for "Medicine check, DC 10"), a run of a label that
+// reaches its value ("healer's kit", "check, DC 10"), a run that names no
+// other option ("street" for "City street"), or a label's leading words past
+// its value. A run from a label's middle that holds another option's value
+// reads as that other option, and names neither: "a grapple" is the middle
+// of Escape's "Escape a grapple or a spell's hold", and it pointed a Grapple
+// at Escape. The refusal's list of values answers it.
 function optionsSpoken(field: CatalogField, value: string): Array<{ value: string; label: string }> {
   const sent = textKey(value);
   const options = field.options ?? [];
   const holding = namesHolding(options, value, labelOf);
-  return options.filter((option) => {
-    if (holding.includes(option)) {
-      return true;
-    }
-    const lead = sharedLead(textKey(option.label), sent);
-    return lead !== textKey(option.value) && containsPhrase(lead, option.value);
-  });
+  const spoken = (option: { value: string; label: string }) =>
+    sharedLead(textKey(option.label), sent) === sent ||
+    containsPhrase(value, option.value) ||
+    !options.some((other) => other !== option && containsPhrase(value, other.value));
+  return options.filter((option) => (holding.includes(option) && spoken(option)) || pastValue(option, sent));
 }
 
 // The option a select's value names by its label. The console shows the
@@ -306,7 +324,7 @@ export function checkArgs(
       const chosen = selectValue(field, value);
       if (
         typeof chosen !== "string" ||
-        (!allowed.includes(chosen) && (optionsSpoken(field, chosen).length > 0 || !selectAccepts(allowed, chosen)))
+        (!allowed.includes(chosen) && (speaksLabel(field, chosen) || !selectAccepts(allowed, chosen)))
       ) {
         return selectRefusal(field, chosen);
       }
