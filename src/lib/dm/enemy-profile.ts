@@ -138,8 +138,28 @@ export function alternativeBlow(attack: EnemyAttack, when: { ranged: boolean; bl
   return blow;
 }
 
+// A crossbow or a blowgun: a Loading weapon (SRD 5.1, Weapons), which fires
+// once per action however many attacks the creature has. A stat block does
+// not print the property, so the weapon's name tells it.
+const LOADING_WEAPON_RE = /\b(?:crossbow|blowgun)\b/i;
+
+// Whether a Multiattack that prints only a count ("The thug makes two melee
+// attacks") leaves `attack` out, so a turn of it is one attack: a Loading
+// weapon, or an attack made only at range when the Multiattack's attacks
+// are melee ones. A thug's Heavy Crossbow is one shot, not two (SRD 5.1,
+// Thug); a scout's "two ranged attacks" are still two.
+function outsideMultiattackCount(stats: { traits?: string[] }, attack: EnemyAttack): boolean {
+  if (LOADING_WEAPON_RE.test(attack.name)) {
+    return true;
+  }
+  const traits = stats.traits ?? [];
+  const multiattack = traits.find((trait) => /^multiattack\b/i.test(trait)) ?? "";
+  const meleeOnly = /\bmelee attacks?\b/i.test(multiattack) && !/\branged attacks?\b/i.test(multiattack);
+  return meleeOnly && !enemyAttackProfile(attack, traits).melee;
+}
+
 export function plannedSwings(
-  stats: Pick<EnemyStats, "attacks" | "attacksPerTurn" | "routines">,
+  stats: Pick<EnemyStats, "attacks" | "attacksPerTurn" | "routines"> & { traits?: string[] },
   attacks: EnemyAttack[],
   asked: EnemyAttack | null,
   options: { single?: boolean } = {},
@@ -159,7 +179,8 @@ export function plannedSwings(
     return holding ?? [asked];
   }
   const count = Math.max(1, Math.min(10, Math.floor(stats.attacksPerTurn ?? 1)));
-  return new Array<EnemyAttack>(count).fill(asked ?? attacks[0]);
+  const swing = asked ?? attacks[0];
+  return new Array<EnemyAttack>(outsideMultiattackCount(stats, swing) ? 1 : count).fill(swing);
 }
 
 // Whether a creature is charmed by `sourceId`: a charmed creature cannot

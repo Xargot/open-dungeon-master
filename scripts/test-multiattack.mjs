@@ -134,6 +134,44 @@ await test("A Purple Worm's turn is a bite and a tail stinger: its Multiattack i
   }
 });
 
+await test("A Multiattack of two melee attacks is two Mace swings but one Heavy Crossbow shot, and a Loading weapon fires once (SRD 5.1, Thug, Scout, Wererat).", () => {
+  const thug = {
+    name: "Thug", slug: "thug", document__slug: "wotc-srd", size: "Medium", type: "Humanoid", armor_class: 11, hit_points: 32, cr: 0.5,
+    actions: [
+      { name: "Multiattack", desc: "The thug makes two melee attacks." },
+      { name: "Mace", desc: "Melee Weapon Attack: +4 to hit, reach 5 ft., one creature. Hit: 5 (1d6 + 2) bludgeoning damage.", attack_bonus: 4, damage_dice: "1d6", damage_bonus: 2 },
+      { name: "Heavy Crossbow", desc: "Ranged Weapon Attack: +2 to hit, range 100/400 ft., one target. Hit: 5 (1d10) piercing damage.", attack_bonus: 2, damage_dice: "1d10" },
+    ],
+  };
+  const swingsOf = (stats, name) => plannedSwings(stats, stats.attacks, stats.attacks.find((attack) => attack.name === name)).map((swing) => swing.name);
+  for (const row of [thug, ...(world.hasPack ? [srdRow("thug")] : [])]) {
+    const stats = parseMonster(row, 0.5);
+    assert.deepEqual(swingsOf(stats, "Mace"), ["Mace", "Mace"]);
+    assert.deepEqual(swingsOf(stats, "Heavy Crossbow"), ["Heavy Crossbow"], "the crossbow fired twice");
+  }
+  // "two melee attacks or two ranged attacks": the Longbow is two.
+  const scout = {
+    attacks: [
+      { name: "Shortsword", toHit: 4, damage: "1d6+2", type: "piercing", mode: "melee", reach: 5 },
+      { name: "Longbow", toHit: 4, damage: "1d8+2", type: "piercing", mode: "ranged", range: { normal: 150, long: 600 } },
+    ],
+    attacksPerTurn: 2,
+    traits: ["Multiattack: The scout makes two melee attacks or two ranged attacks."],
+  };
+  assert.deepEqual(swingsOf(scout, "Longbow"), ["Longbow", "Longbow"]);
+  // "two attacks, only one of which can be a bite": a hand crossbow loads once.
+  const wererat = {
+    attacks: [
+      { name: "Shortsword", toHit: 4, damage: "1d6+2", type: "piercing", mode: "melee", reach: 5 },
+      { name: "Hand Crossbow", toHit: 4, damage: "1d6+2", type: "piercing", mode: "ranged", range: { normal: 30, long: 120 } },
+    ],
+    attacksPerTurn: 2,
+    traits: ["Multiattack: The wererat makes two attacks, only one of which can be a bite."],
+  };
+  assert.deepEqual(swingsOf(wererat, "Shortsword"), ["Shortsword", "Shortsword"]);
+  assert.deepEqual(swingsOf(wererat, "Hand Crossbow"), ["Hand Crossbow"]);
+});
+
 await test("A Multiattack's groups name the block's attacks by whole name, \"+1\" and a bracket note set aside, either side plural.", () => {
   assert.deepEqual(readAs("The vila makes two shortsword attacks or two shortbow attacks.", ["+1 Shortsword", "+1 Shortbow"]).routines, ["+1 Shortsword x2", "+1 Shortbow x2"]);
   assert.deepEqual(readAs("It makes two talon attacks and one beak attack.", ["Talons (Eagle Form Only)", "Beak (Eagle Form Only)"]).routines, ["Talons (Eagle Form Only) x2 + Beak (Eagle Form Only) x1"]);

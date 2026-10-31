@@ -119,8 +119,8 @@ const ARCHER = [
 
 // The lead ends Scout's turn, the pointer walks past the enemy, and "Play
 // the rest for me" hands the enemy's turn to the server.
-async function playTheRest(enemy, at) {
-  kit.setEnemy(enemy.id, { stats: { attacks: ARCHER } });
+async function playTheRest(enemy, at, stats = { attacks: ARCHER }) {
+  kit.setEnemy(enemy.id, { stats });
   kit.place(scout.id, 2, 2);
   kit.place(watcher.id, 2, 0);
   kit.place(enemy.id, ...at);
@@ -172,6 +172,36 @@ await test("Played for the lead, a prone enemy that could walk into melee standi
   assert.match(made[0].detail, /Shortbow/);
   assert.ok(!kit.enemy(enemy.id).conditions.includes("prone"), "it stood to shoot");
   assert.deepEqual([kit.token(enemy.id).x, kit.token(enemy.id).y], [8, 2]);
+});
+
+// A thug (SRD 5.1): "The thug makes two melee attacks", with its Mace; its
+// Heavy Crossbow, at 100/400 ft., is no part of them and has the Loading
+// property.
+const THUG = {
+  attacks: [
+    { name: "Mace", toHit: 4, damage: "1d6+2", type: "bludgeoning", mode: "melee", reach: 5 },
+    { name: "Heavy Crossbow", toHit: 2, damage: "1d10", type: "piercing", mode: "ranged", range: { normal: 100, long: 400 } },
+  ],
+  attacksPerTurn: 2,
+  traits: ["Multiattack: The thug makes two melee attacks."],
+};
+
+await test("Played for the lead, a thug that cannot reach anyone in melee fires its Heavy Crossbow once, not twice for its two melee attacks.", async () => {
+  const [enemy] = await stage();
+  const before = enemyRolls(enemy).length;
+  await playTheRest(enemy, [11, 2], THUG);
+  const made = enemyRolls(enemy).slice(0, enemyRolls(enemy).length - before);
+  assert.equal(made.length, 1, `the thug made ${made.length} attacks`);
+  assert.match(made[0].detail, /Heavy Crossbow/);
+});
+
+await test("Played for the lead, a thug that can walk into melee still swings its Mace twice.", async () => {
+  const [enemy] = await stage();
+  const before = enemyRolls(enemy).length;
+  await playTheRest(enemy, [6, 2], THUG);
+  const made = enemyRolls(enemy).slice(0, enemyRolls(enemy).length - before);
+  assert.equal(made.length, 2, `the thug made ${made.length} attacks`);
+  assert.ok(made.every((roll) => /Mace/.test(roll.detail)));
 });
 
 // ---- initiative at the start (N:S15, N:T12) ----
