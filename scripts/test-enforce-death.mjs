@@ -295,6 +295,31 @@ await test("stabilize's How takes the label the console shows for it, and a word
   assert.match(word.outcome.error, /"check" \(Medicine check, DC 10\)/);
 });
 
+await test("stabilize's How takes a label's leading words as far as its value, and any other label words get the value to send, not a schema error", async () => {
+  // The label without its DC is the check, rolled as the whole label is.
+  for (const method of ["Medicine check", "medicine CHECK"]) {
+    dying();
+    kit.freshTurn();
+    const tended = await kit.withDice([10, 3], "stabilize", { characterId: hero.id, healerId: ally.id, method });
+    assert.equal(tended.outcome.ok, true, `${method}: ${tended.outcome.error}`);
+    assert.deepEqual(tended.dice, ["d20:10", "d4:3"]);
+    assert.equal(track().stable, true);
+  }
+  // Words of a label that name no option as sent hold a value's word, so
+  // they passed the pre-flight and met the handler's list. They are refused
+  // before anything rolls, with the value the label stands for.
+  for (const [method, value] of [["Medicine check DC 15", "check"], ["check, DC 10", "check"], ["healer's kit", "kit"]]) {
+    dying();
+    kit.freshTurn();
+    const refused = await kit.withDice([10, 3], "stabilize", { characterId: hero.id, healerId: ally.id, method });
+    assert.equal(refused.outcome.ok, false, method);
+    assert.deepEqual(refused.dice, []);
+    assert.doesNotMatch(refused.outcome.error, /Invalid arguments|Invalid option/, method);
+    assert.match(refused.outcome.error, new RegExp(`^How must be one of: check, kit, spell\\. For "${method}", send "${value}"`), method);
+    assert.equal(track().stable, false);
+  }
+});
+
 await test("stabilize is refused for the living and for the dead", async () => {
   kit.reset(hero.id);
   assert.equal((await world.invoke("stabilize", { characterId: hero.id })).ok, false);
