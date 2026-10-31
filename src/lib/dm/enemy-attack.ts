@@ -299,7 +299,7 @@ export function handleEnemyAttack(
   if (single && !asked && actionAttacks.length > 1) {
     return { error: `${found.displayName} makes one attack this turn: name it in attack (${actionAttacks.map((attack) => attack.name).join(", ")}).`, retry: true };
   }
-  const planned = plannedSwings(found.stats, bonus ? attacks : actionAttacks, asked, { single });
+  const planned = plannedSwings(found.stats, bonus ? attacks : actionAttacks, asked, { single, rollCount: (dice) => rollExpression(dice).total });
   if (hasteSwing && planned.some((attack) => attack.spellAttack)) {
     return { error: `Haste's extra action is one weapon attack, and ${found.displayName}'s ${planned[0].name} is a spell attack. Nothing was spent.`, refused: "rules" };
   }
