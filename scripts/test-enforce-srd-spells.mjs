@@ -175,7 +175,7 @@ const FIRST_SAVE_IS_NOT_THE_SPELLS = {
   Earthquake: "the first save named is a concentrating creature's CON; the prone save is DEX",
   "Irresistible Dance": "the first is the dancer's disadvantage on DEX saves; the way out is a WIS save",
 };
-const ATTACK_LATER = new Set(["Flame Blade", "Spiritual Weapon", "Dispel Evil and Good"]); // a buff whose attacks come on later turns
+const ATTACK_LATER = new Set(["Flame Blade", "Spiritual Weapon", "Dispel Evil and Good", "Arcane Sword"]); // a buff whose attacks are pc_attack calls of their own (Arcane Sword's first comes with the casting)
 const DICE_ELSEWHERE = {
   Web: "the burning strands are the web zone's (src/lib/battlemap/zones-spells.ts)",
   "Bestow Curse": "the 1d8 necrotic is one of the curse's variants, a rider on the caster's hits",
