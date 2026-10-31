@@ -172,6 +172,38 @@ await test("A Multiattack of two melee attacks is two Mace swings but one Heavy 
   assert.deepEqual(swingsOf(wererat, "Hand Crossbow"), ["Hand Crossbow"]);
 });
 
+// The wererat as its block prints it: "only one of which can be a bite" is
+// read as routines of any two of its attacks, the Hand Crossbow's two shots
+// among them, which the Loading rule above never reached.
+await test("A wererat read from its SRD 5.1 block fires its Hand Crossbow once, and a Multiattack that names a ranged attack among its melee ones counts it (Wererat; Tome of Beasts' mordant snare).", () => {
+  const wererat = {
+    name: "Wererat", size: "Medium", type: "Humanoid", armor_class: 12, hit_points: 33, cr: 2,
+    actions: [
+      { name: "Multiattack (Humanoid or Hybrid Form Only)", desc: "The wererat makes two attacks, only one of which can be a bite." },
+      { name: "Bite (Rat or Hybrid Form Only)", desc: "Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 4 (1d4 + 2) piercing damage. If the target is a humanoid, it must succeed on a DC 11 Constitution saving throw or be cursed with wererat lycanthropy.", attack_bonus: 4, damage_dice: "1d4", damage_bonus: 2 },
+      { name: "Shortsword (Humanoid or Hybrid Form Only)", desc: "Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 5 (1d6 + 2) piercing damage.", attack_bonus: 4, damage_dice: "1d6", damage_bonus: 2 },
+      { name: "Hand Crossbow (Humanoid or Hybrid Form Only)", desc: "Ranged Weapon Attack: +4 to hit, range 30/120 ft., one target. Hit: 5 (1d6 + 2) piercing damage.", attack_bonus: 4, damage_dice: "1d6", damage_bonus: 2 },
+    ],
+  };
+  const swingsOf = (stats, name) => plannedSwings(stats, stats.attacks, stats.attacks.find((attack) => attack.name.startsWith(name))).map((swing) => swing.name.replace(/ \(.*$/, ""));
+  for (const row of [wererat, ...(world.hasPack ? [srdRow("wererat")] : [])]) {
+    const stats = parseMonster(row, 2);
+    assert.ok(stats.routines?.length, "the wererat's Multiattack is read as routines");
+    assert.deepEqual(swingsOf(stats, "Hand Crossbow"), ["Hand Crossbow"], "the hand crossbow fired twice");
+    assert.deepEqual(swingsOf(stats, "Shortsword"), ["Shortsword", "Shortsword"]);
+  }
+  const snare = {
+    attacks: [
+      { name: "Spike", toHit: 8, damage: "2d8+3", type: "piercing", mode: "ranged", range: { normal: 20, long: 60 } },
+      { name: "Tentacle", toHit: 11, damage: "2d10+6", type: "bludgeoning", mode: "melee", reach: 5 },
+    ],
+    attacksPerTurn: 4,
+    traits: ["Multiattack: The mordant snare makes four melee attacks, using any combination of tentacle attacks, spike attacks, and filament attacks."],
+  };
+  assert.deepEqual(swingsOf(snare, "Spike"), ["Spike", "Spike", "Spike", "Spike"]);
+  assert.deepEqual(swingsOf(snare, "Tentacle"), ["Tentacle", "Tentacle", "Tentacle", "Tentacle"]);
+});
+
 await test("A Multiattack's groups name the block's attacks by whole name, \"+1\" and a bracket note set aside, either side plural.", () => {
   assert.deepEqual(readAs("The vila makes two shortsword attacks or two shortbow attacks.", ["+1 Shortsword", "+1 Shortbow"]).routines, ["+1 Shortsword x2", "+1 Shortbow x2"]);
   assert.deepEqual(readAs("It makes two talon attacks and one beak attack.", ["Talons (Eagle Form Only)", "Beak (Eagle Form Only)"]).routines, ["Talons (Eagle Form Only) x2 + Beak (Eagle Form Only) x1"]);

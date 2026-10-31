@@ -1,5 +1,6 @@
 import type { EnemyAttack, EnemyStats, RoutineStep } from "@/lib/bestiary/statblock";
 import { textKey } from "@/lib/language/text-logic";
+import { pluralForms } from "@/lib/srd/name-forms";
 
 // How an enemy's attack reaches (SRD 5.1, Monsters: melee or ranged, reach,
 // normal and long range) and which attacks a turn of it makes (its
@@ -147,19 +148,46 @@ export function alternativeBlow(attack: EnemyAttack, when: { ranged: boolean; bl
 // not print the property, so the weapon's name tells it.
 const LOADING_WEAPON_RE = /\b(?:crossbow|blowgun)\b/i;
 
+// Whether a Multiattack's words name the attack, whole, either side plural:
+// "spike attacks" names Spike, "two heavy crossbow attacks" Heavy Crossbow.
+function multiattackNames(multiattack: string, attack: EnemyAttack): boolean {
+  const said = ` ${textKey(multiattack)} `;
+  const bare = attackKey(attack.name);
+  return Boolean(bare) && [bare, ...pluralForms(bare)].some((form) => said.includes(` ${form} `));
+}
+
 // Whether a Multiattack that prints only a count ("The thug makes two melee
 // attacks") leaves `attack` out, so a turn of it is one attack: a Loading
 // weapon, or an attack made only at range when the Multiattack's attacks
 // are melee ones. A thug's Heavy Crossbow is one shot, not two (SRD 5.1,
-// Thug); a scout's "two ranged attacks" are still two.
+// Thug); a scout's "two ranged attacks" are still two. A Multiattack that
+// names the attack counts it, its own words over the general rule: a
+// mordant snare's "four melee attacks, using any combination of tentacle
+// attacks, spike attacks, and filament attacks" throws four Spikes.
 function outsideMultiattackCount(stats: { traits?: string[] }, attack: EnemyAttack): boolean {
+  const traits = stats.traits ?? [];
+  const multiattack = traits.find((trait) => /^multiattack\b/i.test(trait)) ?? "";
+  if (multiattack && multiattackNames(multiattack, attack)) {
+    return false;
+  }
   if (LOADING_WEAPON_RE.test(attack.name)) {
     return true;
   }
-  const traits = stats.traits ?? [];
-  const multiattack = traits.find((trait) => /^multiattack\b/i.test(trait)) ?? "";
   const meleeOnly = /\bmelee attacks?\b/i.test(multiattack) && !/\branged attacks?\b/i.test(multiattack);
   return meleeOnly && !enemyAttackProfile(attack, traits).melee;
+}
+
+// A routine's swings with a Loading weapon the Multiattack does not name
+// made once: the wererat's "two attacks, only one of which can be a bite"
+// is read as routines of any two of its attacks, and its Hand Crossbow
+// still fires once per action (SRD 5.1, Weapons: Loading).
+function loadedOnce(stats: { traits?: string[] }, swings: EnemyAttack[]): EnemyAttack[] {
+  return swings.filter(
+    (swing, index) =>
+      swings.indexOf(swing) === index ||
+      !LOADING_WEAPON_RE.test(swing.name) ||
+      !outsideMultiattackCount(stats, swing),
+  );
 }
 
 export function plannedSwings(
@@ -177,10 +205,10 @@ export function plannedSwings(
   const routines = (stats.routines ?? []).map((routine) => expand(routine, attacks, options.rollCount)).filter((swings) => swings.length);
   if (routines.length) {
     if (!asked) {
-      return routines[0];
+      return loadedOnce(stats, routines[0]);
     }
     const holding = routines.find((swings) => swings.includes(asked));
-    return holding ?? [asked];
+    return holding ? loadedOnce(stats, holding) : [asked];
   }
   const count = Math.max(1, Math.min(10, Math.floor(stats.attacksPerTurn ?? 1)));
   const swing = asked ?? attacks[0];
