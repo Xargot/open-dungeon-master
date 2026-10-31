@@ -48,6 +48,7 @@ import { featureCards, spellCards, spellNames } from "@/lib/battlemap/hand-spell
 import { intimidatingPresenceCards, subclassSpendCards } from "@/lib/battlemap/hand-subclass";
 import { spellHoldOf } from "@/lib/battlemap/hand-escape";
 import { gearCards, undrawnGate } from "@/lib/battlemap/hand-gear";
+import { grantedAttackCards } from "@/lib/battlemap/hand-granted";
 import { textKey } from "@/lib/language/text-logic";
 import { magicItemRiders } from "@/lib/srd/magic-items";
 
@@ -243,6 +244,8 @@ function attackCards(sheet: CharacterSheet, turn: HandTurn, riders: CombatRiders
   cards.push(build("Unarmed strike", null, false));
   // The bonus-action strikes a feature grants (Martial Arts, Frenzy).
   cards.push(...bonusStrikeCards(sheet, turn, riders, carried.map((weapon) => ({ name: weapon.name, srd: weapon.srd }))));
+  // The attacks a held condition grants (Spiritual Weapon's weapon).
+  cards.push(...grantedAttackCards(sheet, turn, allowed));
 
   // Two-weapon fighting: two light melee weapons in hand buy a bonus swing,
   // and with Dual Wielder any two melee weapons held in one hand do.
