@@ -107,6 +107,18 @@ await test("a skipped rung asked mid-fight is refused as it always was, and noth
   assert.equal(heldStepOf(bond().id), null);
 });
 
+await test("a step romance's exclusivity refuses is refused mid-fight too, not held to be refused after it (issue 642)", async () => {
+  const { world, hero, bond, ask } = await table();
+  await world.invoke("set_npc", { name: "Mira", gender: "Female" });
+  const other = relationships.ensureRelationship({ campaignId: world.campaignId, characterId: hero.id, characterName: "Vex", subjectKind: "npc", subjectName: "Mira" });
+  relationships.patchRelationship(other.id, { approval: 80, romance: "together" });
+  await world.beginFight([{ monster: "goblin" }]);
+  const out = await world.invoke("romance_advance", ask);
+  assert.equal(out.ok, false);
+  assert.match(out.error, /Vex is with Mira/);
+  assert.equal(heldStepOf(bond().id), null, "nothing is held for after the fight");
+});
+
 await test("the fight's end tells the GM in its result, and the turns after carry it as a director note", async () => {
   const { world, hero, ask, call } = await table();
   await world.beginFight([{ monster: "goblin" }]);
