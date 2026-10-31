@@ -99,6 +99,19 @@ export function advanceOrder(
   return null;
 }
 
+// The line the table reads as a fight ends (issue 713): that it is over,
+// and who is still dying, whose death saves now go on with game time
+// (src/lib/dm/death.ts) until somebody stabilizes them. Ending a fight
+// posted nothing, and the saves went on with nobody told.
+export function fightOverLine(stillDying: string[]): string {
+  const names = [...new Set(stillDying)];
+  if (!names.length) {
+    return "The fight is over.";
+  }
+  const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `The fight is over. ${listed} ${names.length === 1 ? "is" : "are"} still dying: their death saves roll as time passes until they are stabilized.`;
+}
+
 // What of a pass from fromIndex to toIndex waits for the enemies it walks
 // past (issue 713). Those enemies take their turns after the move (in the
 // DM turn that follows it, or played by the person running the table:
