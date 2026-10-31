@@ -19,7 +19,8 @@ import {
 } from "@/lib/db/npcs";
 import { companionNpcFor } from "@/lib/db/companion-npcs";
 import { meetNpc } from "@/lib/dm/party-bonds";
-import { attractionFromTold, attractionWords, TOLD_ATTRACTION } from "@/lib/attraction";
+import { attractionFromTold, attractionWords, openToMore, TOLD_ATTRACTION } from "@/lib/attraction";
+import { owedAfter } from "@/lib/dm/amends-logic";
 import { agencyFragment, derivePersonality, driftPersonality, nearestNpcHint } from "@/lib/dm/npc-logic";
 import { ensureRelationship, patchRelationship } from "@/lib/db/relationships";
 import {
@@ -100,7 +101,7 @@ export const socialTools: ToolDef[] = [
           drawnTo: {
             type: "array",
             items: { type: "string", enum: TOLD_ATTRACTION },
-            description: "Who they could fall for, once the story shows it. The server keeps the first value it is given, so it never changes between characters.",
+            description: "Who they could fall for, once the story shows it. Kept once given, so it never changes.",
           },
           goal: {
             type: "string",
@@ -489,7 +490,8 @@ export function handleSocialCheck(
         approval,
         outcome.direction === "down" ? -SOCIAL_CHECK_SWING : SOCIAL_CHECK_SWING,
       );
-      const moved = patchRelationship(relationship.id, { approval });
+      // Being bullied is a wrong an amends can repair (issue 642).
+      const moved = patchRelationship(relationship.id, { approval, owed: owedAfter(relationship.owed, approval - relationship.approval) });
       // A romance the meter no longer holds slips back, as it does under a
       // beat (beat-landing.ts): bullied below a rung's grace, a courtship
       // stayed "courting" until some later beat noticed (issue 640). An act
@@ -599,7 +601,9 @@ export function npcRosterForPrompt(campaignId: string, options: { romance?: bool
 
 function npcIdentity(npc: Npc, romance: boolean): string {
   const drawn = romance ? attractionWords(npc.attraction) : "";
-  return [npc.gender, drawn ? `drawn to ${drawn}` : ""].filter(Boolean).join(", ");
+  // Romance is exclusive unless someone is open to more (issue 642).
+  const open = romance && openToMore(npc.attraction) ? "open to more than one partner" : "";
+  return [npc.gender, drawn ? `drawn to ${drawn}` : "", open].filter(Boolean).join(", ");
 }
 
 const ATTITUDE_LADDER = ["hostile", "indifferent", "friendly"] as const;

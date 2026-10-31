@@ -39,6 +39,8 @@ import type { ToolResult } from "@/lib/dm/tool-errors";
 import { textKey, unquoted } from "@/lib/language/text-logic";
 import { publicItemProposal } from "@/lib/dm/proposal-intercept";
 import { heldMoveError, stepTakenThisExchange } from "@/lib/dm/step-exchange";
+import { exclusiveBetween } from "@/lib/dm/romance-exclusive";
+import { exclusiveRefusal } from "@/lib/dm/romance-exclusive-logic";
 
 // An NPC's first move toward a character whose player opened them to it
 // (issue 501): romance_advance with initiator "npc", one tool per intent
@@ -50,6 +52,7 @@ import { heldMoveError, stepTakenThisExchange } from "@/lib/dm/step-exchange";
 
 // What the advance rules read about the table at this moment.
 export type SuitorContext = {
+  campaignId: string;
   relationships: Relationship[];
   pending: ReturnType<typeof listPendingAdvances>;
   aiTurns: number;
@@ -57,6 +60,7 @@ export type SuitorContext = {
 
 export function suitorContext(campaignId: string): SuitorContext {
   return {
+    campaignId,
     relationships: listRelationships(campaignId),
     pending: listPendingAdvances(campaignId),
     aiTurns: getAiTurns(campaignId),
@@ -71,6 +75,9 @@ export function suitorFrom(
 ): Suitor {
   const key = textKey(who.name);
   const others = context.relationships.filter((entry) => textKey(entry.subjectName) === key && entry.id !== relationship.id);
+  // Nobody makes a first move on someone spoken for, or while spoken for,
+  // unless everyone in it is open (issue 642): the roll never offers it.
+  const exclusive = exclusiveBetween(context.campaignId, relationship.characterId, relationship.subjectName, { relationships: context.relationships });
   return {
     ...who,
     status: relationship.status,
@@ -78,7 +85,10 @@ export function suitorFrom(
     // rules read the warmth the act shows (src/lib/dm/scheme-logic.ts).
     approval: outwardApproval(relationship),
     romance: relationship.romance,
-    committedElsewhere: others.some((entry) => entry.status !== "ended" && romanceIndex(entry.romance) >= romanceIndex("together")),
+    // Everyone open lets a partner court another, so only the exclusive
+    // rule's answer counts once it has one.
+    committedElsewhere: exclusive !== null && others.some((entry) => entry.status !== "ended" && romanceIndex(entry.romance) >= romanceIndex("together")),
+    exclusive: exclusive ? exclusiveRefusal(exclusive) : null,
     pendingAdvance:
       context.pending.some((offer) => textKey(offer.args.subject) === key) ||
       others.some((entry) => windowOpen(entry.advanceReadyUntil, context.aiTurns)),

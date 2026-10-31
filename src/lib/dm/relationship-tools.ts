@@ -66,6 +66,9 @@ import { listSheets } from "@/lib/db/sheets";
 import { NOTE_LIMIT_WORDS, parseToolArguments, relationshipNote } from "@/lib/dm/relationship-note";
 import { heldStepError, stepTakenThisExchange } from "@/lib/dm/step-exchange";
 import { holdForTheFight, settleHeldStep } from "@/lib/dm/romance-held";
+import { exclusiveBetween, landPartnerReactions, momentText, partnerResult } from "@/lib/dm/romance-exclusive";
+import { exclusiveRefusal } from "@/lib/dm/romance-exclusive-logic";
+import { amendsNote } from "@/lib/dm/amends-logic";
 
 export { publishRelationshipsUpdated };
 
@@ -274,7 +277,7 @@ export function handleRelationshipBeat(
     return read;
   }
   const args = read.args;
-  const spec = beatSpec(args.beat);
+  const spec = (RELATIONSHIP_BEAT_NAMES as readonly string[]).includes(args.beat) ? beatSpec(args.beat) : null;
   if (!spec) {
     return {
       error: `Unknown beat "${args.beat}". Use one of: ${RELATIONSHIP_BEAT_NAMES.join(", ")}.`,
@@ -389,7 +392,13 @@ export function handleRelationshipBeat(
   }
   const subjectHarmed = !ended && victimKeys.has(textKey(subject.name)) ? landOnVictim(campaign, sheet, subject, relationship, beat as DeedKind, args.note, deed!) : null;
   const landing = ended ? null : (subjectHarmed ?? landBeat(campaign, sheet, subject, relationship, beat, outcome, args.note, deed));
-  const landings = [...(landing ? [landing] : []), ...(others?.landed ?? []), ...(harmed?.landed ?? [])];
+  // A romantic move toward someone else is a deed a partner who saw it
+  // judges, unless both of them are open (issue 642).
+  const partners =
+    landing && spec.track === "romantic"
+      ? landPartnerReactions(campaign, sheet, subject.name, { witnesses: args.witnesses, narration: momentText(campaign.id, turn), sheets })
+      : null;
+  const landings = [...(landing ? [landing] : []), ...(others?.landed ?? []), ...(harmed?.landed ?? []), ...(partners?.landings ?? [])];
   // The party's own who were there (issue 563): those who stood by bear a
   // share of the cost, those who objected none.
   const objectors = deedKind ? partyCharactersNamed(args.objected ?? [], sheets, sheet) : [];
@@ -407,8 +416,10 @@ export function handleRelationshipBeat(
     subjectHarmed
       ? victimNote(sheet.name, subjectHarmed)
       : landing
-        ? buildBeatNote(sheet.name, subject.name, spec.label, landing.delta, landing.alignment, landing.updated, outcome)
+        ? ((beat === "amends" ? amendsNote(subject.name, sheet.name, landing.before.owed) : null) ??
+          buildBeatNote(sheet.name, subject.name, spec.label, landing.delta, landing.alignment, landing.updated, outcome))
         : `${sheet.name} and ${subject.name} are finished: the deed changes nothing between them, but others saw it.`,
+    ...(partners?.notes ?? []),
     ...(harmed?.landed.map((victim) => victimNote(sheet.name, victim)) ?? []),
     ...(others?.landed.map((other) => `${other.subject.name} saw it too: ${TIER_LABEL[friendshipTier(other.updated.approval)]} toward ${sheet.name} now.`) ?? []),
     ...shares,
@@ -448,6 +459,7 @@ export function handleRelationshipBeat(
           })),
         }
       : {}),
+    ...partnerResult(partners?.landings ?? []),
     note: notes.join(" "),
     ...(landing ? actResult(subject.name, sheet.name, landing.updated) : {}),
   };
@@ -709,6 +721,14 @@ export function handleRomanceAdvance(
       error: `${subject.name} is not with the party right now; bring them back into the scene before anything goes further.`,
       refused: "rules",
     };
+  }
+  // Romance is exclusive by default (issue 642): no romance starts or goes
+  // on beside another, either way, unless everyone in it is open. Asked
+  // first, so a step it refuses is not held through a fight to be refused
+  // after it.
+  const exclusive = exclusiveBetween(campaign.id, sheet.id, subject.name, { sheets });
+  if (exclusive) {
+    return { error: exclusiveRefusal(exclusive), refused: "rules" };
   }
   // Asked mid-fight, the step is held for an answer after it, never rolled
   // there nor lost (issue 640, src/lib/dm/romance-held.ts).

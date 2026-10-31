@@ -372,6 +372,8 @@ export type AsiChoice = z.infer<typeof asiChoiceSchema>;
 export const attractionSchema = z.object({
   genders: z.array(z.enum(GENDERS)).max(GENDERS.length).default([]),
   note: z.string().trim().max(ATTRACTION_NOTE_MAX).default(""),
+  // Open to more than one partner (issue 642); absent is exclusive.
+  open: z.boolean().optional(),
 });
 
 export const createSheetSchema = z.object({

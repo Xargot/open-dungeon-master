@@ -108,6 +108,10 @@ export const SERVER_FEATURES = {
   // turn. An older host refuses all three as "another character's turn", so
   // the seat keeps the monsters' hand and Skip turn there.
   gmCompanionTurns: true,
+  // "Open to more than one partner" beside "Drawn to" (issue 642): the
+  // attraction's `open`, which an older host drops while saving the rest,
+  // so the switch stays hidden there.
+  openRelationships: true,
 } as const;
 export type ServerFeatures = { [K in keyof typeof SERVER_FEATURES]: boolean };
 
