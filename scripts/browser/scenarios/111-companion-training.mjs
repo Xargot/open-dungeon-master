@@ -5,7 +5,8 @@
 // Athletics, Deception and Insight whatever it was, and doubled none. On the
 // Bonds Table (one for each viewport, where the signed-in player is the GM)
 // the GM's console brings in a rogue for a scene; its sheet
-// shows a background, six skills and two of them doubled.
+// shows a background, six skills and two of them doubled. The console's
+// form offers the background and skills too, empty by default.
 import { check, eventually, openPanelTab, untilStill } from "../lib.mjs";
 
 const scenario = {
@@ -50,6 +51,29 @@ const scenario = {
     await page.evaluate((mode) => (document.documentElement.dataset.theme = mode), theme);
     await page.keyboard.press("Escape");
     await call("dismiss_companion", { characterId: wren.id });
+
+    // The console's form names the background and skills, both optional and
+    // empty by default: the engine chooses when they are left so.
+    await openPanelTab(t, "dm");
+    const partyTab = page.locator(`${root}[data-tour="dm-console-tabs"] button`).filter({ hasText: /^party$/i }).locator("visible=true").first();
+    await eventually(() => partyTab.count(), { timeoutMs: 30_000, label: "the console's Party tab" });
+    await t.tap(partyTab);
+    const add = page.getByRole("button", { name: /^Add a companion/ }).locator("visible=true").first();
+    await eventually(() => add.count(), { label: "Add a companion" });
+    await t.tap(add);
+    await untilStill(page);
+    const background = page.getByLabel("Background", { exact: true }).locator("visible=true").first();
+    const skillsField = page.getByLabel("Skills", { exact: true }).locator("visible=true").first();
+    await eventually(() => background.count(), { label: "the Background field, labelled" });
+    await eventually(() => skillsField.count(), { label: "the Skills field, labelled" });
+    check((await background.inputValue()) === "", "Background is empty by default");
+    if (viewport === "phone") {
+      const box = await background.boundingBox();
+      check(Boolean(box && box.height >= 32), `a field a finger can reach (${box?.height}px)`);
+    }
+    await skillsField.scrollIntoViewIfNeeded();
+    await untilStill(page);
+    await t.shot("console-fields");
   },
 };
 
