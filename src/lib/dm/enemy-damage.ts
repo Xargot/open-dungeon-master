@@ -48,6 +48,7 @@ import { dmRoll } from "@/lib/dm/roll-card";
 import { getClock } from "@/lib/db/clock";
 import { outcomeShare, wakeHoursOf } from "@/lib/dm/foe-carry-logic";
 import { releaseHeldSteps } from "@/lib/dm/romance-held";
+import { finishCastingsAtFightEnd } from "@/lib/dm/long-casting";
 
 // The single server-side path for damage landing on an enemy. Used by the
 // damage_enemy tool AND by damage rolls carrying targetEnemyId, which the
@@ -108,6 +109,9 @@ export function finishEncounter(
   // fight has had the time since (foe-return.ts, issue #667).
   endEncounter(encounter.id, outcome, getClock(campaign.id).instant);
   const itemsLeft = settleFightState(campaign, encounter.id);
+  // A spell of a minute or more still being cast takes effect as the fight
+  // ends, its slot spent then (long-casting.ts finishCastingsAtFightEnd).
+  const castingsFinished = finishCastingsAtFightEnd(campaign);
 
   // Half the ammunition spent in the fight is recovered from the field
   // (PHB). Only ever non-empty when the `ammunition` variant rule is on, so
@@ -215,6 +219,7 @@ export function finishEncounter(
             .join("; ")}. To bring one into a later fight as they are, pass returning=<enemyId>.`,
         }
       : {}),
+    ...(castingsFinished.length ? { castingsFinished: castingsFinished.join(" ") } : {}),
     ...(xpEach > 0 ? { xpAwarded: `${xpEach} XP each` } : {}),
     ...(typeof xpResult.levelUpAvailable !== "undefined"
       ? { levelUpAvailable: xpResult.levelUpAvailable }

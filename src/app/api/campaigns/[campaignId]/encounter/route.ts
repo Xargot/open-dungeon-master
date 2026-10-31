@@ -1,4 +1,5 @@
 import { capsFor, isErrorResponse, requireMember, requireStoryAuthority } from "@/lib/campaign-api";
+import { finishCastingsAtFightEnd } from "@/lib/dm/long-casting";
 import { endEncounter, getActiveEncounter, listEnemies, patchEnemyHp } from "@/lib/db/encounters";
 import { activePublicEncounter } from "@/lib/db/encounter-view";
 import { afterTheFight, settleFightState } from "@/lib/dm/enemy-damage";
@@ -56,8 +57,11 @@ export async function DELETE(
     }
   }
   endEncounter(encounter.id, "aborted", getClock(campaignId).instant);
-  // A fight called off is over all the same: what lasted until its end ends.
+  // A fight called off is over all the same: what lasted until its end ends,
+  // and a spell of a minute or more still being cast takes effect, as when a
+  // fight ends any other way (long-casting.ts).
   settleFightState(context.campaign, encounter.id);
+  finishCastingsAtFightEnd(context.campaign);
   afterTheFight(context.campaign, encounter, enemies);
   return Response.json({ ok: true });
 }
