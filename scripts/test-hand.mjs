@@ -675,4 +675,40 @@ test("Spiritual Weapon's strike comes with its casting as a card, then costs a b
   assert.equal(byId(deriveHand(cleric({ conditions: [], conditionMeta: {} }), FRESH_TURN), "attack:granted:spiritual-weapon"), undefined);
 });
 
+// Arcane Sword is cast with an action, and "when the sword appears, you make
+// a melee spell attack" (SRD 5.1): the card said that strike spent "no second
+// bonus action", of a casting that spent none.
+test("Arcane Sword's first strike comes with its casting action, the bonus action left for a later strike; Flame Blade's is the action at the slot's dice", () => {
+  const wizard = caster({
+    name: "Quill", class: "wizard",
+    abilities: { str: 10, dex: 10, con: 14, int: 18, wis: 10, cha: 10 },
+    spellcasting: { ability: "int", slots: { 7: { max: 1, used: 1 } }, prepared: ["Arcane Sword"], known: [] },
+    conditions: ["arcane sword"],
+    conditionMeta: { "arcane sword": { rounds: 10, spell: "Arcane Sword", slotLevel: 7 } },
+  });
+  const cast = { ...FRESH_TURN, actionUsed: true, marks: ["spell:levelled"] };
+  const strike = byId(deriveHand(wizard, cast), "attack:granted:arcane-sword");
+  assert.equal(strike.cost, "free");
+  assert.equal(strike.disabled, null);
+  assert.equal(strike.dice, "3d10 force", "no ability modifier on the sword's damage");
+  assert.match(strike.rules, /Comes with the casting\./);
+  assert.doesNotMatch(strike.rules, /bonus action/, "the casting was an action");
+  const after = afterCommit(cast, strike);
+  assert.equal(after.bonusUsed, false);
+  const again = byId(deriveHand(wizard, after), "attack:granted:arcane-sword");
+  assert.equal(again.cost, "bonus");
+  assert.equal(again.disabled, null, "the bonus action is still there to move the sword and strike");
+
+  const druid = caster({
+    name: "Fern", class: "druid",
+    abilities: { str: 10, dex: 10, con: 14, int: 10, wis: 16, cha: 10 },
+    spellcasting: { ability: "wis", slots: { 4: { max: 1, used: 1 } }, prepared: ["Flame Blade"], known: [] },
+    conditions: ["flame blade"],
+    conditionMeta: { "flame blade": { rounds: 100, spell: "Flame Blade", slotLevel: 4 } },
+  });
+  const blade = byId(deriveHand(druid, { ...FRESH_TURN, bonusUsed: true, marks: ["spell:bonus-action"] }), "attack:granted:flame-blade");
+  assert.equal(blade.cost, "action");
+  assert.equal(blade.dice, "4d6 fire", "1d6 more for the two slot levels above 2nd, and no modifier");
+});
+
 console.log(`test-hand: ${passed} passed`);

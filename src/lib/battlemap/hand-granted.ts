@@ -53,7 +53,15 @@ function rulesOf(attack: GrantedAttack, rides: boolean): string {
       ? `It strikes a creature within ${from.reachFeet} ft of ${label}.`
       : `Moves up to ${from.moveFeet} ft, then strikes a creature within ${from.reachFeet} ft of ${label}.`
     : "";
-  const cost = rides ? "Comes with the casting: no second bonus action." : attack.bonusAction ? "A bonus action." : "";
+  // Arcane Sword's casting is an action: its strike spends no bonus action
+  // either, and the card said "no second bonus action" of one never spent.
+  const cost = rides
+    ? attack.activation === "action"
+      ? "Comes with the casting."
+      : "Comes with the casting: no second bonus action."
+    : attack.bonusAction
+      ? "A bonus action."
+      : "";
   return [where, cost].filter(Boolean).join(" ");
 }
 

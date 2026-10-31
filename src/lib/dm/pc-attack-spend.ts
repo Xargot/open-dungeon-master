@@ -110,7 +110,7 @@ export function spendAttackEconomy(input: {
       ? {
           ok: true as const,
           budget: { ...budget, oncePerTurn: [...budget.oncePerTurn, `granted:${riding.toLowerCase()}`] },
-          note: `${riding}: the attack that comes with its activation, no second bonus action`,
+          note: `${riding}: the attack that comes with its activation${input.grantedActivation === "action" ? "" : ", no second bonus action"}`,
         }
       : grantedBonusAction
       ? spendAction(budget, "bonus", `the ${profile.weapon} attack`, sheet.name)
