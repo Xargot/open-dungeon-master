@@ -65,6 +65,10 @@ export const SERVER_FEATURES = {
   // the table kept in its builder's characters (the builder says so):
   // POST /api/campaigns/[id]/companions/[characterId]/keep.
   keepCompanion: true,
+  // Loot no list holds marked in the lead's Adjust dialog, with "Give it
+  // stats" into the workshop: GET /api/campaigns/[id]/sheets/[sheetId]/
+  // unknown-gear, which an older host answers with a 404.
+  unknownGear: true,
   // "Hopes for this story" on a character (the builder's Hero step and the
   // sheet in play): the `hopes` field an older host drops while answering
   // the save as done.

@@ -6,6 +6,7 @@ import { kitButtonClass } from "./PanelKit";
 import { textKey } from "@/lib/language/text-logic";
 import { navigateTo } from "@/lib/navigation";
 import { shellHost } from "@/lib/shell-host";
+import { hostOffers, useCapabilities } from "@/lib/use-capabilities";
 
 // Loot the model named that no list holds carries no stats: a "Ring of
 // Whispers" is a name and nothing more. A workshop item of the same name,
@@ -21,7 +22,11 @@ export type UnknownGear = { names: string[]; canAuthor: boolean; workshopId: str
 
 export function useUnknownGear(campaignId: string, sheetId: string): UnknownGear | null {
   const [found, setFound] = useState<UnknownGear | null>(null);
+  // The apps' screens can open an older host, which has no such route: it
+  // is not asked, and no item is marked there.
+  const offered = hostOffers(useCapabilities(), "unknownGear");
   useEffect(() => {
+    if (!offered) return;
     let live = true;
     void fetch(`/api/campaigns/${campaignId}/sheets/${sheetId}/unknown-gear`)
       .then((response) => (response.ok ? response.json() : null))
@@ -32,8 +37,8 @@ export function useUnknownGear(campaignId: string, sheetId: string): UnknownGear
     return () => {
       live = false;
     };
-  }, [campaignId, sheetId]);
-  return found;
+  }, [campaignId, sheetId, offered]);
+  return offered ? found : null;
 }
 
 export function GiveStats({ name, gear }: { name: string; gear: UnknownGear | null }) {

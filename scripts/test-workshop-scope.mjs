@@ -158,6 +158,17 @@ await test("an item the table has no stats for is named to the lead, and a works
   assert.equal(world.sheet(player.sheet.id).equipment[0].gear?.magic?.effects?.[0]?.amount, 1, "the carried ring reads its stats");
 });
 
+// The apps' Adjust dialog can open an older host, which has no such route:
+// the host says it has it, and the dialog asks only a host that does.
+await test("the unknown-gear route is a host feature the Adjust dialog waits for", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { SERVER_FEATURES } = await import("../src/lib/capabilities.ts");
+  assert.equal(SERVER_FEATURES.unknownGear, true, "this server says it has the route");
+  const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+  assert.match(read("src/lib/use-capabilities.ts"), /features\?: \{[^}]*unknownGear\?: boolean/);
+  assert.match(read("src/app/campaigns/[campaignId]/GiveStats.tsx"), /hostOffers\(useCapabilities\(\), "unknownGear"\)/);
+});
+
 // ---- no pack ----
 
 await test("F08: the catalog answers with or without the pack, and says which; with none it serves the bundled book whole.", async () => {
