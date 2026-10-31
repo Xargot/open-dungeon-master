@@ -28,7 +28,7 @@ import {
   type ItemRow,
   type SlotEdits,
 } from "./LeadEditParts";
-import { EXPERTISE_MAX, skillLevelsOf, trainingFrom, type SkillLevel } from "./lead-edit-logic";
+import { earnedExpertise, EXPERTISE_MAX, skillLevelsOf, trainingFrom, type SkillLevel } from "./lead-edit-logic";
 import { acBreakdownFor, effectiveAcFor, SRD_SKILLS } from "@/lib/srd";
 import { ABILITY_NAMES } from "@/lib/srd/legality/types";
 import { isCantripName } from "@/lib/srd/spell-lists";
@@ -126,6 +126,7 @@ export function LeadEditDialog({
   const [saves, setSaves] = useState<Ability[]>(sheet.proficiencies.saves);
   const [skillLevels, setSkillLevels] = useState(() => skillLevelsOf(sheet.proficiencies));
   const experts = Object.values(skillLevels).filter((level) => level === "expert").length;
+  const earned = earnedExpertise(sheet);
   // Items the table has no stats for, each offered a workshop entry.
   const unknownGear = useUnknownGear(campaignId, sheet.id);
   const [reason, setReason] = useState("");
@@ -373,8 +374,8 @@ export function LeadEditDialog({
             <div className="space-y-1">
               <span className="flex items-baseline justify-between gap-2 text-stone-400">
                 Skills
-                <span className={cn("text-[11px]", experts > EXPERTISE_MAX ? "text-amber-300" : "text-stone-500")}>
-                  Expert in {experts} of {EXPERTISE_MAX} at most
+                <span className="text-[11px] text-stone-500">
+                  Expert in {experts}; {(sheet.classes?.length ?? 0) > 1 ? "their classes give" : "their class gives"} {earned || "none"}
                 </span>
               </span>
               <ul className="divide-y divide-stone-800/60">

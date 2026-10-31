@@ -156,12 +156,20 @@ export function keyedFeatChoices<T>(choices: Record<string, T> | undefined): Rec
 }
 export const featChoicesSchema = z.record(z.string().trim().min(1).max(80), featPicksSchema).transform(keyedFeatChoices);
 
+// Expertise doubles a proficiency the character holds, so the list is
+// bounded by those: every skill and thieves' tools. It stopped at six, which
+// refused a rogue 6 / bard 10, whom SRD 5.1 gives eight (Rogue at 1st and
+// 6th, Bard at 3rd and 10th, two each); the legality check
+// (src/lib/srd/legality/proficiencies.ts) holds the count to what the
+// classes and feats have given.
+export const EXPERTISE_CAP = 19;
+
 export const proficienciesSchema = z.object({
   saves: z.array(z.enum(ABILITIES)).max(6),
   skills: z.array(z.string().max(40)).max(18),
   // Skills with doubled proficiency (rogue/bard expertise). The .default
   // heals rows stored before the field existed.
-  expertise: z.array(z.string().max(40)).max(6).default([]),
+  expertise: z.array(z.string().max(40)).max(EXPERTISE_CAP).default([]),
   // Languages, tools, armor and weapons are clipped rather than refused: the
   // server writes the training itself from the race, class and background
   // rows (src/lib/srd/legality/proficiencies.ts), whose text a content pack

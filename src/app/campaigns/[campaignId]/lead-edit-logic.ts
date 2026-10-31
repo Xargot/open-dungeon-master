@@ -3,8 +3,9 @@
 // Database-free and JSX-free so scripts/test-lead-edit.mjs drives it.
 import { spellClassFor } from "@/lib/classes";
 import { thirdCasterList, thirdCasterProfileOf } from "@/lib/srd/third-caster";
-import type { CharacterSheet, EquipmentItem, Proficiencies } from "@/lib/schemas/sheet";
+import { EXPERTISE_CAP, type CharacterSheet, type EquipmentItem, type Proficiencies } from "@/lib/schemas/sheet";
 import { SRD_SKILLS } from "@/lib/srd";
+import { expertiseSlotsFor } from "@/lib/srd/features";
 import { findNamed } from "@/lib/language/text-logic";
 
 // The highest spell level this sheet can actually cast, read from the slots
@@ -73,8 +74,16 @@ export function equipmentFrom(rows: ItemRow[]): EquipmentItem[] {
 // How far a character is trained in a skill, as the Adjust dialog sets it.
 export type SkillLevel = "none" | "trained" | "expert";
 
-// Expertise holds this many skills at most (the sheet schema's cap).
-export const EXPERTISE_MAX = 6;
+// Expertise holds this many entries at most (the sheet schema's cap).
+export const EXPERTISE_MAX = EXPERTISE_CAP;
+
+// The expertise a sheet's classes have given by their levels (SRD 5.1: a
+// rogue's at 1st and 6th, a bard's at 3rd and 10th, two skills each), for
+// the lead correcting a sheet that has the wrong count.
+export function earnedExpertise(sheet: Pick<CharacterSheet, "class" | "level" | "classes">): number {
+  const classes = sheet.classes?.length ? sheet.classes : [{ id: sheet.class, level: sheet.level }];
+  return classes.reduce((sum, entry) => sum + expertiseSlotsFor(entry.id, entry.level), 0);
+}
 
 // The skill a stored entry names, by id or by name ("Sleight of Hand",
 // "sleight_of_hand"); null for anything else (a rogue's thieves' tools).

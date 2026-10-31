@@ -273,6 +273,22 @@ await test("an Adjust save sets saves and each skill's training, and keeps the t
   assert.deepEqual(leadEdit.skillLevelsOf(leadEdit.trainingFrom(stored, levels, stored.saves)), levels);
 });
 
+// SRD 5.1 gives a rogue expertise at 1st and 6th level and a bard at 3rd and
+// 10th, two skills each: a rogue 6 / bard 10 holds eight. The sheet schema
+// stopped at six, so the correction route (and every other door) refused
+// that sheet, and the dialog counted against six for every class.
+await test("a rogue 6 / bard 10 keeps eight expertise, and the dialog counts what the classes gave", async () => {
+  const { fullPatchSheetSchema } = await import("../src/lib/schemas/sheet.ts");
+  const eight = ["stealth", "acrobatics", "perception", "insight", "deception", "persuasion", "performance", "sleight_of_hand"];
+  const proficiencies = { saves: ["dex", "int"], skills: [...eight, "history"], expertise: eight, languages: [], tools: ["thieves' tools"], armor: [], weapons: [] };
+  const parsed = fullPatchSheetSchema.safeParse({ proficiencies });
+  assert.ok(parsed.success, parsed.success ? "" : parsed.error.issues[0]?.message);
+  const multi = { class: "rogue", level: 16, classes: [{ id: "rogue", subclass: "", level: 6 }, { id: "bard", subclass: "", level: 10 }] };
+  assert.equal(leadEdit.earnedExpertise(multi), 8);
+  assert.equal(leadEdit.earnedExpertise({ class: "bard", level: 9, classes: [] }), 2);
+  assert.equal(leadEdit.earnedExpertise({ class: "fighter", level: 20, classes: [] }), 0);
+});
+
 // ---- U:UD9 the human DM corrects an enemy's hit points ----
 
 const { enemyHpCorrection } = await import("../src/lib/dm/catalog-enemy-hp.ts");
