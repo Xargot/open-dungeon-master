@@ -29,6 +29,7 @@ const relationships = await import("../src/lib/db/relationships.ts");
 const npcs = await import("../src/lib/db/npcs.ts");
 const facts = await import("../src/lib/db/facts.ts");
 const turns = await import("../src/lib/db/dm-turns.ts");
+const { heldStepOf } = await import("../src/lib/db/romance-held.ts");
 
 const bram = world.addHero({ name: "Bram", gender: "Male", abilities: { cha: 16 }, proficiencies: TRAINED });
 const EVEN = { drive: 0, diligence: 0, boldness: 0, warmth: 0, empathy: 0, composure: 0 };
@@ -223,7 +224,7 @@ await test("A flirt only the narration shows is a note, and a pair the GM record
   assert.equal(note("Lyra"), undefined, "nothing to say");
 });
 
-await test("Mid-fight an ask goes to the hold's seam and a defence waits for the fight to end, then for one exchange", async () => {
+await test("Mid-fight an ask is held for its answer after the fight (issue 640), and a defence waits for the fight to end, then for one exchange", async () => {
   setBond("Lyra", { approval: 74, romance: "courting", lastShiftTurn: "" });
   await world.beginFight([{ monster: "goblin", count: 1 }]);
   const turn = turns.createDmTurn(world.campaignId, [], "ai");
@@ -233,10 +234,16 @@ await test("Mid-fight an ask goes to the hold's seam and a defence waits for the
   ];
   settleStoryMoves(world.campaign(), { turn, sheets: world.sheets(), claims, record: true });
   const waiting = () => facts.listActiveFacts(world.campaignId).find((fact) => fact.subject === "story move after the fight bram and lyra");
-  assert.match(waiting()?.fact ?? "", /asked Lyra for the next step \(to: together\) mid-fight.*stood up for Lyra mid-fight, and relationship_beat takes only deeds until the fight is over/);
+  const held = heldStepOf(bond("Lyra").id);
+  assert.equal(held?.to, "together", "the ask is held on the bond, as one the GM recorded would be");
+  assert.equal(held?.source, "claim");
+  assert.equal(held?.note, "marry me when this is over");
+  assert.doesNotMatch(waiting()?.fact ?? "", /asked Lyra/, "a held ask needs no note of its own");
+  assert.match(waiting()?.fact ?? "", /stood up for Lyra mid-fight, and relationship_beat takes only deeds until the fight is over/);
   settleStoryMoves(world.campaign(), { turn: turns.createDmTurn(world.campaignId, [], "ai"), sheets: world.sheets(), claims: [], record: true });
   assert.ok(waiting(), "kept while the fight runs");
-  await world.invoke("end_encounter", { outcome: "victory" });
+  const ended = await world.invoke("end_encounter", { outcome: "victory" });
+  assert.match(ended.result.answerOwed ?? "", /Lyra/, "the fight's end tells the GM the held ask is owed its answer");
   settleStoryMoves(world.campaign(), { turn: turns.createDmTurn(world.campaignId, [], "ai"), sheets: world.sheets(), claims: [], record: true });
   assert.equal(waiting(), undefined);
   assert.match(note("Lyra")?.fact ?? "", /mid-fight/, "written again for the exchange after the fight");

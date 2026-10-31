@@ -2,8 +2,11 @@ import type { Campaign } from "@/lib/db/campaigns";
 import { insertFact, listActiveFacts, setFactStatus } from "@/lib/db/facts";
 import { listRecentMessages } from "@/lib/db/messages";
 import { listCastNpcs } from "@/lib/db/npcs";
-import { listRelationships } from "@/lib/db/relationships";
+import { getRelationship, listRelationships } from "@/lib/db/relationships";
 import { romanceSafetyBlock } from "@/lib/dm/advance-logic";
+import { holdRomanceStep } from "@/lib/dm/romance-held";
+import { exclusiveBetween } from "@/lib/dm/romance-exclusive";
+import type { RomanceStage } from "@/lib/dm/relationship-logic";
 import { normalizeSubject } from "@/lib/dm/fact-logic";
 import { isNarration } from "@/lib/dm/ooc-question";
 import type { Speaker } from "@/lib/dm/speech";
@@ -88,13 +91,17 @@ export function bondRefs(
   };
 }
 
-// The seam where an ask made mid-fight is handed to the engine's hold, so it
-// is answered once the fight is over (issue 640 builds the hold). Until then
-// nothing holds it, and the GM is told to answer it after the fight.
-export function holdFightStep(campaign: Campaign, step: { characterId: string; subject: string; to: string; quote: string }): boolean {
-  void campaign;
-  void step;
-  return false;
+// An ask made mid-fight, handed to the engine's hold (issue 640,
+// romance-held.ts), so it is answered once the fight is over as an ask the
+// GM recorded would be. False when nothing holds it: no bond yet, a step
+// that is not the bond's next, or one romance's exclusivity refuses (issue
+// 642); the GM is then told to answer it after the fight.
+export function holdFightStep(campaign: Campaign, step: { characterId: string; subject: string; to: RomanceStage; quote: string }): boolean {
+  const row = getRelationship(campaign.id, step.characterId, step.subject);
+  if (!row || step.to === "none" || exclusiveBetween(campaign.id, step.characterId, step.subject)) {
+    return false;
+  }
+  return holdRomanceStep(campaign, row, step.to, step.quote, "claim") !== null;
 }
 
 // By the subject's first words, as the facts table keeps it (normalized).
