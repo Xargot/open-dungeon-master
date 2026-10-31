@@ -177,6 +177,7 @@ import { consumePendingSparks, storyMarkFor, tickWorldState } from "@/lib/dm/wor
 import { storyMoved } from "@/lib/dm/world-tick-logic";
 import { conversationInFlight } from "@/lib/dm/conversation-logic";
 import { advanceDirectorNotes, advanceWindowOpen, tickAdvances } from "@/lib/dm/advance-tick";
+import { heldStepNotes, romanceAnswerOwed } from "@/lib/dm/romance-held";
 import { storytellerLinesForPrompt } from "@/lib/dm/scheme-tools";
 import { isStorytellerFact } from "@/lib/dm/fact-logic";
 import { bumpAiTurns } from "@/lib/db/advances";
@@ -898,11 +899,15 @@ async function openTurn(
           knownBy: fact.knownBy,
         })),
       // The world's sparks, and a departed companion's return once it is
-      // cued (issue 503); both wait out a conversation.
-      directorNotes:
-        oocOnly || talk
-          ? []
-          : [...consumePendingSparks(campaignId).map((spark) => spark.text), ...returnDirectorNotes(campaign)],
+      // cued (issue 503); both wait out a conversation. A romantic step
+      // asked in a fight that just ended (issue 640) is conversation itself,
+      // so it does not wait.
+      directorNotes: oocOnly
+        ? []
+        : [
+            ...(talk ? [] : [...consumePendingSparks(campaignId).map((spark) => spark.text), ...returnDirectorNotes(campaign)]),
+            ...heldStepNotes(campaign),
+          ],
       conversation: talk,
       // The storyteller's section: who is open to advances, an NPC ready to
       // make a move (issue 501, said while its window is open), an NPC's act,
@@ -1298,8 +1303,9 @@ export function profileSignals(campaign: Campaign, sheets: readonly CharacterShe
       : false,
     caster: sheets.some(casts),
     // An NPC is ready to make a romantic move (issue 501): its tool is
-    // offered while the window is open.
-    advanceReady: !inEncounter && advanceWindowOpen(campaign),
+    // offered while the window is open; and while a step asked in a fight
+    // waits for its answer (issue 640).
+    advanceReady: !inEncounter && (advanceWindowOpen(campaign) || romanceAnswerOwed(campaign)),
   };
 }
 

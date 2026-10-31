@@ -65,6 +65,7 @@ import { heroFell } from "@/lib/characters/fallen-logic";
 import { listSheets } from "@/lib/db/sheets";
 import { NOTE_LIMIT_WORDS, parseToolArguments, relationshipNote } from "@/lib/dm/relationship-note";
 import { heldStepError, stepTakenThisExchange } from "@/lib/dm/step-exchange";
+import { holdForTheFight, settleHeldStep } from "@/lib/dm/romance-held";
 
 export { publishRelationshipsUpdated };
 
@@ -709,12 +710,19 @@ export function handleRomanceAdvance(
       refused: "rules",
     };
   }
+  // Asked mid-fight, the step is held for an answer after it, never rolled
+  // there nor lost (issue 640, src/lib/dm/romance-held.ts).
+  if (getActiveEncounter(campaign.id)) {
+    return holdForTheFight(campaign, turn, sheet, subject.name, relationship, to, args.note);
+  }
   // One step per exchange, exactly like an NPC's attitude: no ratcheting a
   // stranger to married inside a single reply, and no asking a refusal
   // again at the console until the die says yes (issue 638).
   if (stepTakenThisExchange(campaign.id, relationship.lastShiftTurn, turn)) {
     return { error: heldStepError(sheet.name, subject.name, turn), retry: true };
   }
+  // A step held in a fight is answered now, whatever the answer.
+  settleHeldStep(campaign.id, relationship.id, to);
   // An act is played to the letter: the step reads the warmth shown.
   const shown = outwardApproval(relationship);
   const act = runningAct(relationship);

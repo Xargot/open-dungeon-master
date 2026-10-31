@@ -29,6 +29,7 @@ import { CompanionBuilderDialog } from "@/app/campaigns/[campaignId]/CompanionBu
 import { CompanionCommand } from "@/app/campaigns/[campaignId]/CompanionCommand";
 import { CompanionPaintButton } from "@/app/campaigns/[campaignId]/CompanionPaintButton";
 import { CompanionKeepButton } from "@/app/campaigns/[campaignId]/CompanionKeepButton";
+import { CompanionBondLine, useRomanceBonds } from "@/app/campaigns/[campaignId]/CompanionBondLine";
 import { hostOffers, offersImages, useCapabilities } from "@/lib/use-capabilities";
 import { offSide, SideBadge } from "@/app/campaigns/[campaignId]/SideBadge";
 import { DiceSourcesButton } from "@/app/campaigns/[campaignId]/DiceSourcesDialog";
@@ -341,7 +342,8 @@ export function PartyPanel({
   sheets: CharacterSheet[];
   meUserId: string;
   // Lasting companions whose sheet just went (issue 503), and the key the
-  // Gone list reads itself again on (PartyGone.tsx).
+  // Gone list reads itself again on (PartyGone.tsx), as a companion's
+  // romance line does (issue 640): both move with relationships_updated.
   departing?: readonly DepartingSheet[];
   goneRefreshKey?: number;
   // A person runs this table and it plays romance (issue 501): the DM's
@@ -415,6 +417,8 @@ export function PartyPanel({
   const capabilities = useCapabilities();
   const canPaint = offersImages(capabilities) && hostOffers(capabilities, "companionPortrait");
   const canKeep = hostOffers(capabilities, "keepCompanion");
+  // Where each companion's romances stand, for its card (issue 640).
+  const bonds = useRomanceBonds(campaignId, goneRefreshKey, sheets.some((sheet) => sheet.isCompanion));
   const [editingSheetId, setEditingSheetId] = useState("");
   const [viewingSheetId, setViewingSheetId] = useState("");
   const [croppingSheetId, setCroppingSheetId] = useState("");
@@ -657,6 +661,7 @@ export function PartyPanel({
             </div>
 
             {romanceNotes ? <RomanceNote sheet={sheet} /> : null}
+            {sheet.isCompanion ? <CompanionBondLine name={sheet.name} bonds={bonds} /> : null}
 
             {shape ? (
               <div

@@ -2306,6 +2306,12 @@ function ensureSchema(db: SqliteDatabase) {
     ["pretense_json", `TEXT NOT NULL DEFAULT ''`],
   ]);
 
+  // A romantic step asked mid-fight, held for its answer after it (issue
+  // 640, src/lib/db/romance-held.ts): {to, note, source, heldAt,
+  // releasedAt}, '' = none. On the bond's row, so a rewind restores it with
+  // the bond.
+  addColumns("relationships", [["held_step_json", `TEXT NOT NULL DEFAULT ''`]]);
+
   addColumns("campaigns", [
     // AI turns finished at this table, the clock NPC advances count in
     // (issue 501). Bumped after every successful AI turn, whatever the

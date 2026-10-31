@@ -46,6 +46,7 @@ import { fallenFoeSheetsXp } from "@/lib/dm/sheet-foe";
 import { dmRoll } from "@/lib/dm/roll-card";
 import { getClock } from "@/lib/db/clock";
 import { outcomeShare, wakeHoursOf } from "@/lib/dm/foe-carry-logic";
+import { releaseHeldSteps } from "@/lib/dm/romance-held";
 
 // The single server-side path for damage landing on an enemy. Used by the
 // damage_enemy tool AND by damage rolls carrying targetEnemyId, which the
@@ -167,7 +168,7 @@ export function finishEncounter(
   // Read again: the survivors scattered above are fled now, and the card
   // counts them so.
   recordEncounterSummary(campaign.id, encounter, outcome, listEnemies(encounter.id), sheets);
-  const { guestsGone, turncoats, foesMourned } = afterTheFight(campaign, encounter, enemies);
+  const { guestsGone, turncoats, foesMourned, answersOwed } = afterTheFight(campaign, encounter, enemies);
   // The end of initiative is not the end of dying. With nobody on the
   // party's side left conscious, no one can stabilize the fallen, so their
   // saves are rolled out now, in order, as the pointer would have rolled
@@ -202,6 +203,7 @@ export function finishEncounter(
     ...(foesMourned.length
       ? { bondsClosed: `Every bond with ${foesMourned.join(" and ")} is closed: they died in the fight.` }
       : {}),
+    ...(answersOwed.length ? { answerOwed: answersOwed.join(" ") } : {}),
     ...(spared.length
       ? {
           spared: `Left lying knocked out, unconscious and stable: ${spared
@@ -241,7 +243,7 @@ export function afterTheFight(
   campaign: Campaign,
   encounter: Encounter,
   enemies: readonly EncounterEnemy[],
-): { guestsGone: string[]; turncoats: string[]; foesMourned: string[] } {
+): { guestsGone: string[]; turncoats: string[]; foesMourned: string[]; answersOwed: string[] } {
   const floor = getFloor(campaign.id);
   if (floor.mode === "initiative" || (floor.mode === "hold" && floor.next.mode === "initiative")) {
     setFloor(campaign.id, { mode: "open" });
@@ -268,7 +270,11 @@ export function afterTheFight(
   if (foesMourned.length) {
     publishEphemeral(campaign.id, "relationships_updated", {});
   }
-  return { guestsGone, turncoats, foesMourned };
+  // A romantic step asked in the fight is owed its answer now (issue 640,
+  // romance-held.ts): the GM is told here, on the turns after, and on a
+  // person's console.
+  const answersOwed = releaseHeldSteps(campaign);
+  return { guestsGone, turncoats, foesMourned, answersOwed };
 }
 
 // Ends the encounter with victory XP once nobody on the foes' side is left
