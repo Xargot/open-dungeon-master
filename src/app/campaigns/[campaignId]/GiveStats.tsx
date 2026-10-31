@@ -1,16 +1,21 @@
 "use client";
 
 import { Hammer } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { kitButtonClass } from "./PanelKit";
 import { textKey } from "@/lib/language/text-logic";
+import { navigateTo } from "@/lib/navigation";
+import { shellHost } from "@/lib/shell-host";
 
 // Loot the model named that no list holds carries no stats: a "Ring of
 // Whispers" is a name and nothing more. A workshop item of the same name,
 // written by whoever runs the table, gives it its stats on the next read
 // (hydrateHomebrewGear), the copies already carried included. The lead's
 // Adjust dialog marks such items and opens that editor with the name in it,
-// in a new tab, so the table stays where it was.
+// in a new tab, so the table stays where it was. Inside the apps the page is
+// the app's own (src/lib/navigation.ts): a new tab there opened the app's
+// own address, which the desktop app refuses and Android loads in place of
+// its screens, so there the workshop opens in place and Back returns.
 
 export type UnknownGear = { names: string[]; canAuthor: boolean; workshopId: string | null };
 
@@ -35,6 +40,18 @@ export function GiveStats({ name, gear }: { name: string; gear: UnknownGear | nu
   if (!gear || !gear.names.some((entry) => textKey(entry) === textKey(name))) {
     return null;
   }
+  const inApp = Boolean(shellHost()?.navigation);
+  const linkTo = (href: string) => ({
+    href,
+    ...(inApp
+      ? {
+          onClick: (event: MouseEvent<HTMLAnchorElement>) => {
+            event.preventDefault();
+            navigateTo(href);
+          },
+        }
+      : { target: "_blank", rel: "noopener" }),
+  });
   return (
     <p className="reveal flex flex-wrap items-center gap-x-2 gap-y-1 pl-8 text-[11px] text-stone-400">
       <span>No stats at this table yet.</span>
@@ -42,17 +59,15 @@ export function GiveStats({ name, gear }: { name: string; gear: UnknownGear | nu
         <span>The table&apos;s host or GM can give it some in their workshop.</span>
       ) : gear.workshopId ? (
         <a
-          href={`/workshop/${gear.workshopId}?system=homebrew&item=${encodeURIComponent(name)}`}
-          target="_blank"
-          rel="noopener"
+          {...linkTo(`/workshop/${gear.workshopId}?system=homebrew&item=${encodeURIComponent(name)}`)}
           className={kitButtonClass("small", "gap-1 py-0.5")}
         >
           <Hammer className="size-3.5" aria-hidden="true" />
           Give it stats
-          <span className="sr-only"> (opens the workshop in a new tab)</span>
+          <span className="sr-only">{inApp ? " (opens the workshop)" : " (opens the workshop in a new tab)"}</span>
         </a>
       ) : (
-        <a href="/workshop" target="_blank" rel="noopener" className={kitButtonClass("link")}>
+        <a {...linkTo("/workshop")} className={kitButtonClass("link")}>
           Make a workshop to give it stats
         </a>
       )}

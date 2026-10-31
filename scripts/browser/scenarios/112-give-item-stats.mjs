@@ -2,8 +2,10 @@
 // table said so or offered a way to give it some. On the Command Table the
 // lead gives Pip such an item, then opens Adjust stats: the item says it has
 // no stats at this table and offers "Give it stats", a link that opens the
-// lead's newest workshop in a new tab with an item of that name drafted. A
-// workshop item of the name is kept, and the next Adjust no longer marks it.
+// lead's newest workshop with an item of that name drafted: in a new tab on
+// the website, in place inside the apps (whose own page has no tabs: the
+// link once opened nothing in the desktop app). A workshop item of the name
+// is kept, and the next Adjust no longer marks it.
 // Each viewport names its own item, since viewports share one world, and
 // everything made here is taken away again: a workshop left behind showed
 // the shelf's empty state as full in 17-empty-states, which runs after this.
@@ -68,7 +70,7 @@ const scenario = {
       await eventually(() => give.count(), { label: `Give it stats under the ${item}` });
       const href = (await give.getAttribute("href")) ?? "";
       check(href.includes("system=homebrew") && href.includes(`item=${encodeURIComponent(item)}`), `the link drafts the ${item} in the workshop (${href})`);
-      check((await give.getAttribute("target")) === "_blank", "it opens in a new tab, so the table stays put");
+      check((await give.getAttribute("target")) === (t.app ? null : "_blank"), t.app ? "inside the app it opens in place" : "it opens in a new tab, so the table stays put");
       check((await dialog.getByText("No stats at this table yet.").count()) === 1, "only the item with no stats is marked");
       if (viewport === "phone") {
         const box = await give.boundingBox();
@@ -90,6 +92,16 @@ const scenario = {
         const name = tab.getByLabel("Name", { exact: true }).first();
         await eventually(async () => (await name.inputValue().catch(() => "")) === item, { timeoutMs: 30_000, label: `the workshop's item editor named ${item}` });
         await tab.close();
+      } else {
+        await t.tap(give);
+        const name = page.getByLabel("Name", { exact: true }).locator("visible=true").first();
+        await eventually(async () => (await name.inputValue().catch(() => "")) === item, { timeoutMs: 30_000, label: `the workshop's item editor named ${item}, in the app` });
+        const where = await t.url();
+        check(where.pathname.startsWith("/workshop/") && !where.searchParams.has("item"), `the app is in the workshop, the item taken from its address (${where.pathname}${where.search})`);
+        await untilStill(page);
+        await t.shot("app-editor");
+        await page.keyboard.press("Escape");
+        await openTable();
       }
 
       const kept = await api.post(`${base}/api/homebrew`, {
@@ -97,8 +109,10 @@ const scenario = {
       });
       check(kept.ok(), `the workshop keeps the ${item} (${kept.status()})`);
       entryId = (await kept.json()).entry?.id ?? null;
-      await page.keyboard.press("Escape");
-      await eventually(async () => !(await dialog.count()), { label: "the dialog closing" });
+      if (!t.app) {
+        await page.keyboard.press("Escape");
+        await eventually(async () => !(await dialog.count()), { label: "the dialog closing" });
+      }
       const carried = (await sheetOf()).equipment.find((line) => line.name === item);
       check(Boolean(carried?.gear), `Pip's ${item} reads its stats`);
       dialog = await adjust();
