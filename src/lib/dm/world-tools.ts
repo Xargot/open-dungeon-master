@@ -478,6 +478,12 @@ const passTimeSchema = z.object({
 // "Revert this turn" (audit/revert-turn): the turn's moves are kept
 // (src/lib/db/clock-moves.ts), and the revert puts the instant back with the
 // sheet changes the time made, all audited (issue #622).
+// "1 hour passes", "10 minutes pass": describeDuration names one unit, so
+// its count alone says whether the verb is singular.
+function passVerb(minutes: number): string {
+  return Number.parseInt(describeDuration(minutes), 10) === 1 ? "passes" : "pass";
+}
+
 export function handlePassTime(
   campaign: Campaign,
   rawArguments: string,
@@ -514,7 +520,7 @@ export function handlePassTime(
   const sky = refreshSky(campaign.id, { before, minutes: moved.minutes });
   tableNote(
     campaign,
-    `${describeDuration(moved.minutes)} passes${args.reason?.trim() ? `: ${asSentence(args.reason)}` : "."} It is now ${describeInstant(moved.clock.calendar, moved.clock.instant)}.`,
+    `${describeDuration(moved.minutes)} ${passVerb(moved.minutes)}${args.reason?.trim() ? `: ${asSentence(args.reason)}` : "."} It is now ${describeInstant(moved.clock.calendar, moved.clock.instant)}.`,
   );
   return {
     ok: true,
@@ -525,6 +531,15 @@ export function handlePassTime(
     // Rolled by the server as the time passed; narrate what they decided.
     ...(moved.deathSaves.length ? { deathSaves: moved.deathSaves } : {}),
   };
+}
+
+// The journey's own line in the chronicle, as a rest and pass_time post
+// theirs. It goes last, after the death saves the hours rolled (settleDying
+// posts them inside advanceClock) and any forced-march saves.
+function journeyNote(campaign: Campaign, minutes: number | null, reason: string | undefined, now: string) {
+  const length = minutes ? ` for ${describeDuration(minutes)}` : "";
+  const why = reason?.trim() ? `: ${asSentence(reason)}` : ".";
+  tableNote(campaign, `The party travels${length}${why}${now ? ` It is now ${now}.` : ""}`);
 }
 
 export function handleTravel(
@@ -639,7 +654,9 @@ export function handleTravel(
         ? "A slow pace lets the party travel stealthily if they wish."
         : "A normal pace carries no perception penalty, and like a fast one it allows no stealth: Stealth checks are refused until the march ends.";
 
+  const minutesOnRoad = "error" in moved ? null : moved.minutes;
   if (extra <= 0) {
+    journeyNote(campaign, minutesOnRoad, args.reason, now);
     return {
       ok: true,
       pace,
@@ -687,6 +704,7 @@ export function handleTravel(
   }
 
   const worn = results.filter((entry) => entry.failed).map((entry) => entry.name);
+  journeyNote(campaign, minutesOnRoad, args.reason, now);
   return {
     ok: true,
     pace,
