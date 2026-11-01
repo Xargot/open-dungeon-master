@@ -143,6 +143,7 @@ import { sweepSummons } from "@/lib/dm/summon-store";
 import { endConcentrationOnFadedSummons } from "@/lib/dm/concentration-upkeep";
 import { afflictionsAtCombatStart } from "@/lib/dm/afflictions";
 import { ENEMY_TURNS_CUE, enemiesDue, enemiesOwedTurn, holdForEnemies, noteLostTurns } from "@/lib/dm/enemies-due";
+import { closeHitsAtTurnEnd } from "@/lib/dm/last-hit";
 import { approachForCompanion } from "@/lib/dm/companion-approach";
 import type { ToolError, ToolResult } from "@/lib/dm/tool-errors";
 import { holdsFeat } from "@/lib/srd/feat-effects";
@@ -1527,6 +1528,12 @@ function advancePointer(
 ): { enemiesPassed: string[]; wrapped: boolean; dyingPassed: string[] } | null {
   const enemiesById = new Map(listEnemies(encounter.id).map((enemy) => [enemy.id, enemy]));
   const leaving = options?.leaving ?? (options?.rest ? undefined : encounter.order[encounter.turnIndex]);
+  // A turn ending is the moment past answering any hit but one in that
+  // creature's own turn (src/lib/dm/last-hit.ts). Not the rest of a pass,
+  // which ends nobody's turn, nor a second step of the same move.
+  if (leaving && !options?.rest && !options?.chained) {
+    closeHitsAtTurnEnd(campaign.id, encounter, leaving);
+  }
   const acts = (entry: OrderEntry) => entryActs(entry, enemiesById, encounter.surprisedIds);
   const landOn = options?.rest?.landOn;
   const stopAt =

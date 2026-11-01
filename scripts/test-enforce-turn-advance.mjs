@@ -1040,7 +1040,7 @@ await test("Party down: a companion still standing keeps the fight going", async
 
 // ---- a turn is named by whose it is ----
 
-await test("An insert above the hero acting keeps her turn's key and a fresh hit on her answerable; her next turn does not", async () => {
+await test("An insert above the hero acting keeps her turn's key and a fresh hit on her answerable; her next turn's first action closes it", async () => {
   const { world, kit, heroes: [kara] } = await table(["Kara"]);
   const [goblin] = world.enemies();
   kit.place(kara.id, 5, 5);
@@ -1057,6 +1057,11 @@ await test("An insert above the hero acting keeps her turn's key and a fresh hit
   assert.ok(freshLastHit(world.campaignId, kara.id), "still answerable after the insert");
   assert.equal(kit.endTurn(userOf(world, kara.id)), true);
   assert.notEqual(turnKey(world.encounter()), key, "her next turn is another");
+  // Answerable until the next turn's creature does something (issue 713):
+  // here that is Kara again.
+  assert.ok(freshLastHit(world.campaignId, kara.id), "nobody has acted since");
+  const dodged = await world.invoke("take_action", { characterId: kara.id, action: "dodge" });
+  assert.equal(dodged.ok, true, dodged.error);
   assert.equal(freshLastHit(world.campaignId, kara.id), null);
 });
 
