@@ -139,6 +139,34 @@ export default {
       await page.setViewportSize({ width: 667, height: 375 });
       await untilStill(page);
       await t.shot("667x375-dark");
+
+      // Issue 713 (3): what the person running the table rolls and changes
+      // from the console is in the chronicle, a roll card and a line, as an
+      // AI-run table's rolls are. It used to reach the table only as toasts.
+      await page.setViewportSize({ width: 375, height: 667 });
+      const hero = (await (await api.get(`${base}/api/campaigns/${tableId}`)).json()).sheets[0];
+      const invoke = (name, args) => api.post(`${base}/api/campaigns/${tableId}/dm/invoke`, { data: { name, args } });
+      const rolled = await invoke("request_roll", { characterId: hero.id, kind: "ability_check", ability: "str", dc: 10, reason: "a stuck door" });
+      check(rolled.ok(), `the console's roll (${rolled.status()}: ${(await rolled.text()).slice(0, 200)})`);
+      const hurt = await invoke("apply_damage", { characterId: hero.id, amount: 2, type: "slashing", reason: "a splinter" });
+      check(hurt.ok(), `the console's damage (${hurt.status()}: ${(await hurt.text()).slice(0, 200)})`);
+      const cards = log.locator("[data-rolled-note]");
+      await eventually(async () => (await cards.count()) > 0, { timeoutMs: 15_000, label: "the console's roll as a card in the chronicle" });
+      const said = log.getByText(`${hero.name} takes 2 damage`, { exact: false }).last();
+      await eventually(() => said.isVisible(), { timeoutMs: 15_000, label: "the console's damage as a line in the chronicle" });
+      // The rolls ride beside the words, never in them: a screen built
+      // before the cards reads the same note as a plain sentence.
+      check(await cards.filter({ hasText: `${hero.name} rolls a check` }).count(), "the roll's own sentence under its card");
+      check(!(await log.innerText()).includes("[roll:"), "no roll marker in the chronicle's words");
+      await untilStill(page);
+      await t.shot("person-record");
+      // The scroll beside the board on a wide screen draws the same note.
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      const scroll = page.locator(`${root}.cine-chronicle`).locator("visible=true").first();
+      await eventually(() => scroll.isVisible(), { timeoutMs: 15_000, label: "the scroll beside the board" });
+      await eventually(async () => (await scroll.locator(".cine-chronicle-roll").count()) > 0, { timeoutMs: 15_000, label: "the console's roll on the scroll" });
+      check(await scroll.getByText(`${hero.name} takes 2 damage`, { exact: false }).count(), "the console's damage on the scroll");
+      await t.shot("person-record-wide");
     } finally {
       if (tableId) await api.delete(`${base}/api/campaigns/${tableId}`);
       await api.delete(`${base}/api/workshops/${workshopId}`);

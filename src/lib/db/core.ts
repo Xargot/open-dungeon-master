@@ -1766,6 +1766,11 @@ function ensureSchema(db: SqliteDatabase) {
     // announceShop), so the chat's Browse wares opens the Market on it.
     // Null on every other message.
     ["shop_id", `TEXT`],
+    // The rolls a table note carries (a JSON list of roll ids), drawn as
+    // cards above its line: a person's adjudication at a table they run
+    // (src/lib/dm/persons-record.ts, issue 713). Its words stand alone for an
+    // older screen. Null on every other message.
+    ["roll_ids_json", `TEXT`],
     // Which take in variants_json a person wrote by editing the narration
     // (src/app/api/campaigns/[campaignId]/messages/[messageId]/edit): the
     // narrator's takes stay beside it, so an edit never loses the original
