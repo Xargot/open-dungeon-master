@@ -192,7 +192,9 @@ export type DmEncounterState = {
   // none are. The pass's table note names them too
   // (src/lib/dm/encounter-tools.ts advancePointer); this adds their ids and
   // what to do.
-  enemiesDue?: { before: string; enemies: Array<{ enemyId: string; name: string }> };
+  // `round`: the round the current character's turn is in, the next one
+  // when the enemies due close this one.
+  enemiesDue?: { before: string; enemies: Array<{ enemyId: string; name: string }>; round: number };
   // A lair fight's printed options, numbered as lair_action takes them
   // (src/lib/dm/legendary-tools.ts); absent when the lair prints none.
   lairOptions?: string[];
@@ -1067,11 +1069,11 @@ export function buildGameStateBlock(state: DmGameState): string {
       // Their turns come first: asking the current character's player now
       // would leave them to the backstop.
       if (encounter.enemiesDue) {
-        const { before, enemies } = encounter.enemiesDue;
+        const { before, enemies, round } = encounter.enemiesDue;
         const due = enemies.map((enemy) => `${enemy.name} [enemyId=${enemy.enemyId}]`);
         const one = due.length === 1;
         lines.push(
-          `${due.join(" and ")} ${one ? "acts" : "act"} before ${before}; the turn passed ${one ? "it" : "them"} outside your turn. ${ENEMY_TURNS_CUE} ${before}'s turn comes after ${one ? "its" : "theirs"}: a new turn in round ${encounter.round}, its action, bonus action and movement unspent.`,
+          `${due.join(" and ")} ${one ? "acts" : "act"} before ${before}; the turn passed ${one ? "it" : "them"} outside your turn. ${ENEMY_TURNS_CUE} ${before}'s turn comes after ${one ? "its" : "theirs"}: a new turn in round ${round}, its action, bonus action and movement unspent.`,
         );
       } else if (encounter.awaitingPlayer) {
         const name = encounter.awaitingPlayer;

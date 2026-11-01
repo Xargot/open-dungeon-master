@@ -230,14 +230,17 @@ for (const stop of STOPS) {
     world.dice(new Array(6).fill(10));
     assert.equal(kit.endTurn(userOf(world, kara.id)), true, "the player's End Turn");
     agree(world, kit, "after End Turn");
-    assert.equal(world.encounter().round, 2, "the round went round");
-    // The goblin the wrap walked past takes its turn before hers.
+    // The goblin the walk passed takes its round-1 turn before hers, and the
+    // round turns over once it has (issue 713).
+    assert.equal(world.encounter().round, 1, "the goblin's turn closes round 1");
     kit.handOnEnemies();
+    assert.equal(world.encounter().round, 2, "the round went round");
     const ai = await aiEndTurn(world, kara.id);
     assert.equal(ai.ok, true, `the model's end_turn: ${ai.error ?? ""}`);
     agree(world, kit, "after end_turn");
     assert.equal(tools.skipCurrentTurn(world.campaignId), true, "the lead's skip");
     agree(world, kit, "after the skip");
+    kit.handOnEnemies();
     assert.equal(world.encounter().round, 4);
     world.clearDice();
   });
@@ -293,14 +296,23 @@ await test("The pass that brings the turn back to a hero who can act wakes the D
   const set = await world.invoke("set_condition", { characterId: kara.id, condition: "paralyzed", rounds: 2 });
   assert.equal(set.ok, true, set.error);
   assert.equal(kit.endTurn(userOf(world, kara.id)), true);
-  assert.equal(world.sheet(kara.id).conditions.includes("paralyzed"), true, "round 2, still paralyzed");
   const before = wokenFor(world);
   dmTurnEnds(world);
-  assert.equal(world.sheet(kara.id).conditions.includes("paralyzed"), false, "round 3, free");
+  // The goblin's round-1 turn turned the round over; her round-2 turn,
+  // still paralyzed, went to the goblin's round-2 turn, which closes the
+  // round her paralysis ends with (issue 713).
+  assert.equal(world.encounter().round, 2);
+  assert.equal(world.sheet(kara.id).conditions.includes("paralyzed"), true, "round 2, still paralyzed");
   assert.equal(currentName(world), "Kara");
   assert.deepEqual(due(world), [goblin.id], "the goblin's round-2 turn is due");
   assert.equal(getFloor(world.campaignId).mode, "hold", "Kara waits for it");
   assert.equal(wokenFor(world), before + 1, "and a DM turn is woken to play it before Kara's");
+  const played = wokenFor(world);
+  dmTurnEnds(world);
+  assert.equal(world.encounter().round, 3);
+  assert.equal(world.sheet(kara.id).conditions.includes("paralyzed"), false, "round 3, free");
+  assert.equal(currentName(world), "Kara", "her turn, to take");
+  assert.equal(wokenFor(world), played, "and nobody is woken for it");
 });
 
 await test("A save-ends condition is saved against at the wrap while the fight goes round alone", async () => {
@@ -369,7 +381,10 @@ await test("Healed while the turn rests on her, a downed hero takes it", async (
   assert.equal(healed.ok, true, healed.error);
   const round = world.encounter().round;
   dmTurnEnds(world);
-  assert.equal(world.encounter().round, round, "the turn did not go on without her");
+  // The goblin's turn before hers closed the round (issue 713); her own
+  // turn was not ended, which would have left the goblin due again.
+  assert.equal(world.encounter().round, round + 1, "the goblin's turn turned the round over");
+  assert.deepEqual(due(world), [], "the turn did not go on without her");
   assert.equal(currentName(world), "Kara");
 });
 
@@ -453,8 +468,11 @@ await test("The DM's step forward goes round with nobody able to act", async () 
   stun(world, kara.id, "paralyzed");
   const stepped = editInitiative(world.campaign(), { op: "step", direction: "forward" });
   assert.equal(stepped.ok, true, stepped.error);
-  assert.equal(world.encounter().round, 2);
   agree(world, kit, "stepped");
+  assert.equal(world.encounter().round, 1, "the goblin's turn closes round 1 (issue 713)");
+  kit.handOnEnemies();
+  assert.equal(world.encounter().round, 2);
+  agree(world, kit, "handed on");
 });
 
 await test("Under held responses the fight goes round the same, the hold wrapping each new turn", async () => {
@@ -1022,7 +1040,7 @@ await test("Party down: a companion still standing keeps the fight going", async
 
 // ---- a turn is named by whose it is ----
 
-await test("An insert above the hero acting keeps her turn's key and a fresh hit on her answerable; her next turn does not", async () => {
+await test("An insert above the hero acting keeps her turn's key and a fresh hit on her answerable; her next turn's first action closes it", async () => {
   const { world, kit, heroes: [kara] } = await table(["Kara"]);
   const [goblin] = world.enemies();
   kit.place(kara.id, 5, 5);
@@ -1039,6 +1057,11 @@ await test("An insert above the hero acting keeps her turn's key and a fresh hit
   assert.ok(freshLastHit(world.campaignId, kara.id), "still answerable after the insert");
   assert.equal(kit.endTurn(userOf(world, kara.id)), true);
   assert.notEqual(turnKey(world.encounter()), key, "her next turn is another");
+  // Answerable until the next turn's creature does something (issue 713):
+  // here that is Kara again.
+  assert.ok(freshLastHit(world.campaignId, kara.id), "nobody has acted since");
+  const dodged = await world.invoke("take_action", { characterId: kara.id, action: "dodge" });
+  assert.equal(dodged.ok, true, dodged.error);
   assert.equal(freshLastHit(world.campaignId, kara.id), null);
 });
 
@@ -1339,7 +1362,8 @@ async function soloWrap() {
   kit.place(kara.id, 5, 5);
   world.enemies().forEach((goblin, index) => kit.place(goblin.id, 4 + index * 2, 6));
   assert.equal(kit.endTurn(userOf(world, kara.id)), true);
-  assert.equal(world.encounter().round, 2, "End Turn wrapped the round");
+  // The goblins close round 1; Kara's next turn is round 2's (issue 713).
+  assert.equal(world.encounter().round, 1, "End Turn walked to the end of the order, the round turning over once the goblins have gone");
   assert.deepEqual(due(world), world.enemies().map((goblin) => goblin.id));
   return staged;
 }

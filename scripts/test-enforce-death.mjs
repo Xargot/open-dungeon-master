@@ -150,7 +150,17 @@ await test("the save is a bare d20: 10 succeeds and 9 fails, whatever the sheet 
 
 await test("a save the pointer rolls on a player's own End Turn belongs to no GM turn (issue #622)", async () => {
   dying();
-  pass(12);
+  // With the goblins out of the fight the pass rolls the save itself; with
+  // them in it, the save waits for their turns and rolls as the GM hands
+  // the turn on, on that GM turn (issue 713).
+  const goblins = world.enemies().map((enemy) => enemy.id);
+  const status = (value) => goblins.forEach((id) => getDatabase().prepare("UPDATE encounter_enemies SET status = ? WHERE id = ?").run(value, id));
+  status("dead");
+  try {
+    pass(12);
+  } finally {
+    status("alive");
+  }
   const save = listRecentAudit(world.campaignId, 30).filter((row) => row.kind === "death_state" && row.characterId === hero.id).at(-1);
   assert.ok(save, "the save was not audited");
   assert.deepEqual(save.delta.deathSaves, { ...FRESH, successes: 1 });

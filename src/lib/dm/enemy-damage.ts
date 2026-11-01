@@ -12,13 +12,15 @@ import { patchEnemyConditions } from "@/lib/db/encounters";
 import { restoreOwnForm } from "@/lib/db/enemy-form";
 import { recordEncounterSummary } from "@/lib/dm/encounter-summary-store";
 import { getBattleMapForEncounter, removeTokenByRef } from "@/lib/db/battle-maps";
-import { publishEphemeral, publishPersisted } from "@/lib/events";
+import { publishEphemeral, publishPersisted, publishWithSeq } from "@/lib/events";
 import { closeFallenFoes } from "@/lib/dm/party-bonds";
 import { healthState } from "@/lib/bestiary/health";
 import { ammoCount, recoveredAmmo, withAmmoCount } from "@/lib/srd/ammunition";
 import { clearSpellConditionsByName } from "@/lib/dm/concentration";
 import { spellEffectsOnEnemyDamage } from "@/lib/dm/spell-effects";
-import { enemyDamageMath } from "@/lib/dm/encounter-logic";
+import { enemyDamageMath, fightOverLine } from "@/lib/dm/encounter-logic";
+import { insertCampaignMessage } from "@/lib/db/messages";
+import { tableNoteSeq } from "@/lib/dm/narration-slot";
 import { damageAdjust, removeConditions, resistsAllDamage } from "@/lib/dm/condition-logic";
 import { BURNING_OIL_DAMAGE, COVERED_IN_OIL, oilCatches } from "@/lib/srd/gear-weapons";
 import { enemyDefenseLines } from "@/lib/dm/enemy-defenses";
@@ -86,6 +88,20 @@ export function unknownEnemyRef(encounterId: string, field: string, ref: string 
   return unknownRef(field, ref, living.map((enemy) => ({ id: enemy.id, name: enemy.displayName })), tail);
 }
 
+// The one line that says a fight is over, and names who is still dying
+// (fightOverLine). `rolledOut`: the fight's end rolls out the saves of the
+// dying nobody is left standing to tend (finishEncounter), each its own
+// line, so those are not promised saves to come. Called once per end, by
+// whatever ended it; a lost fight says so in its own words (partyFallen).
+export function sayFightOver(campaign: Campaign, encounter: Encounter, rolledOut: boolean) {
+  const party = listSheets(campaign.id).filter((sheet) => sheetSide(encounter, sheet.id) === "party");
+  const alone = new Set(rolledOut ? dyingLeftAlone(party).map((sheet) => sheet.id) : []);
+  const content = fightOverLine(party.filter((sheet) => isDying(sheet) && !alone.has(sheet.id)).map((sheet) => sheet.name));
+  const seq = tableNoteSeq(campaign.id);
+  const message = insertCampaignMessage({ campaignId: campaign.id, seq, authorType: "system", glyph: "cue-battle", content });
+  publishWithSeq(campaign.id, seq, "message_added", { message });
+}
+
 export function finishEncounter(
   campaign: Campaign,
   turn: DmTurn,
@@ -108,6 +124,10 @@ export function finishEncounter(
   // When it ended on the world clock, so a foe who comes back to a later
   // fight has had the time since (foe-return.ts, issue #667).
   endEncounter(encounter.id, outcome, getClock(campaign.id).instant);
+  // The table is told first, before what the end brings (issue 713).
+  if (outcome !== "party_defeated") {
+    sayFightOver(campaign, encounter, true);
+  }
   const itemsLeft = settleFightState(campaign, encounter.id);
   // A spell of a minute or more still being cast takes effect as the fight
   // ends, its slot spent then (long-casting.ts finishCastingsAtFightEnd).

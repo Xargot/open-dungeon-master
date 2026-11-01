@@ -473,6 +473,9 @@ function buildEncounterState(campaignId: string, sheets: CharacterSheet[]) {
           enemiesDue: {
             before: encounter.order[encounter.turnIndex].name,
             enemies: due.map((enemy) => ({ enemyId: enemy.id, name: enemy.displayName })),
+            // Enemies before the end of the order act in this round, which
+            // turns over once they have (issue 713).
+            round: encounter.round + (encounter.legendary.rest?.wrap ? 1 : 0),
           },
         }
       : {}),
