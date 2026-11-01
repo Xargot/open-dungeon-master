@@ -1,7 +1,7 @@
 "use client";
 
 import * as RadixTooltip from "@radix-ui/react-tooltip";
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { GameIcon } from "@/components/ui/GameIcon";
 import type { HandCard, HandCardType, HandCost } from "@/lib/battlemap/hand";
@@ -121,6 +121,8 @@ function HandCardFaceInner({
   waiting?: boolean;
   onPick: (card: HandCard) => void;
 }) {
+  // Announce opening before Preact mounts the tooltip’s dismissal listener.
+  const [previewOpen, setPreviewOpen] = useState(false);
   const rows = useMemo(() => previewRows(card, aim, conditions), [card, aim, conditions]);
   const aimName = aim && card.target === "enemy" && aim.kind === "enemy" ? aim.name : "";
   const slotStyle = {
@@ -179,39 +181,33 @@ function HandCardFaceInner({
   );
   return (
     <div className="hand-slot" style={slotStyle}>
-      {/* The shared Tooltip's markup, with nothing to show while the card is
-          playable. Wrapping only a disabled card would swap the button for a
-          new node the moment it is spent, and a new node cannot ease into
-          its dim. Leaving the card is what closes it: with no content mounted
-          there is nothing else to notice the pointer has gone. */}
+      {/* Portal full text outside the clipped fan; keep the trigger mounted when a card is spent. */}
       <RadixTooltip.Provider delayDuration={300}>
-        <RadixTooltip.Root disableHoverableContent>
+        <RadixTooltip.Root open={previewOpen} onOpenChange={setPreviewOpen}>
           <RadixTooltip.Trigger asChild>{button}</RadixTooltip.Trigger>
-          {card.disabled && !waiting ? (
-            <RadixTooltip.Portal>
-              <RadixTooltip.Content
-                side="top"
-                sideOffset={6}
-                collisionPadding={8}
-                className="z-[70] max-w-60 rounded-md border border-stone-600/60 bg-stone-950 px-2.5 py-1.5 text-xs leading-snug text-stone-300 shadow-elev-2"
-              >
-                {card.disabled}
-              </RadixTooltip.Content>
-            </RadixTooltip.Portal>
-          ) : null}
+          <RadixTooltip.Portal>
+            <RadixTooltip.Content
+              side="top"
+              sideOffset={8}
+              collisionPadding={8}
+              data-native-board-occluder
+              style={{ maxWidth: "min(24rem, calc(100vw - 16px))", maxHeight: "min(70vh, 32rem, var(--radix-tooltip-content-available-height, 70vh))", overflowWrap: "anywhere", animation: "none" }}
+              className="z-[70] w-max overflow-y-auto rounded-md border border-stone-600/60 bg-stone-950 p-3 text-xs leading-relaxed text-stone-200 shadow-elev-2"
+            >
+              <span className="block text-sm font-semibold text-amber-100">{aimName ? card.name + " · " + aimName : card.name}</span>
+              <span className="mt-1 block text-stone-400">{[COST_SHORT[card.cost], card.range, card.resource].filter(Boolean).join(" · ")}</span>
+              {card.dice || card.roll ? <span className="mt-1 block">{[card.dice, card.roll].filter(Boolean).join(" · ")}</span> : null}
+              <span className="mt-2 block whitespace-pre-wrap">{card.description || card.rules}</span>
+              {card.condition ? <span className="mt-2 block text-amber-200">{card.condition}</span> : null}
+              {card.disabled && !waiting ? (
+                <span className="mt-2 block text-amber-200">{card.disabled}</span>
+              ) : (
+                <span className="mt-2 block"><HandPreviewRows rows={rows} /></span>
+              )}
+            </RadixTooltip.Content>
+          </RadixTooltip.Portal>
         </RadixTooltip.Root>
       </RadixTooltip.Provider>
-      {card.disabled && !waiting ? null : (
-        <span className="hand-preview" aria-hidden="true">
-          <span className="hand-preview-head">
-            <span className="hand-type-chip" style={{ "--chip-tone": TYPE_TONE[card.type] } as CSSProperties}>
-              {TYPE_LABEL[card.type]}
-            </span>
-            <span className="hand-preview-name">{aimName ? `${card.name} · ${aimName}` : card.name}</span>
-          </span>
-          <HandPreviewRows rows={rows} />
-        </span>
-      )}
     </div>
   );
 }

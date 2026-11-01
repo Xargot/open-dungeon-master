@@ -261,41 +261,6 @@ function ComposerInner({
         ) : null}
         </div>
         <div className="session-compose-entry">
-        <div data-pill-group="" className="mb-2 flex flex-wrap items-center gap-1.5" data-tour="composer-modes">
-          {/* The DM authors and talks out of character; they have no
-              character to act or speak as, and the story directions exist to
-              steer an AI narrator they have replaced. */}
-          {(isDm
-            ? (["narrate", "ooc"] as const)
-            : ([
-                "do",
-                "say",
-                "ooc",
-                ...(steersStory ? (["lead"] as const) : []),
-              ] as const)
-          ).map(
-            (option) => (
-              <Tooltip key={option} content={KIND_TIPS[option]}>
-                <button data-on={kind === option ? "" : undefined}
-                  data-mode={option}
-                  type="button"
-                  onClick={() => onKindChange(option)}
-                  className="session-mode"
-                >
-                  <GameIcon icon={{ kind: "glyph", key: MODE_GLYPHS[option] }} size="size-6" />
-                  {option === "do"
-                    ? "Do"
-                    : option === "say"
-                      ? "Say"
-                      : option === "ooc"
-                        ? "OOC"
-                        : "Direct"}
-                </button>
-              </Tooltip>
-            ),
-          )}
-          <DmStatusLine campaignId={campaignId} dmStatus={dmStatus} dmJob={dmJob} canStop={steersStory} />
-        </div>
         {/*
           Direct's own controls, and the reason there is no second row of
           director buttons above this composer: a canned event to arm, and the
@@ -352,33 +317,70 @@ function ComposerInner({
             aria-invalid={tooLong || undefined}
             className="flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-stone-200 outline-none disabled:opacity-50"
           />
-          {onXCard ? (
-            <Tooltip content="X-card: pause the table without saying why. Nobody is told who pressed it.">
-              <button
-                type="button"
-                onClick={onXCard}
-                aria-label="Raise the X-card"
-                className={cn(ui.btnSmall, "session-deskbtn text-stone-400")}
-              >
-                <Hand className="size-4" />
-              </button>
-            </Tooltip>
-          ) : null}
-          <PushToTalk
-            disabled={inputBlocked}
-            composerRef={composerRef}
-            onTranscript={(text) =>
-              setInput((current) => (current ? `${current} ${text}` : text))
-            }
-          />
-          <button
-            type="submit"
-            disabled={sending || !input.trim() || inputBlocked || tooLong}
-            aria-label="Send"
-            className={cn(ui.btnPrimary, "session-deskbtn cine-send")}
-          >
-            {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-          </button>
+          <div className="session-compose-toolbar">
+            <div data-pill-group="" className="flex flex-1 flex-wrap items-center gap-1.5" data-tour="composer-modes">
+              {/* The DM authors and talks out of character; they have no
+                  character to act or speak as, and the story directions exist to
+                  steer an AI narrator they have replaced. */}
+              {(isDm
+                ? (["narrate", "ooc"] as const)
+                : ([
+                    "do",
+                    "say",
+                    "ooc",
+                    ...(steersStory ? (["lead"] as const) : []),
+                  ] as const)
+              ).map(
+                (option) => (
+                  <Tooltip key={option} content={KIND_TIPS[option]}>
+                    <button data-on={kind === option ? "" : undefined}
+                      data-mode={option}
+                      type="button"
+                      onClick={() => onKindChange(option)}
+                      className="session-mode"
+                    >
+                      <GameIcon icon={{ kind: "glyph", key: MODE_GLYPHS[option] }} size="size-6" />
+                      {option === "do"
+                        ? "Do"
+                        : option === "say"
+                          ? "Say"
+                          : option === "ooc"
+                            ? "OOC"
+                            : "Direct"}
+                    </button>
+                  </Tooltip>
+                ),
+              )}
+              <DmStatusLine campaignId={campaignId} dmStatus={dmStatus} dmJob={dmJob} canStop={steersStory} />
+            </div>
+            {onXCard ? (
+              <Tooltip content="X-card: pause the table without saying why. Nobody is told who pressed it.">
+                <button
+                  type="button"
+                  onClick={onXCard}
+                  aria-label="Raise the X-card"
+                  className={cn(ui.btnSmall, "session-deskbtn text-stone-400")}
+                >
+                  <Hand className="size-4" />
+                </button>
+              </Tooltip>
+            ) : null}
+            <PushToTalk
+              disabled={inputBlocked}
+              composerRef={composerRef}
+              onTranscript={(text) =>
+                setInput((current) => (current ? `${current} ${text}` : text))
+              }
+            />
+            <button
+              type="submit"
+              disabled={sending || !input.trim() || inputBlocked || tooLong}
+              aria-label="Send"
+              className={cn(ui.btnPrimary, "session-deskbtn cine-send")}
+            >
+              {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+            </button>
+          </div>
         </div>
         <LengthNote id={noteId} length={length} max={maxChars} from={0.8} className="mt-1" />
         {error ? <p className="motion-shake mt-1.5 text-sm text-red-400">{error}</p> : null}

@@ -37,7 +37,7 @@ export const PLAYER_TOUR: TourStep[] = [
   {
     id: "battle-hand",
     title: "Your hand, in a fight",
-    body: "On your turn in combat your options arrive as cards: each weapon, each prepared spell, your class features and the basic actions, with the numbers from your sheet. Pick a card, pick who it lands on, then press the gold button. A dimmed card is spent; press it to hear why. Or type your move below, as ever.",
+    body: "On your turn in combat your options arrive as cards: each weapon, each prepared spell, your class features and the basic actions, with the numbers from your sheet. Pick a card, pick who it lands on, then press the gold button. A dimmed card is spent; press it to hear why. Or type your move, as ever.",
     anchors: ["battle-hand"],
     prepare: "show-chat",
   },

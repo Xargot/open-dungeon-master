@@ -348,6 +348,19 @@ button:hover > .rail-glyph { filter: none; opacity: 1; }
   font-size: 0.74rem;
   color: var(--color-stone-400);
 }
+/* Keep typing space separate from the controls, including on narrow desks. */
+.session-compose-entry .session-well { flex-direction: column; align-items: stretch; }
+.session-compose-entry .session-well > textarea {
+  width: 100%;
+  min-width: 0;
+  flex: none;
+  field-sizing: content;
+  min-height: calc(2lh + 0.75rem);
+  max-height: calc(5lh + 0.75rem);
+  overflow-y: auto;
+}
+.session-compose-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+
 .session-deskbtn {
   display: inline-flex;
   width: 2.5rem;

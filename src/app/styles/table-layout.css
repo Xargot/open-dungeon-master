@@ -67,7 +67,7 @@
     position: relative;
     display: grid;
     grid-template-columns: clamp(13rem, 18vw, 19rem) minmax(320px, 1fr) clamp(18rem, 26vw, 24rem);
-    grid-template-rows: auto var(--session-activity-height, 0px) minmax(0, 1fr) auto minmax(0, auto);
+    grid-template-rows: auto var(--session-activity-height, 0px) minmax(0, 1fr) auto auto auto minmax(0, auto);
     gap: 12px;
     padding: 12px;
   }
@@ -92,7 +92,7 @@
   .cine-row[data-presentation="stage"] .cine-party-bar { height: 3px; }
   .cine-row[data-presentation="stage"] .cine-party-class { font-size: 10px; line-height: 11px; }
   .cine-row[data-presentation="stage"] .cine-chronicle {
-    grid-area: 3 / 1;
+    grid-area: 3 / 1 / -1 / 2;
     min-height: 0;
     margin: 0;
   }
@@ -133,8 +133,8 @@
     overflow-y: auto;
   }
   .cine-row[data-presentation="stage"] .session-compose-support { grid-area: 4 / 2; }
-  .cine-row[data-presentation="stage"] .session-compose-notices { grid-area: 4 / 1; }
-  .cine-row[data-presentation="stage"] .session-compose-hand { grid-area: 5 / 2; }
+  .cine-row[data-presentation="stage"] .session-compose-notices { grid-area: 5 / 2; }
+  .cine-row[data-presentation="stage"] .session-compose-hand { grid-area: 7 / 2; }
   /* The native cards use a straight rail here, leaving the fan's room to the map. */
   .cine-row[data-presentation="stage"] .hand { --card-w: 148px; --card-h: 140px; margin-bottom: 0; }
   .cine-row[data-presentation="stage"] .hand-fan {
@@ -181,30 +181,14 @@
     height: var(--card-h);
     scroll-snap-align: start;
   }
-  .cine-row[data-presentation="stage"] .session-compose-entry { grid-area: 5 / 1; padding: 8px; }
+  .cine-row[data-presentation="stage"] .session-compose-entry { grid-area: 6 / 2; }
   .cine-row[data-presentation="stage"] .session-compose-support:empty,
   .cine-row[data-presentation="stage"] .session-compose-notices:empty,
   .cine-row[data-presentation="stage"] .session-compose-hand:empty { display: none; }
   /* Keep the status owner and the mode buttons' positioned animation intact. */
   @supports (position-anchor: --session-chronicle) and (anchor-scope: --session-chronicle) {
     .cine-row[data-presentation="stage"] {
-      anchor-scope: --session-chronicle, --session-entry;
-      padding-bottom: 0;
-    }
-    .cine-row[data-presentation="stage"] .session-compose-entry {
-      anchor-name: --session-entry;
-      align-self: end;
-      padding-bottom: 0;
-    }
-    /* Keep turn/roll notices with the input when the central hand is taller. */
-    .cine-row[data-presentation="stage"] .session-compose-notices {
-      position: absolute;
-      position-anchor: --session-entry;
-      inset: auto;
-      bottom: calc(anchor(top) + 8px);
-      left: anchor(left);
-      width: anchor-size(width);
-      grid-area: auto;
+      anchor-scope: --session-chronicle;
     }
     .cine-row[data-presentation="stage"]:has(.session-status) { --session-activity-height: 2.25rem; }
     .cine-row[data-presentation="stage"] .cine-chronicle { anchor-name: --session-chronicle; }
@@ -254,7 +238,7 @@
   .cine-stage[data-side-board] .tlay-slot[data-pane="panel"] > .cine-panel,
   .cine-stage[data-side-board] .cine-panel > .side-panel-body,
   .cine-stage[data-side-board] [data-session-region="board"] { display: contents; }
-  .cine-stage[data-side-board] .cine-panel > .side-panel-body > .cine-quest { grid-area: 6 / 2; margin: 0; }
+  .cine-stage[data-side-board] .cine-panel > .side-panel-body > .cine-quest { grid-area: 8 / 2; margin: 0; }
   .cine-stage[data-side-board] [data-session-region="board"] > .board-dock {
     grid-area: 1 / 2 / 4 / 3;
     min-width: 0;

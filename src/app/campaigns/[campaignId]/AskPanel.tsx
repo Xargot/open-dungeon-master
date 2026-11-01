@@ -182,8 +182,9 @@ function AskDockInner({
         type="button"
         onClick={() => onOpenChange(!open)}
         data-tour="ask-dm"
+        data-no-motion
         aria-expanded={open}
-        className="pk-tap flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-stone-400 transition-colors hover:text-amber-100 motion-press"
+        className="pk-tap flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-stone-400 transition-colors hover:text-amber-100"
       >
         <GameIcon icon={{ kind: "glyph", key: "tab-reference" }} size="size-5" />
         <span className="eyebrow text-[11px] text-amber-300/90">Ask the DM</span>

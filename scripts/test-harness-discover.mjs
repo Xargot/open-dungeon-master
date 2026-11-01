@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { removeTempDir } from "./lib/remove-temp-dir.mjs";
 
-const { loginShellPath, findBinary } = await import("../src/lib/harness/discover.ts");
+const { loginShellPath, findBinary, resolveWindowsShim } = await import("../src/lib/harness/discover.ts");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "odm-harness-discover-"));
 const originalHome = process.env.HOME;
@@ -162,6 +162,33 @@ await test("names are tried in order of preference: opencode2 wherever it is, be
     process.env.PATH = originalPath;
   }
 });
+
+// npm's Codex JS wrapper spawns its native child without windowsHide.
+if (process.platform === "win32") {
+  const platformPackage = "@openai/codex-win32-" + os.arch();
+  const triple = (os.arch() === "arm64" ? "aarch64" : "x86_64") + "-pc-windows-msvc";
+  const home = path.join(dir, "npm-codex");
+  const packageRoot = path.join(home, "node_modules", "@openai", "codex");
+  const script = path.join(packageRoot, "bin", "codex.js");
+  const shim = path.join(home, "codex.cmd");
+  writeExecutable(script, "// npm wrapper\n");
+  writeExecutable(path.join(packageRoot, "package.json"), JSON.stringify({ name: "@openai/codex" }));
+  writeExecutable(shim, '\"%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js\" %*');
+  const legacy = path.join(packageRoot, "vendor", triple, "bin", "codex.exe");
+  writeExecutable(legacy, "fixture");
+  assert.deepEqual(resolveWindowsShim(shim), { command: legacy, prefix: [] }, "launch Codex directly, so ODM's hidden flag reaches the final executable");
+  const nativeRoot = path.join(packageRoot, "node_modules", ...platformPackage.split("/"));
+  writeExecutable(path.join(nativeRoot, "package.json"), JSON.stringify({ name: platformPackage }));
+  const native = path.join(nativeRoot, "vendor", triple, "bin", "codex.exe");
+  writeExecutable(native, "fixture");
+  assert.deepEqual(resolveWindowsShim(shim), { command: native, prefix: [] }, "prefer the current optional platform package");
+  fs.unlinkSync(native);
+  assert.deepEqual(resolveWindowsShim(shim), { command: process.execPath, prefix: [script] }, "an incomplete native package retains the established wrapper fallback");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "other-program" }));
+  assert.deepEqual(resolveWindowsShim(shim), { command: process.execPath, prefix: [script] }, "unrelated npm programs keep their wrapper");
+  passed += 4;
+  console.log("ok: Windows Codex native launch and wrapper fallbacks");
+}
 
 removeTempDir(dir);
 console.log(`harness discover: ${passed} checks passed`);

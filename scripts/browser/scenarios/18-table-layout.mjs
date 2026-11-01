@@ -340,8 +340,8 @@ export default {
       const side = await boxOf(page.locator(`${root}.cine-panel`));
       check(Math.abs(party.x - chronicle.x) < 2 && party.y + party.height <= chronicle.y + 1, "Party is above Chronicle in the left column");
       check(board.x >= chronicle.x + chronicle.width && side.x >= board.x + board.width && board.width > side.width, "tabletop dominates the center with native controls at right");
-      check(Math.abs(entry.x - chronicle.x) < 2 && entry.y >= chronicle.y + chronicle.height - 1, "native composer sits below Chronicle");
-      check(hand.x >= board.x - 1 && hand.y >= board.y + board.height - 1, "native hand stays below the board");
+      check(Math.abs(entry.x - board.x) < 2 && Math.abs(entry.width - board.width) < 2 && entry.y >= board.y + board.height - 1, "native composer spans the center below the board");
+      check(hand.x >= board.x - 1 && hand.y >= entry.y + entry.height - 1, "native hand stays below the composer");
       check(await composer.evaluate(node => node.form === document.querySelector(".hand")?.closest("form")), "hand and typed commands still share the native form");
       const rendered = page.locator(`${root}.cine-fight-board iframe`);
       await eventually(() => cameraOf(rendered), { label: "public example camera report" });

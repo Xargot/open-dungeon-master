@@ -40,6 +40,7 @@ export interface ShellShare {
 }
 
 export interface ShellHost {
+  nativeBoard?: ShellNativeBoard;
   platform: "desktop" | "android";
   // Leaves this server's pages for the app's home screen (its servers,
   // its device world, its settings).
@@ -67,6 +68,15 @@ export interface ShellHost {
   // (apps 0.15.0 and up); the account menu offers both.
   openSettings?(): void;
   openHelp?(): void;
+}
+
+export type NativeBoardRect = { x: number; y: number; width: number; height: number };
+export interface ShellNativeBoard {
+  open(key: { addonId: string; viewId: string }): Promise<{ id: string } | null>;
+  send(id: string, packet: unknown): void;
+  layout(id: string, layout: { bounds: NativeBoardRect; occlusions: NativeBoardRect[]; visible: boolean; scale: number }): void;
+  close(id: string): Promise<void>;
+  subscribe(id: string, listener: (packet: unknown) => void): () => void;
 }
 
 declare global {

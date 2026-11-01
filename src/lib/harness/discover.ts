@@ -8,6 +8,7 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { hostPlatform, onWindows } from "../host-platform.ts";
 import type { HarnessAvailability } from "./types.ts";
@@ -225,6 +226,27 @@ export function resolveWindowsShim(binary: string): { command: string; prefix: s
     if (match) {
       const script = path.resolve(path.dirname(binary), match[1].replace(/^\\/, ""));
       if (existsSync(script)) {
+        // Codex's npm wrapper starts another process without hiding its console.
+        // Launch the native binary so spawnProgram's windowsHide reaches it.
+        try {
+          const packageRoot = path.dirname(path.dirname(script));
+          const pkg = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+          const arch = os.arch();
+          if (pkg.name === "@openai/codex" && (arch === "x64" || arch === "arm64")) {
+            let vendorRoot = path.join(packageRoot, "vendor");
+            try {
+              const nativePackage = createRequire(script).resolve(`@openai/codex-win32-${arch}/package.json`);
+              vendorRoot = path.join(path.dirname(nativePackage), "vendor");
+            } catch {
+              // Older Codex releases bundle vendor/ inside the main package.
+            }
+            const triple = (arch === "arm64" ? "aarch64" : "x86_64") + "-pc-windows-msvc";
+            const native = path.join(vendorRoot, triple, "bin", "codex.exe");
+            if (executable(native)) return { command: native, prefix: [] };
+          }
+        } catch {
+          // Other npm programs and incomplete installs keep their wrapper.
+        }
         return { command: process.execPath, prefix: [script] };
       }
     }
