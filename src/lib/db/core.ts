@@ -2210,6 +2210,13 @@ function ensureSchema(db: SqliteDatabase) {
     ["race", `TEXT NOT NULL DEFAULT ''`],
     ["gender", `TEXT NOT NULL DEFAULT ''`],
   ]);
+  // Older tabletop builds stored sex in the stat block; keep that saved look.
+  db.exec(`
+    UPDATE encounter_enemies
+    SET gender = json_extract(CASE WHEN json_valid(stat_json) THEN stat_json ELSE '{}' END, '$.sex')
+    WHERE gender = ''
+      AND json_extract(CASE WHEN json_valid(stat_json) THEN stat_json ELSE '{}' END, '$.sex') IN ('Female', 'Male');
+  `);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_encounter_enemies_npc ON encounter_enemies(campaign_id, npc_id);
     CREATE INDEX IF NOT EXISTS idx_encounter_enemies_carried ON encounter_enemies(carried_from);

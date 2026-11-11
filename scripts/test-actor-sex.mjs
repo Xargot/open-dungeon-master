@@ -202,6 +202,22 @@ await test("a weak model's flat call keeps the gender for a start and for reinfo
   assert.equal(world.enemies().find((enemy) => enemy.displayName === "Another").gender, "Male");
 });
 
+await test("a reopened pre-745 enemy keeps its saved stat-block sex without replacing a current gender", async () => {
+  const { closeDatabaseForRestore } = await import("../src/lib/db/core.ts");
+  const foes = world.enemies();
+  assert.ok(foes.length >= 2);
+  const update = getDatabase().prepare("UPDATE encounter_enemies SET gender = ?, stat_json = json_set(stat_json, '$.sex', ?) WHERE id = ?");
+  update.run("", "Female", foes[0].id);
+  update.run("Nonbinary", "Male", foes[1].id);
+  closeDatabaseForRestore();
+  getDatabase();
+  assert.equal(getEnemy(foes[0].id).gender, "Female");
+  assert.equal(getEnemy(foes[1].id).gender, "Nonbinary");
+  closeDatabaseForRestore();
+  getDatabase();
+  assert.equal(getEnemy(foes[0].id).gender, "Female", "the backfill is idempotent");
+});
+
 await kit.endFight();
 world.close();
 finish();
