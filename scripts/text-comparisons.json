@@ -719,7 +719,7 @@
     "lib/correction-reasons.ts#str-list": [["key",1,"the correction ledger's kinds of fix and its reason chips (fixed choices, stored values)"]],
     "lib/actor-sex-logic.ts#str-list": [["key",1,"fixed Male/Female model-selection values in the board protocol; not player-written text"]],
     "lib/addons/board-bridge.ts#str-case": [["key",13,"addon board message types and view names (protocol)"]],
-    "lib/addons/board-bridge.ts#str-eq": [["key",1,"addon board message types and view names (protocol)"]],
+    "lib/addons/board-bridge.ts#str-eq": [["key",3,"addon board message types, view names, and addon identifier (protocol)"]],
     "lib/addons/catalog-entry.ts#str-list": [["key",1,"addon catalog categories (fixed choice)"]],
     "lib/addons/contracts.ts#[a-z]": [["key",2,"file names"]],
     "lib/addons/contracts.ts#str-eq": [["key",1,"zod issue paths and MCP content part types (protocol)"]],
