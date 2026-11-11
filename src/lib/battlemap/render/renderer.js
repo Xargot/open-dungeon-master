@@ -408,55 +408,12 @@ ODMRender.render = function render(spec, cv) {
     }
   }
 
-  // 8. Dressing. Cosmetic only: props sit against walls or in open ground,
-  // never in a doorway, a corridor, or the square next to another prop, so
-  // the picture never suggests an obstacle the rules do not have. A placed
-  // stamp claims its own square and the eight around it first.
-  const taken = new Set(), key = (x, y) => `${x},${y}`;
-  for (const p of opt.props) {
-    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) taken.add(key(p.x + a, p.y + b));
-  }
-  const pool = dressingPool(skin, assets.catalogue.objects);
-  if (opt.dressing) {
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const ch = rows[y][x];
-        if (ch !== "." && ch !== ",") continue;
-        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => at(x + a, y + b) === "+")) continue;
-        const N = at(x, y - 1) === "#", S = at(x, y + 1) === "#", E = at(x + 1, y) === "#", Wd = at(x - 1, y) === "#";
-        if ((N && S) || (E && Wd)) continue;
-        let near = false;
-        for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (taken.has(key(x + a, y + b))) near = true;
-        if (near) continue;
-        const walls4 = N + S + E + Wd, r = rnd(x, y, 501);
-        const kind = walls4 >= 1 && ch === "." && r < skin.wallDensity ? "wall" : walls4 === 0 && r < skin.scatterDensity ? "scatter" : null;
-        if (!kind) continue;
-        const candidates = pool.filter((p) => p.kind === kind && propImg(p.id));
-        if (!candidates.length) continue;
-        const total = candidates.reduce((s, p) => s + p.weight, 0);
-        let pick = rnd(x, y, 777) * total, prop = candidates[0];
-        for (const p of candidates) {
-          if ((pick -= p.weight) <= 0) {
-            prop = p;
-            break;
-          }
-        }
-        let cx = (x + 0.5) * CELL, cy = (y + 0.5) * CELL;
-        if (kind === "wall") {
-          const push = CELL * 0.16;
-          if (N) cy -= push;
-          if (S) cy += push;
-          if (E) cx += push;
-          if (Wd) cx -= push;
-        }
-        cx += (rnd(x, y, 9) - 0.5) * CELL * 0.14;
-        cy += (rnd(x, y, 10) - 0.5) * CELL * 0.14;
-        const ang = prop.align ? (N || S ? 0 : Math.PI / 2) + (rnd(x, y, 12) - 0.5) * 0.12 : rnd(x, y, 13) * Math.PI * 2;
-        const size = Math.min(prop.span, 1.2) * 1.3 * CELL * (0.9 + rnd(x, y, 14) * 0.2);
-        drawProp(propImg(prop.id), cx, cy, size, ang);
-        taken.add(key(x, y));
-      }
-    }
+  // The play board and add-on can share the same positions in tile units.
+  const placements = opt.scenery ?? ODMRender.scenery(rows, skin, assets.catalogue, seed, opt.props, opt.dressing, opt.decals && !low);
+  for (const item of placements) {
+    if (item.section !== "props") continue;
+    const img = propImg(item.id);
+    if (img) drawProp(img, item.x * CELL, item.y * CELL, item.size * CELL, item.rotation);
   }
   // Placed stamps, at full size.
   for (const p of opt.props) {
@@ -467,27 +424,18 @@ ODMRender.render = function render(spec, cv) {
   }
 
   // 9. Scatter decals: small loose things on open ground.
-  if (opt.decals && !low) {
-    const scatter = assets.catalogue.decals.filter((d) => d.shape === "scatter" && d.on.includes(skin.ground) && assets.decals[d.id]);
-    if (scatter.length) {
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          if (rows[y][x] !== ".") continue;
-          if (rnd(x, y, 601) > skin.scatterDecalDensity) continue;
-          const d = scatter[Math.floor(rnd(x, y, 602) * scatter.length)];
-          const img = assets.decals[d.id];
-          const size = CELL * (0.45 + rnd(x, y, 603) * 0.35);
-          ctx.save();
-          ctx.translate((x + rnd(x, y, 604)) * CELL, (y + rnd(x, y, 605)) * CELL);
-          ctx.rotate(rnd(x, y, 606) * Math.PI * 2);
-          ctx.globalAlpha = d.blend === "multiply" ? 0.7 : 0.82;
-          ctx.globalCompositeOperation = d.blend === "multiply" ? "multiply" : "source-over";
-          const sc = size / Math.max(img.width, img.height);
-          ctx.drawImage(img, (-img.width * sc) / 2, (-img.height * sc) / 2, img.width * sc, img.height * sc);
-          ctx.restore();
-        }
-      }
-    }
+  if (opt.decals && !low) for (const item of placements) {
+    if (item.section !== "decals") continue;
+    const img = assets.decals[item.id];
+    if (!img) continue;
+    ctx.save();
+    ctx.translate(item.x * CELL, item.y * CELL);
+    ctx.rotate(item.rotation);
+    ctx.globalAlpha = item.blend === "multiply" ? 0.7 : 0.82;
+    ctx.globalCompositeOperation = item.blend === "multiply" ? "multiply" : "source-over";
+    const sc = item.size * CELL / Math.max(img.width, img.height);
+    ctx.drawImage(img, (-img.width * sc) / 2, (-img.height * sc) / 2, img.width * sc, img.height * sc);
+    ctx.restore();
   }
 
   // 10. Light. A darkness layer per ambient, punched through by lights and
@@ -606,5 +554,69 @@ function dressingPool(skin, objects) {
     .map((o) => ({ ...o, weight: (skin.favour || []).includes(o.id) ? 3 : 1 }));
 }
 ODMRender.dressingPool = dressingPool;
+
+// Cosmetic placements only. Coordinates and sizes are in tile units.
+ODMRender.scenery = function (rows, skin, catalogue, seed, reserved, dressing, decals) {
+  const H = rows.length, W = rows[0]?.length ?? 0;
+  const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? "#" : rows[y][x]);
+  const rnd = (x, y, s) => hash(x + seed * 7, y + seed * 13, s);
+  const placements = [];
+  const taken = new Set(), key = (x, y) => `${x},${y}`;
+  for (const p of reserved) {
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) taken.add(key(p.x + a, p.y + b));
+  }
+  const pool = dressingPool(skin, catalogue.objects);
+  if (dressing) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const ch = rows[y][x];
+        if (ch !== "." && ch !== ",") continue;
+        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => at(x + a, y + b) === "+")) continue;
+        const N = at(x, y - 1) === "#", S = at(x, y + 1) === "#", E = at(x + 1, y) === "#", Wd = at(x - 1, y) === "#";
+        if ((N && S) || (E && Wd)) continue;
+        let near = false;
+        for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (taken.has(key(x + a, y + b))) near = true;
+        if (near) continue;
+        const walls4 = N + S + E + Wd, r = rnd(x, y, 501);
+        const kind = walls4 >= 1 && ch === "." && r < skin.wallDensity ? "wall" : walls4 === 0 && r < skin.scatterDensity ? "scatter" : null;
+        if (!kind) continue;
+        const candidates = pool.filter((p) => p.kind === kind);
+        if (!candidates.length) continue;
+        const total = candidates.reduce((s, p) => s + p.weight, 0);
+        let pick = rnd(x, y, 777) * total, prop = candidates[0];
+        for (const p of candidates) {
+          if ((pick -= p.weight) <= 0) {
+            prop = p;
+            break;
+          }
+        }
+        let cx = (x + 0.5), cy = (y + 0.5);
+        if (kind === "wall") {
+          const push = 0.16;
+          if (N) cy -= push;
+          if (S) cy += push;
+          if (E) cx += push;
+          if (Wd) cx -= push;
+        }
+        cx += (rnd(x, y, 9) - 0.5) * 0.14;
+        cy += (rnd(x, y, 10) - 0.5) * 0.14;
+        const ang = prop.align ? (N || S ? 0 : Math.PI / 2) + (rnd(x, y, 12) - 0.5) * 0.12 : rnd(x, y, 13) * Math.PI * 2;
+        const size = Math.min(prop.span, 1.2) * 1.3 * (0.9 + rnd(x, y, 14) * 0.2);
+        placements.push({ section: "props", id: prop.id, x: cx, y: cy, size, rotation: ang });
+        taken.add(key(x, y));
+      }
+    }
+  }
+  if (decals) {
+    const scatter = catalogue.decals.filter(d => d.shape === "scatter" && d.on.includes(skin.ground));
+    if (scatter.length) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (rows[y][x] !== "." || rnd(x, y, 601) > skin.scatterDecalDensity) continue;
+      const d = scatter[Math.floor(rnd(x, y, 602) * scatter.length)];
+      placements.push({ section: "decals", id: d.id, x: x + rnd(x, y, 604), y: y + rnd(x, y, 605),
+        size: 0.45 + rnd(x, y, 603) * 0.35, rotation: rnd(x, y, 606) * Math.PI * 2, blend: d.blend });
+    }
+  }
+  return placements;
+};
 
 export { ODMRender };

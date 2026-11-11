@@ -224,6 +224,18 @@ function ComposerInner({
   const storyVoice = kind === "narrate" || kind === "lead";
   const choices = useMemo(() => nameChoices({ sheets, cast, places, storyVoice }), [sheets, cast, places, storyVoice]);
   const names = useNameMenu({ text: input, setText: setInput, field: composerRef, choices });
+  const floorBanners = (
+    <FloorBanners
+      campaignId={campaignId}
+      floor={floor}
+      spotlighted={spotlighted}
+      heldSpotlightNames={heldSpotlightNames}
+      encounter={encounter}
+      steersStory={steersStory}
+      meUserId={meUserId}
+      onRelease={onReleaseFloor}
+    />
+  );
   return (
     <form onSubmit={onSubmit} className="glass session-desk cine-desk border-t border-stone-700/40 px-3 pb-3 pt-2.5">
       <div className="session-desk-body mx-auto max-w-3xl sm:px-3">
@@ -241,16 +253,7 @@ function ComposerInner({
             steersStory={steersStory}
           />
         ))}
-        <FloorBanners
-          campaignId={campaignId}
-          floor={floor}
-          spotlighted={spotlighted}
-          heldSpotlightNames={heldSpotlightNames}
-          encounter={encounter}
-          steersStory={steersStory}
-          meUserId={meUserId}
-          onRelease={onReleaseFloor}
-        />
+        {floor.mode !== "initiative" ? floorBanners : null}
         <SideNotice encounter={encounter ?? null} sheets={sheets} meUserId={meUserId} />
         {floor.mode === "open" && dmStatus === "idle" ? (
           <TableWaitBanner
@@ -278,6 +281,7 @@ function ComposerInner({
         ) : null}
         </div>
         <div className="session-compose-hand">
+        {floor.mode === "initiative" ? floorBanners : null}
         {/* The Hand (docs/visual-overhaul-plan.md 5.2): a player's combat options
             as cards, only while a fight is on. It adds to everything below and
             takes nothing away: the pills, the box, the mic and the send button

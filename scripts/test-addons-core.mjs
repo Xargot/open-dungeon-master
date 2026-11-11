@@ -81,6 +81,11 @@ await test("native battlefield controls have a bounded explicit contract", () =>
   assert.equal(offeredBoardControl(hud,"move-mode","teleport"),null);
   assert.equal(offeredBoardControl({...hud,panel:{controls:[]}},"move-mode","walk"),null,"a native panel blocks controls behind it");
   assert.equal(offeredBoardControl({...hud,pending:true},"move-mode","walk"),null);
+  const viewControl={id:"view",label:"Board view",disabled:null,options:[{value:"",label:"ODM Board",disabled:null},{value:"comdat-tabletop:tabletop",label:"Combat 3D",disabled:null}]};
+  const viewHud={pending:false,controls:[viewControl]};
+  assert.equal(readViewMessage({...valid,actionId:"view",value:""})?.value, "", "the classic board uses an empty view key");
+  assert.equal(offeredBoardControl(viewHud,"view",""),viewControl);
+  assert.equal(offeredBoardControl(viewHud,"view","unoffered"),null);
   const draw={odm:1,type:"board-draw",revision:2,mapId:"map-1",points:[{x:1.2,y:2},{x:2,y:3}]};
   assert.equal(readViewMessage(draw)?.points.length,2);
   for(const points of [[{x:1,y:2}],Array(65).fill({x:1,y:2}),[{x:Infinity,y:2},{x:2,y:2}]])assert.equal(readViewMessage({...draw,points}),null);

@@ -5,6 +5,8 @@ import type { TokenIntent } from "@/lib/battlemap/intent";
 import type { PlayerMapView } from "@/lib/battlemap/view-types";
 import type { Gender } from "@/lib/gender";
 import { storedSex, type Sex } from "@/lib/actor-sex-logic";
+import { boardScenery } from "@/lib/battlemap/render/painted";
+import type { SceneryPlacement } from "@/lib/battlemap/render/renderer.js";
 import type { Ruler } from "@/lib/battlemap/board-move";
 
 // The board view contract: what the table page posts into an addon's
@@ -41,6 +43,7 @@ export type BoardSnapshotToken = {
   // Squares per side: 1 for medium, 2 for large, and so on.
   size: number;
   mine: boolean;
+  walkPath?: Array<{ x: number; y: number }>;
   down: boolean;
   hidden: boolean;
   elevation: "flying" | "burrowing" | null;
@@ -95,6 +98,7 @@ export type BoardSnapshot = {
   moveAim: { x: number; y: number } | null;
   // Whether the map has a picture under it; ask for it as the file "backdrop".
   hasBackdrop: boolean;
+  scenery?: SceneryPlacement[];
   // What this addon's own generator left on the map, or null.
   view: { data: unknown; files: Array<{ name: string; type: string; bytes: number }> } | null;
   // Where this addon's asset library is served (its data folder's public/,
@@ -174,6 +178,7 @@ export function boardSnapshot(
       y: token.y,
       size: view.tokenFootprint[token.id] ?? 1,
       mine: token.mine,
+      ...(addonId === "comdat-tabletop" && !options.appearance.reducedMotion && token.walkPath ? { walkPath: token.walkPath } : {}),
       down: token.down,
       hidden: token.hidden,
       elevation: view.tokenElevation[token.id] ?? null,
@@ -192,6 +197,7 @@ export function boardSnapshot(
     budgetLeft: view.budgetLeft,
     moveAim: options.moveAim ?? null,
     hasBackdrop: Boolean(view.backdrop),
+    ...(addonId === "comdat-tabletop" ? { scenery: boardScenery(view, options.genre) } : {}),
     view: own ? { data: own.data, files: own.files.map(({ name, type, bytes }) => ({ name, type, bytes })) } : null,
     assetsUrl: options.assetsUrl ?? `/api/addons/${addonId}/assets/`,
     options: options.viewOptions ? normalizeOptionValues(options.viewOptions.fields, options.viewOptions.values) : {},

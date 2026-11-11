@@ -71,6 +71,26 @@
     gap: 12px;
     padding: 12px;
   }
+  .cine-row[data-presentation="stage"][data-panel-collapsed] {
+    grid-template-columns: clamp(13rem, 18vw, 19rem) minmax(320px, 1fr) 0;
+  }
+  .session-panel-toggle {
+    position: absolute;
+    z-index: 15;
+    top: 12px;
+    right: calc(clamp(18rem, 26vw, 24rem) + 2px);
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border: 1px solid rgba(212, 171, 58, 0.5);
+    border-radius: 8px;
+    background: #171326;
+    color: #f2d98e;
+    cursor: pointer;
+  }
+  .session-panel-toggle:focus-visible { outline: 2px solid #f4e0a6; outline-offset: 2px; }
+  .cine-row[data-panel-collapsed] .session-panel-toggle { right: 12px; }
   .cine-row[data-presentation="stage"] .cine-chat,
   .cine-row[data-presentation="stage"] .cine-fight { display: contents; }
   .cine-row[data-presentation="stage"] .cine-party {

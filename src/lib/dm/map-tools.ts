@@ -685,6 +685,7 @@ export function handleMoveToken(
     resolved.kind === "enemy"
       ? (getTokenByRef(map.id, resolved.token.refId)?.movedThisRound ?? resolved.token.movedThisRound) + spent
       : resolved.token.movedThisRound,
+    args.forced || resolved.token.movement !== "walk" ? undefined : [origin, ...walkedPart(path, landing)],
   );
   for (const entry of carried) {
     moveToken(entry.token.id, entry.at.x, entry.at.y, entry.token.movedThisRound);

@@ -362,7 +362,7 @@ export async function POST(
     }
     carried = placed;
   }
-  moveToken(token.id, x, y, scene ? 0 : token.movedThisRound + (readied ? 0 : spend));
+  moveToken(token.id, x, y, scene ? 0 : token.movedThisRound + (readied ? 0 : spend), !scene && token.movement === "walk" && path ? [from, ...path] : undefined);
   // Moving ends One with Shadows' invisibility (src/lib/dm/one-with-shadows.ts).
   if (!scene) {
     endShadowInvisibility(campaignId, sheet.id, "moves");

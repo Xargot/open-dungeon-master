@@ -155,6 +155,13 @@ export default {
         const up = now.order[now.turnIndex];
         check(up?.kind === "pc", `a hero is up (${JSON.stringify(up)})`);
         await eventually(() => yours.isVisible(), { timeoutMs: 30_000, label: `the party's hand on ${up.name}'s turn` });
+        const roundBanner = page.locator(`${root}.session-compose-hand .session-round-banner`).locator("visible=true").first();
+        await eventually(() => roundBanner.isVisible(), { timeoutMs: 30_000, label: "the round above the hand" });
+        const bannerBox = await roundBanner.boundingBox();
+        const handBox = await yours.boundingBox();
+        check(bannerBox && handBox && bannerBox.y + bannerBox.height <= handBox.y + 1, "the round sits above the cards");
+        if (!phone && handBox.width > 700) check(bannerBox.width < handBox.width * 0.9, "the round does not span the hand");
+        check(await roundBanner.getByRole("button", { name: "End turn", exact: true }).isVisible(), "the round keeps its End turn action");
         check(!(await theirs.count()), "the monsters' hand is put away on a hero's turn");
         check(await yours.getByRole("button", { name: /^End turn,/ }).count(), "the hero's End turn card is dealt");
         if (!sawYours) await t.shot("person-hero-turn");

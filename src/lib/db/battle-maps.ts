@@ -1,3 +1,4 @@
+import { rememberWalk } from "@/lib/battlemap/confirmed-walk";
 import { resolveOutdoors } from "@/lib/battlemap/daylight";
 import { getDatabase, nowIso, parseJson } from "@/lib/db/core";
 import type {
@@ -458,10 +459,11 @@ export function getTokenByRef(mapId: string, refId: string): BattleToken | null 
   return row ? mapToken(row) : null;
 }
 
-export function moveToken(tokenId: string, x: number, y: number, movedThisRound: number) {
+export function moveToken(tokenId: string, x: number, y: number, movedThisRound: number, walk?: Array<{ x: number; y: number }>) {
   getDatabase()
     .prepare(`UPDATE battle_tokens SET x = ?, y = ?, moved_this_round = ?, updated_at = ? WHERE id = ?`)
     .run(x, y, movedThisRound, nowIso(), tokenId);
+  rememberWalk(tokenId, x, y, walk);
 }
 
 export function getToken(tokenId: string): BattleToken | null {

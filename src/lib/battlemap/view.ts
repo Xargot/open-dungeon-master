@@ -1,3 +1,4 @@
+import { visibleWalk } from "@/lib/battlemap/confirmed-walk";
 import { readiedReleaseFor } from "@/lib/dm/readied-release";
 import { tokenSides } from "@/lib/dm/combatant";
 import { getCampaignById, getFloor } from "@/lib/db/campaigns";
@@ -365,6 +366,7 @@ export function buildPlayerMapView(
       x: token.x,
       y: token.y,
       mine: myToken !== null && token.id === myToken.id,
+      walkPath: visibleWalk(token.id, map.width, visible, fullVision),
       down:
         token.kind === "pc" && (sheetsById.get(token.refId)?.currentHp ?? 1) <= 0,
       hidden: token.hidden,

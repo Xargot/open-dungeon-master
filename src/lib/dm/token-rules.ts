@@ -270,7 +270,7 @@ export function walkCharacter(
     return { error: `There is no room beside (${walk.at.x},${walk.at.y}) to set down the creature ${sheet.name} drags. Choose another square.`, retry: true };
   }
   const spent = walk.spent * factor + standCost;
-  moveToken(token.id, walk.at.x, walk.at.y, token.movedThisRound + (readied ? 0 : spent));
+  moveToken(token.id, walk.at.x, walk.at.y, token.movedThisRound + (readied ? 0 : spent), token.movement === "walk" ? [origin, ...walkedSquares] : undefined);
   // Moving ends One with Shadows' invisibility (one-with-shadows.ts).
   endShadowInvisibility(campaign.id, sheet.id, "moves");
   for (const entry of carried) {

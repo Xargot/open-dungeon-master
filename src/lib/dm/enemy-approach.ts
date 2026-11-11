@@ -254,7 +254,7 @@ export function approachTarget(
   }
   let provoked: string[] = [];
   if (!options.dryRun && (landing.x !== origin.x || landing.y !== origin.y)) {
-    moveToken(attacker.id, landing.x, landing.y, attacker.movedThisRound + cost);
+    moveToken(attacker.id, landing.x, landing.y, attacker.movedThisRound + cost, attacker.movement === "walk" ? [origin, ...walked] : undefined);
     publishEphemeral(campaign.id, "battle_map_updated", {});
     // Walking is walking: whoever it leaves behind gets their opportunity
     // attack, however it came to move, unless it Disengaged this turn: a

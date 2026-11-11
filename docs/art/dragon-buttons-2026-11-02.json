@@ -1,0 +1,14 @@
+{
+  "subject": "Original red and bronze fantasy dragon and gold button frame",
+  "source": "Generated from the owner's supplied button concept using OpenAI image generation on 2026-11-02; the reference was supplied for this local UI design.",
+  "prompts": {
+    "frame.png": "Create a transparent horizontal game UI frame with a red and bronze dragon resting on a gold border; no interior fill or lettering.",
+    "frame-empty.png": "Remove the dragon from the generated frame; retain the gold border and a transparent center.",
+    "dragon.png": "Create an isolated red and bronze flying dragon with a short golden ember trail on a transparent background."
+  },
+  "files": [
+    { "name": "frame.png", "width": 1774, "height": 887, "sha256": "e9c460ef160ca5bae2b16b54246fb7870a4921a81d19724cc104428ab856e02c" },
+    { "name": "frame-empty.png", "width": 1774, "height": 887, "sha256": "ce79b5314e13bab16b5d2768170959c84821f41bacfdc873c6b57a21e6cdc132" },
+    { "name": "dragon.png", "width": 1983, "height": 793, "sha256": "215e933c361bfd4d0ad7e4d42ce63ccf56bd9eeb03bd94a455733e88534801ba" }
+  ]
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import type { LucideIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -121,10 +121,12 @@ export function TableRow({
   panes,
   tabs,
   presentation,
+  panelCanCollapse = true,
 }: {
   seat: LayoutSeat;
   active: boolean;
   presentation?: "stage";
+  panelCanCollapse?: boolean;
   // Null has nothing to mount; available:false keeps content mounted but
   // out of the layout, so temporary absence never loses its state.
   panes: TablePane[];
@@ -136,6 +138,7 @@ export function TableRow({
   const session = useLayoutSession();
   // A drag in progress, drawn but not yet saved.
   const [draft, setDraft] = useState<TableLayout | null>(null);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
   const layout = draft ?? saved;
   const locked = layout.locked;
   const editing = active && session.editing && !locked;
@@ -148,6 +151,9 @@ export function TableRow({
     .map((pane) => pane.id)
     .join(" ");
   const available = useMemo(() => new Set(availableKey.split(" ").filter(Boolean) as PaneId[]), [availableKey]);
+  const sidePanes = presentation ? ORDER.filter((id) => available.has(id) && id !== "rail" && id !== "table" && id !== "tab:battle") : [];
+  const canCollapse = presentation === "stage" && panelCanCollapse && available.has("panel");
+  const collapsed = canCollapse && panelCollapsed;
   const geometry = useMemo(
     () => tableGeometry(layout, { width: size.width, height: size.height, available: (id) => available.has(id) }),
     [layout, size.width, size.height, available],
@@ -159,7 +165,7 @@ export function TableRow({
   const custom = active && measured && (editing || maximized !== null || !isDefaultShape(layout));
 
   const rects = custom ? placedRects(geometry, maximized) : NO_RECTS;
-  const shownKey = idsKey(custom ? rects.keys() : active && measured ? geometry.docked.map((pane) => pane.id) : available);
+  const shownKey = idsKey([...(custom ? rects.keys() : active && measured ? geometry.docked.map((pane) => pane.id) : available)].filter((id) => !collapsed || !sidePanes.includes(id)));
   const shown = useMemo(() => new Set(shownKey.split(" ").filter(Boolean) as PaneId[]), [shownKey]);
 
   const tabInfo = useMemo(() => new Map(tabs.map(([id, label, icon]) => [id, { label, icon }])), [tabs]);
@@ -409,7 +415,6 @@ export function TableRow({
 
   const nodes = new Map(panes.map((pane) => [pane.id, pane.node]));
   // Detached tabs keep their owners; the preset stacks them beside the table.
-  const sidePanes = presentation ? ORDER.filter((id) => available.has(id) && id !== "rail" && id !== "table" && id !== "tab:battle") : [];
   const legacySplits = active && measured && !custom && !locked;
   const drop = dropping?.target ? dropRect(geometry, dropping.target) : null;
 
@@ -434,6 +439,7 @@ export function TableRow({
           className="cine-row flex min-h-0 flex-1"
           data-tlay={custom ? "custom" : undefined}
           data-presentation={presentation}
+          data-panel-collapsed={collapsed ? "" : undefined}
           data-tlay-edit={editing ? "" : undefined}
           data-resizing={resizing ? "" : undefined}
           style={style as CSSProperties}
@@ -458,7 +464,7 @@ export function TableRow({
                 data-floating={custom && floating ? "" : undefined}
                 data-flash={flash?.id === id ? "" : undefined}
                 data-dragging={dropping?.id === id ? "" : undefined}
-                hidden={!available.has(id) || (custom && !rect)}
+                hidden={!available.has(id) || (custom && !rect) || (collapsed && sidePanes.includes(id))}
                 style={presentation && sidePanes.includes(id) ? { "--session-pane-top": `${100 * sidePanes.indexOf(id) / sidePanes.length}%`, "--session-pane-height": `${100 / sidePanes.length}%` } as CSSProperties : custom && rect ? { ...box(rect), zIndex: floating ? 10 + floatingIndex : undefined } : undefined}
                 onPointerDownCapture={
                   custom && floating && floatingIndex !== layout.floating.length - 1
@@ -481,6 +487,19 @@ export function TableRow({
               </div>
             );
           })}
+          {canCollapse ? (
+            <button
+              type="button"
+              className="session-panel-toggle"
+              data-native-board-occluder=""
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? "Expand side panel" : "Collapse side panel"}
+              title={collapsed ? "Expand side panel" : "Collapse side panel"}
+              onClick={() => setPanelCollapsed((value) => !value)}
+            >
+              {collapsed ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
+            </button>
+          ) : null}
           {custom && !maximized && !locked
             ? geometry.splits.map((split) => (
                 <Splitter

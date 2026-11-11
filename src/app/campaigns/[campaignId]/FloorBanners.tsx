@@ -65,6 +65,7 @@ export function FloorBanners({
         <SessionBanner
           glyph="attitude-hostile"
           tone="blood"
+          className="session-round-banner"
           title={<>Round {floor.round}</>}
           actions={
             myInitiativeTurn || steersStory ? (

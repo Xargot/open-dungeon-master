@@ -268,6 +268,7 @@ button:hover > .rail-glyph { filter: none; opacity: 1; }
   color: var(--banner-ink);
 }
 .session-banner[data-tone="blood"] { --banner-rim: rgba(185, 28, 28, 0.6); --banner-wash: rgba(185, 28, 28, 0.16); --banner-ink: var(--color-red-100); }
+.session-round-banner { width: fit-content; max-width: 100%; }
 .session-banner[data-tone="ember"] { --banner-rim: rgba(224, 112, 58, 0.55); --banner-wash: rgba(224, 112, 58, 0.12); }
 .session-banner[data-tone="quiet"] { --banner-rim: rgba(120, 113, 108, 0.45); --banner-wash: transparent; --banner-ink: var(--color-stone-400); }
 .session-banner-body { min-width: 0; flex: 1; }

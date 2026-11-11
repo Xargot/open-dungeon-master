@@ -1212,6 +1212,7 @@ export function SessionView({
         seat={layoutSeat}
         active={arranged && !sessionLayout}
         presentation={sessionLayout ? "stage" : undefined}
+        panelCanCollapse={!boardInPanel}
         tabs={panelTabs}
         panes={[
           {

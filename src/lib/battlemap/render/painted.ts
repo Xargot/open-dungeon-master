@@ -10,7 +10,10 @@
 // Browser only. Assets load through fetch, which the desktop and Android apps
 // already route to the host with the session token, so the same code paints
 // in a browser tab and in the apps' native screens.
-import { ODMRender, type RenderAssets } from "@/lib/battlemap/render/renderer.js";
+import { ODMRender, type RenderAssets, type SceneryPlacement } from "@/lib/battlemap/render/renderer.js";
+import type { PlayerMapView } from "@/lib/battlemap/view-types";
+import propCatalogue from "../../../../public/assets/props/manifest.json";
+import tileCatalogue from "../../../../public/assets/tiles/manifest.json";
 import { mapSkinKey, resolveSkin, type MapSkin, type Skin } from "@/lib/battlemap/skins";
 
 export type TileEntry = {
@@ -48,6 +51,8 @@ export type PaintRequest = {
   cell?: number;
   // Stamps the DM placed, drawn at full size over the dressing.
   stamps?: PaintStamp[];
+  scenery?: SceneryPlacement[];
+  sceneryKey?: string;
 };
 
 let manifests: Promise<Manifests | null> | null = null;
@@ -142,6 +147,29 @@ function seedOf(key: string): number {
   return (h >>> 0) % 100000;
 }
 
+const tileCategories = new Map(tileCatalogue.tiles.map(tile => [tile.id, tile.category]));
+let lastScenery: { key: string; placements: SceneryPlacement[] } | undefined;
+
+export function sceneryPropKey(view: PlayerMapView | null): string {
+  return (view?.tokens ?? []).filter(token => token.kind === "prop" && !token.hidden)
+    .map(({ x, y }) => [x, y].join(",")).sort().join(";");
+}
+
+export function boardScenery(view: PlayerMapView, genre: string | null | undefined, propKey = sceneryPropKey(view)): SceneryPlacement[] {
+  if (view.backdrop) return [];
+  const key = JSON.stringify([view.mapId, view.width, view.height, view.terrain, view.theme, genre, mapSkinKey(view.skin), propKey]);
+  if (lastScenery?.key === key) return lastScenery.placements;
+  const skin = resolveSkin(genre, view.theme, view.skin, tileCategories);
+  const rows = Array.from({ length: view.height }, (_, y) => view.terrain.slice(y * view.width, (y + 1) * view.width));
+  const reserved = propKey ? propKey.split(";").map(point => {
+    const [x, y] = point.split(",").map(Number);
+    return { x, y };
+  }) : [];
+  const placements = ODMRender.scenery(rows, skin, propCatalogue, seedOf(view.mapId), reserved, true, true);
+  lastScenery = { key, placements };
+  return placements;
+}
+
 // Pixels per square. The picture is stretched to the board by the SVG, so this
 // only sets its sharpness: enough for a zoomed board on a desktop, less on a
 // phone or under low effects, and never so large that a big map stalls a tab.
@@ -162,6 +190,7 @@ export function paintKey(request: PaintRequest): string {
     request.dressing === false ? "bare" : "",
     request.cell ?? "",
     (request.stamps ?? []).map((stamp) => `${stamp.x},${stamp.y},${stamp.id}`).join(";"),
+    request.sceneryKey ?? "",
     request.terrain,
   ].join("|");
 }
@@ -198,6 +227,7 @@ export async function paintCanvas(request: PaintRequest): Promise<HTMLCanvasElem
         quality: request.quality,
         ambient: "bright",
         props: stamps,
+        scenery: request.scenery,
       },
     },
     canvas,
