@@ -75,6 +75,14 @@ export const CONDITION_EFFECTS: ConditionEffectRow[] = [
     acBonus: 5,
   },
   {
+    // A unicorn's legendary action (SRD 5.1), laid by legendary-play.ts until
+    // the end of the unicorn's next turn.
+    id: "shimmering_shield",
+    match: ["shimmering shield"],
+    summary: "Shimmering Shield: +2 AC until the end of the unicorn's next turn.",
+    acBonus: 2,
+  },
+  {
     id: "mage_armor",
     match: ["mage armor"],
     summary: "Mage Armor: base AC 13 + DEX while wearing no armor.",
@@ -298,6 +306,15 @@ export const CONDITION_EFFECTS: ConditionEffectRow[] = [
     match: ["absorb elements"],
     summary:
       "Absorb Elements: resistance to the absorbed damage type (named in the condition) until the start of their next turn.",
+    paramResistance: true,
+  },
+  {
+    // SRD 5.1, Elemental Affinity: 1 sorcery point buys an hour's resistance
+    // to the dragon ancestor's damage type, named in the condition
+    // ("elemental affinity (fire)", src/lib/dm/draconic-spends.ts).
+    id: "elemental_affinity",
+    match: ["elemental affinity"],
+    summary: "Elemental Affinity: resistance to their dragon ancestor's damage type, or their chosen element's (named in the condition), for an hour.",
     paramResistance: true,
   },
   {
@@ -541,7 +558,7 @@ export const CONDITION_EFFECTS: ConditionEffectRow[] = [
     id: "swift_quiver",
     match: ["swift quiver"],
     summary:
-      "Swift Quiver: a bonus action makes two attacks with a weapon fed by the quiver (resolve each with pc_attack).",
+      "Swift Quiver: a bonus action makes two attacks with a weapon fed by the quiver (two entries in pc_attack's attacks, each with feature Swift Quiver).",
   },
   {
     id: "holy_weapon",

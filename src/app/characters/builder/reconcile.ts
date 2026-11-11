@@ -1,13 +1,16 @@
 import type { Ability } from "@/lib/schemas/sheet";
-import { classFeaturesFor, expertiseSlotsFor, racialTraitsFor, subclassLevelFor } from "@/lib/srd/features";
+import { classFeaturesFor, expertiseAllowed, expertiseSlotsFor, racialTraitsFor, subclassLevelFor } from "@/lib/srd/features";
 import { fightingStyleChoices, fightingStyleSlots, type FightingStyleId } from "@/lib/srd/feature-effects";
-import { findOptionByFeatureName, optionSlotsFor } from "@/lib/srd/options";
+import { findOptionByFeatureName, optionCost, optionSlotsFor } from "@/lib/srd/options";
+import { subclassChoicePickKept, subclassPickFeatures } from "@/lib/srd/subclass-choice-picks";
+import { parseSubclassChoicePick } from "@/lib/content/subclass-choices";
 import { innateCantripsFor, repeatedGrants } from "@/lib/srd/racial-grants";
 import { withSpeciesVariant } from "@/lib/content/species-variants";
 import { spellLevelOf } from "@/lib/srd/spell-lists";
 import { builderCasting } from "./casting";
 import { castingIndexOf } from "./multiclassBuild";
 import { multiclassGrantsFor } from "@/lib/srd/multiclass";
+import { subclassGrants } from "@/lib/srd/subclass-training";
 import { bonusLanguageCount, type BlockerTarget } from "./submit";
 import type { BackgroundOption, ClassOption, RaceOption } from "./useBuilderOptions";
 import { textKey } from "@/lib/language/text-logic";
@@ -60,6 +63,9 @@ export type ReconcileContext = {
   // The classes taken after the first, each with its row, its levels, its
   // subclass and the skills its multiclass grant let the player pick.
   extras?: ReadonlyArray<ReconcileExtra>;
+  // The ids a stored workshop subclass choice's picks keep, by the pick's
+  // name (useBuilderState pickIds): a pick its author renamed is kept.
+  pickIds?: Readonly<Record<string, string>>;
 };
 
 export type ReconcileExtra = { klass?: ClassOption; subclass: string; level: number; skills?: string[] };
@@ -144,7 +150,9 @@ export function grantingTrait(raceId: string, skillName: string): string | null 
 }
 
 export function reconcilePicks(
-  input: Partial<BuilderPicks>,
+  // featChoices is read, never written: the skills a feat or the subclass's
+  // training picked, which the class's expertise may double.
+  input: Partial<BuilderPicks> & { featChoices?: Readonly<Record<string, { skills?: string[] } | undefined>> },
   context: ReconcileContext,
 ): { picks: BuilderPicks; dropped: string[]; drops: DroppedPick[]; extraSkills: string[][] } {
   const { klass, background, level } = context;
@@ -324,13 +332,30 @@ export function reconcilePicks(
     ...extras.flatMap((entry) => (entry.klass ? [{ klass: entry.klass, subclass: entry.subclass, level: entry.level }] : [])),
   ];
   const expertiseSlots = classes.reduce((sum, entry) => sum + expertiseSlotsFor(entry.klass.id, entry.level), 0);
+  // Any skill proficiency takes the class's expertise (SRD 5.1, Bard and
+  // Rogue: "choose two of your skill proficiencies"): a Lore bard's college
+  // skills and a feat's picks too, and a subclass's own. Read from the class
+  // and background alone, a Lore bard's pick on its college skill was
+  // dropped as the wizard moved on.
+  const expertiseOn = new Set([
+    ...proficient,
+    ...Object.values(input.featChoices ?? {}).flatMap((choice) => choice?.skills ?? []).map(textKey),
+    ...subclassGrants(classes.map((entry) => ({ id: entry.klass.id, level: entry.level, subclass: entry.subclass }))).flatMap((grant) => grant.spec.fixedSkills).map(textKey),
+  ]);
+  // And a rogue's thieves' tools (SRD 5.1, Rogue, Expertise: "or one of
+  // your skill proficiencies and your proficiency with thieves' tools"),
+  // which the class step offers: dropped here, a rogue who took it lost it
+  // on any change and could not be saved ("pick 1 more").
+  const classIds = classes.map((entry) => entry.klass.id);
   const expertisePicks = klass
-    ? unique(picks.expertisePicks.filter((skill) => proficient.has(textKey(skill)))).slice(0, expertiseSlots)
+    ? unique(picks.expertisePicks.filter((skill) => expertiseOn.has(textKey(skill)) || expertiseAllowed(skill, [], classIds))).slice(0, expertiseSlots)
     : [];
   note("expertise", "expertise", picks.expertisePicks, expertisePicks);
 
   const featuresOf = classes.map((entry) => classFeaturesFor(entry.klass.id, entry.subclass, entry.level));
-  const features = featuresOf.flat();
+  // Each with the class that grants it: a paladin's and a ranger's Fighting
+  // Style offer their own four styles (feature-effects.ts fightingStyleChoices).
+  const features = featuresOf.flatMap((list, index) => list.map((feature) => ({ ...feature, classId: classes[index].klass.id })));
   // Only the styles the slots allow (a Swords bard: Dueling or Two-Weapon
   // Fighting); a pick may name the style rather than its id.
   const allowedStyles = new Set(fightingStyleChoices(features).flatMap((style) => [style.id, textKey(style.name)]));
@@ -338,8 +363,21 @@ export function reconcilePicks(
   note("fighting style", "styles", picks.stylePicks, stylePicks);
 
   const perKind = new Map<string, number>();
+  // A workshop subclass's own choice: one pick each, while a class's
+  // subclass offers it at its level (issue #833).
+  const choicesTaken = new Set<string>();
+  const choiceClasses = classes.map((entry) => ({ id: entry.klass.id, subclass: entry.subclass, level: entry.level }));
   const optionPicks = unique(picks.optionPicks).filter((featureName) => {
+    const [pick] = subclassPickFeatures([featureName], context.pickIds);
+    const workshop = subclassChoicePickKept(pick, choiceClasses, undefined, choicesTaken);
+    if (workshop !== undefined) {
+      return workshop !== null;
+    }
     const option = findOptionByFeatureName(featureName);
+    if (!option && parseSubclassChoicePick(featureName)) {
+      // A subclass table not fetched yet: the server holds the pick to it.
+      return true;
+    }
     if (!option || !klass) {
       return false;
     }
@@ -348,10 +386,11 @@ export function reconcilePicks(
       (sum, entry, index) => sum + optionSlotsFor(entry.klass.id, entry.subclass, entry.level, option.k, featuresOf[index]),
       0,
     );
-    if (taken >= slots) {
+    // A favored enemy's humanoid race is half a pick (options.ts optionCost).
+    if (taken + optionCost(option) > slots) {
       return false;
     }
-    perKind.set(option.k, taken + 1);
+    perKind.set(option.k, taken + optionCost(option));
     return true;
   });
   note("class option", "options", picks.optionPicks, optionPicks);

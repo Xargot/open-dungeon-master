@@ -31,7 +31,22 @@ export const READING_KINDS = ["spell", "monster", "feat", "race", "class", "back
 //   2: an SRD entry reads as checked (the SRD 5.1 text audit).
 //   3: the SRD 5.1 text audit's fixes changed spell and monster readings
 //      (spells read as hand-written rows, corrected monster blocks).
-export const READER_REVISION = 3;
+//   4: Mass Heal's note names heal's targets, one entry per creature (PR
+//      749); a pack's stored "one heal call per creature" sent the model to a
+//      call, and a slot, per creature out of a fight.
+//   5: issue 685's monster reader keeps each legendary option's whole line
+//      (fullLegendary) and reads a Swallow as the attack it is.
+//   6: the monster reader takes a poisoned hit's sleep (a couatl's bite, a
+//      drow's bolt) and the second condition a hit's failed save lays.
+//   7: Witch Bolt's reading carries the beam's damage on later turns (PR 821).
+//   8: Symbol reads as the hand-written row of a glyph the GM fires later, each
+//      glyph with its own save; the prose reader mixed the Death glyph's save
+//      and dice with the Fear glyph's frightened.
+//   9: Aura of Vitality, Compulsion, Compelled Duel and Grasping Vine read as
+//      hand-written rows (the Hand's rules helpers), and Armor of Agathys,
+//      Crown of Stars, Elemental Weapon, Flame Arrows, Gift of Alacrity, Holy
+//      Weapon and Intellect Fortress last the duration their line says.
+export const READER_REVISION = 9;
 export type ReadingKind = (typeof READING_KINDS)[number];
 export type ReadingSource = "hand-written" | "parsed" | "missing";
 

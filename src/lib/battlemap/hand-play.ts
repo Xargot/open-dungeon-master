@@ -5,8 +5,10 @@
 import { READIED_WORDS, type Readiable } from "@/lib/dm/readied-kinds";
 import { ACTION_SURGED, spendAction, spendAttack } from "@/lib/dm/action-budget";
 import { BONUS_SPELL, LEVELLED_SPELL } from "@/lib/dm/cast-rules";
-import { attackContext, mergeAdvantage } from "@/lib/dm/condition-logic";
-import { asPercent, attackOdds, averageDetail } from "@/lib/srd/odds";
+import type { PastSight } from "@/lib/dm/condition-logic";
+import { asPercent, averageDetail } from "@/lib/srd/odds";
+import type { TargetSight } from "@/lib/battlemap/view-tactics";
+import { attackOddsWithDice, previewAdvantage } from "@/lib/battlemap/hand-odds";
 import { weaponNamed } from "@/lib/srd/weapons";
 import {
   budgetOf,
@@ -21,6 +23,7 @@ import { areaArgs, describePick, hasPick, type AreaPick, type HandArea } from "@
 import type { HandShare } from "@/lib/battlemap/hand-intent";
 import { textKey } from "@/lib/language/text-logic";
 import { grantedRideMark } from "@/lib/battlemap/hand-granted";
+import { summonIntent, summonReady, summonWords, type SummonChoices } from "@/lib/battlemap/hand-summon";
 import type { BoardControlId, BoardPanel } from "@/lib/addons/board-bridge";
 
 // Who a card is aimed at. `ac` only ever arrives in the DM's projection; a
@@ -35,7 +38,11 @@ export type HandAim = {
   ac?: number;
   cr?: number;
   conditions?: string[];
-  edge?: { cover: 0 | 2 | 5; flanking: boolean; adjacent: boolean; blocked?: boolean; hostileBeside?: boolean };
+  edge?: { cover: 0 | 2 | 5; flanking: boolean; adjacent: boolean; blocked?: boolean; hostileBeside?: boolean; feet?: number; senses?: { attacker: PastSight; target: PastSight } };
+  // Sight as the roll reads it against this creature (PlayerMapView.sight).
+  sight?: TargetSight;
+  // The attacker's features that give advantage against it (hand-edge.ts).
+  advantage?: string[];
 };
 
 // What the player chose on the raised card beyond its target.
@@ -44,6 +51,11 @@ export type HandChoices = {
   trigger?: string;
   // The card's one pick (HandCard.choice): a spell's form, a readied spell.
   choice?: string;
+  // How many a summoning card brings of the creature picked, the kind it is
+  // (Find Steed's fey), and a per-target spell's forms (HandCard.summon).
+  count?: number;
+  kind?: string;
+  mix?: Record<string, number>;
   // Where an area spell is laid (HandCard.area), picked on the board.
   area?: AreaPick;
   // The darts, rays or creatures given to creatures beside the one aimed at
@@ -98,9 +110,33 @@ export function sharePhrase(card: HandCard, list: HandShare[]): string {
   return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0] ?? "";
 }
 
+// Why a sight-bound card (HandCard.sight) cannot be aimed at this creature,
+// or null: the board's verdict on the engine's own gate (view-tactics.ts
+// TargetSight.unseen / unseenBy, which is authored-saves.ts unseenBecause,
+// the call use_resource refuses by). One answer for the aim bar and the play,
+// so the Hand never offers an invisible foe's chip the engine then refuses.
+export function aimUnseen(card: HandCard, aim: Pick<HandAim, "kind" | "sight"> | null): string | null {
+  if (!card.sight || aim?.kind !== "enemy") return null;
+  return (card.sight === "seesHolder" ? aim.sight?.unseenBy : aim.sight?.unseen) ?? null;
+}
+
+// The chips a raised card offers among those given: a sight-bound card leaves
+// out the creatures its holder cannot see (aimUnseen).
+export function seenChips<T extends Pick<HandAim, "kind" | "sight">>(card: HandCard, chips: T[]): T[] {
+  return card.sight ? chips.filter((chip) => !aimUnseen(card, chip)) : chips;
+}
+
 export function handReady(card: HandCard, aim: HandAim | null, choices: HandChoices = {}): boolean {
   return (!(card.target === "enemy" || card.target === "ally") || aim !== null || hasPick(card.area, choices.area ?? {}))
-    && (card.asks !== "trigger" || Boolean(choices.trigger?.trim()));
+    && !aimUnseen(card, aim)
+    && (card.asks !== "trigger" || Boolean(choices.trigger?.trim()))
+    // A summoning card goes with its creature picked (hand-summon.ts).
+    && (!card.summon || summonReady(card, summonChoicesOf(card, choices)));
+}
+
+// A summoning card's picks, as hand-summon.ts reads them.
+function summonChoicesOf(card: HandCard, choices: HandChoices): SummonChoices {
+  return { form: chosenValue(card, choices), count: choices.count, kind: choices.kind, mix: choices.mix };
 }
 
 // The value a card's pick sends: the player's, else the card's fallback,
@@ -114,8 +150,12 @@ export function chosenValue(card: HandCard, choices: HandChoices = {}): string |
 }
 
 function chosenLabel(card: HandCard, choices: HandChoices): string | null {
+  // A per-target summoning names its forms, with no one creature picked.
+  if (card.summon?.mix) return summonWords(card, summonChoicesOf(card, choices));
   const value = chosenValue(card, choices);
   if (!value) return null;
+  // A summoning card's creature with its number: "Wolf, 8 of them".
+  if (card.summon) return summonWords(card, summonChoicesOf(card, choices));
   return card.choice?.options.find((option) => option.value === value)?.label ?? value;
 }
 
@@ -145,6 +185,8 @@ const COST_LABEL: Record<HandCost, string> = {
   reaction: "Reaction",
   rider: "Rider",
   free: "Free",
+  legendary: "Legendary action",
+  lair: "Lair action",
 };
 
 export function costLabel(cost: HandCost): string {
@@ -175,55 +217,49 @@ export function previewRows(
   if (card.save) {
     rows.push({ key: "Save", value: card.save.dc ? `${card.save.ability} save vs DC ${card.save.dc}` : `${card.save.ability} save`, tone: "save" });
   } else if (card.toHit !== null) {
-    const bonus = card.toHit >= 0 ? `+${card.toHit}` : `${card.toHit}`;
+    const bonus = `${card.toHit >= 0 ? `+${card.toHit}` : `${card.toHit}`}${card.toHitDice ?? ""}`;
     const enemy = aim && aim.kind === "enemy" ? aim : null;
     const known = enemy?.ac;
     const base = known ?? (enemy?.cr !== undefined ? typicalAcForCr(enemy.cr) : null);
     if (base === null) {
       rows.push({ key: "To hit", value: bonus, tone: "plain" });
     } else {
-      // The board's verdict, when there is one: how far apart, whether the
-      // line gives cover (+2, +5), whether an ally flanks with you.
       const edge = enemy?.edge;
-      const adjacent = edge ? edge.adjacent : card.melee;
-      const context = attackContext({
-        attackerConditions,
-        targetConditions: enemy?.conditions ?? [],
-        melee: card.melee,
-        adjacent,
-        requested: "none",
-      });
-      const sources = [...context.sources];
-      if (edge?.flanking && card.melee) sources.push("advantage");
-      if (choices.options?.includes("reckless")) sources.push("advantage");
-      if (choices.options?.includes("useInspiration")) sources.push("advantage");
-      // A ranged attack with a hostile creature beside the attacker is at
-      // disadvantage; the board says whether one is.
-      if (edge?.hostileBeside && !card.melee) sources.push("disadvantage");
-      const advantage = mergeAdvantage(sources);
+      const { advantage, melee, range } = previewAdvantage(card, enemy, attackerConditions, choices);
       const cover = edge?.cover ?? 0;
       const ac = base + cover;
-      const odds = attackOdds({ attackBonus: card.toHit, ac, advantage });
+      const odds = attackOddsWithDice({ attackBonus: card.toHit, dice: card.toHitDice ?? "", ac, advantage });
       const mark = advantage === "none" ? "" : ` · ${advantage}`;
       rows.push({
         key: "To hit",
         value: edge?.blocked
           ? "no line to it (total cover)"
-          : `${bonus} vs AC ${known === undefined ? "~" : ""}${ac} · ${asPercent(odds.hit)}${mark}`,
+          : range === "beyond"
+            ? `out of range (${edge?.feet} ft, it reaches ${card.shot?.longFt} ft)`
+            : `${bonus} vs AC ${known === undefined ? "~" : ""}${ac} · ${asPercent(odds.hit)}${mark}`,
         tone: "plain",
       });
+      if (range === "long" && !edge?.blocked) {
+        rows.push({ key: "Range", value: `${edge?.feet} ft, past ${card.shot?.normalFt}: disadvantage`, tone: "muted" });
+      }
       if (cover && !edge?.blocked) {
         rows.push({ key: "Cover", value: `${cover === 2 ? "half" : "three-quarters"} +${cover} AC`, tone: "muted" });
       }
-      if (edge?.flanking && card.melee) {
+      if (edge?.flanking && melee) {
         rows.push({ key: "Flanking", value: "an ally opposite: advantage", tone: "muted" });
+      }
+      if (enemy?.advantage?.length) {
+        rows.push({ key: "Advantage", value: enemy.advantage.join(", "), tone: "muted" });
       }
     }
   } else if (card.roll) {
     rows.push({ key: "Roll", value: card.roll, tone: "muted" });
   }
-  if (card.damageType) rows.push({ key: "Type", value: card.damageType, tone: "muted" });
+  if (card.damageType) rows.push({ key: "Type", value: card.secondType ? `${card.damageType} and ${card.secondType}` : card.damageType, tone: "muted" });
   if (card.condition) rows.push({ key: "Applies", value: card.condition, tone: "applies" });
+  // What a summoning card brings, once its creature is picked.
+  const brings = card.summon ? chosenLabel(card, choices) : null;
+  if (brings) rows.push({ key: "Brings", value: brings, tone: "plain" });
   rows.push({ key: "Cost", value: card.resource ? `${costLabel(card.cost)} · ${card.resource}` : costLabel(card.cost), tone: "cost", cost: card.cost });
   return rows;
 }
@@ -279,6 +315,7 @@ export function composeSentence(
   }
   if (intent.card === "reaction") {
     const at = !who ? "" : aim?.kind === "enemy" ? ` at ${who}` : ` for ${who}`;
+    if (intent.spell && intent.item) return `I cast ${intent.spell} from my ${intent.item}${at} as a reaction.`;
     return intent.spell
       ? `I cast ${intent.spell}${at} as a reaction${intent.slotLevel && intent.slotLevel > 1 ? ` using a level ${intent.slotLevel} slot` : ""}.`
       : `I use ${intent.feature}${at} as my reaction.`;
@@ -288,15 +325,19 @@ export function composeSentence(
     const shared = shareList(card, aim, choices);
     const named = shared.length > 1 || (shared.length === 1 && shared[0].count > 1) ? sharePhrase(card, shared) : who;
     const where = !named ? "" : aim?.kind === "enemy" ? ` at ${named}` : ` on ${named}`;
-    const slot = intent.slotLevel ? ` using a level ${intent.slotLevel} slot` : "";
+    const slot = intent.item ? "" : intent.slotLevel ? ` using a level ${intent.slotLevel} slot` : "";
+    const ring = intent.item ? ` from my ${intent.item}` : "";
     const how = card.cost === "bonus" ? " as a bonus action" : card.cost === "reaction" ? " as a reaction" : "";
     const picked = chosenLabel(card, choices);
     // The square the player picked on the board, in the engine's (x,y).
     const laid = card.area && hasPick(card.area, choices.area) ? ` ${describePick(card.area, choices.area ?? {})}` : "";
-    return `I cast ${intent.spell}${picked ? ` (${picked})` : ""}${where}${laid}${how}${slot}.`;
+    return `I cast ${intent.spell}${ring}${picked ? ` (${picked})` : ""}${where}${laid}${how}${slot}.`;
   }
   if (intent.card === "feature") {
-    const where = !who || aim?.kind === "self" ? "" : ` on ${who}`;
+    // The creatures of the player's choice, every one named (CHOSEN_CREATURES).
+    const shared = shareList(card, aim, choices);
+    const chosen = shared.length > 1 ? sharePhrase(card, shared) : who;
+    const where = !chosen || aim?.kind === "self" ? "" : ` on ${chosen}`;
     const how = card.cost === "bonus" ? " as a bonus action" : "";
     // A pool is spent by amount; the blank is where the player says how much.
     const picked = chosenLabel(card, choices);
@@ -398,14 +439,23 @@ export function intentBody(
       return [key, value ?? true];
     }),
   );
+  // Divine Smite's slot rides with the swing under pc_attack's own `smite`
+  // (issue 685), so the engine takes the attack and the smite in one call;
+  // the riders list below names the card and no more.
+  const smiting = riders.find((rider) => rider.intent.card === "rider" && rider.intent.rider === "Divine Smite")?.intent;
+  const smite = smiting?.card === "rider" ? smiting.slotLevel : undefined;
   const attack =
-    card.intent.card === "attack" && (chosen.length || card.intent.attack)
-      ? { attack: { ...card.intent.attack, ...args } }
+    card.intent.card === "attack" && (chosen.length || card.intent.attack || smite)
+      ? { attack: { ...card.intent.attack, ...args, ...(smite ? { smite } : {}) } }
       : {};
   const trigger = card.asks === "trigger" && choices.trigger?.trim() ? { trigger: choices.trigger.trim() } : {};
   const value = chosenValue(card, choices);
   const pick =
-    !value || !card.choice
+    // A summoning card's creature, kind, number or forms (issue 685), under
+    // cast_buff's own names.
+    card.summon
+      ? summonIntent(card, summonChoicesOf(card, choices))
+      : !value || !card.choice
       ? {}
       : card.choice.arg === "readySpell"
         ? value.startsWith("@")
@@ -491,7 +541,8 @@ export function afterCommit(turn: HandTurn, card: HandCard, allowed = 1): HandTu
   }
   // The cast guard's marks (cast-rules.ts turnCharge): a bonus-action spell,
   // or a levelled spell with the action, leaves room for a cantrip only.
-  if (card.intent.card === "spell" && (card.cost === "action" || card.cost === "bonus")) {
+  // A spell out of a ring leaves neither: use_item spends the action alone.
+  if (card.intent.card === "spell" && !card.intent.item && (card.cost === "action" || card.cost === "bonus")) {
     const mark = card.cost === "bonus" ? BONUS_SPELL : card.resource !== "Cantrip" ? LEVELLED_SPELL : null;
     if (mark && !(next.marks ?? []).includes(mark)) next.marks = [...(next.marks ?? []), mark];
   }

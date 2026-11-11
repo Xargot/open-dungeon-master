@@ -247,12 +247,16 @@ html[data-effects="low"] .board-view:focus > .board-keys-strip { animation-name:
 .board-eyebrow {
   font-family: var(--font-display), Georgia, serif;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.14em;
   font-size: 9px;
   font-weight: 600;
   color: rgba(212, 171, 58, 0.85);
   text-shadow: 0 1px 3px rgba(4, 2, 12, 0.9);
 }
+
+/* Off the board the label stands on the panel, which is parchment by day. The
+   enlarged tabletop is a dialog outside the panel and keeps its night table. */
+html[data-theme="light"] .board-panel .board-order-above .board-eyebrow { color: #7a5408; text-shadow: none; }
 
 /* The tap-a-figure menu wears the Dial's sigil styling. */
 .token-sigil {

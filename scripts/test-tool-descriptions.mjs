@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { openWorld } from "./lib/enforce-world.mjs";
 
 const world = await openWorld();
-const { compactTool, moreToolsTool, TOOL_GROUPS } = await import("../src/lib/dm/tool-profiles.ts");
+const { compactTool, moreToolsTool, TOOL_GROUPS, COMPACT_OMITS } = await import("../src/lib/dm/tool-profiles.ts");
 const { dmTurnTools } = await import("../src/lib/dm/turn.ts");
 const { readCardTool } = await import("../src/lib/dm/prep-card-tool.ts");
 const { runPreparedEncounterTool } = await import("../src/lib/dm/prepared-encounter-tool.ts");
@@ -41,6 +41,8 @@ function descriptions(tool) {
   const found = [[tool.function.name, tool.function.description, compact.function.description]];
   const walk = (full, cut, path) => {
     if (!full || typeof full !== "object") return;
+    // An argument the compact set leaves off (tool-profiles.ts COMPACT_OMITS) has no cut to read.
+    if (!cut && COMPACT_OMITS[tool.function.name]?.includes(path.split(".").at(-1))) return;
     for (const key of Object.keys(full)) {
       if (key === "description" && typeof full[key] === "string") found.push([path, full[key], cut[key]]);
       else walk(full[key], cut[key], key === "properties" ? path : key === "items" ? path : `${path}.${key}`);
@@ -57,10 +59,36 @@ const field = (toolName, name) => {
   return hit;
 };
 
+// The cut keeps what a meal is; the rest of the sentence-by-sentence rule
+// ("no meal in the story, no meal here") reads in the full profile and the
+// variant's own line.
+test("a meal's compact description stands alone, the same in all three tools", () => {
+  const cuts = ["pass_time", "travel", "take_rest"].map((name) => field(name, "meal"));
+  for (const entry of cuts) {
+    assert.match(entry.cut, /^Food and drink .*\.$/);
+    assert.ok(!entry.cut.endsWith("..."), entry.cut);
+    assert.match(entry.full, /no meal in the story, no meal here/);
+    assert.equal(entry.full, cuts[0].full);
+  }
+});
+
 test("a compact description is a whole sentence", () => {
   assert.ok(byName.size > 80, `the whole set is covered (${byName.size} tools)`);
   const cut = all.filter((entry) => entry.cut.endsWith("..."));
   assert.deepEqual(cut.map((entry) => `${entry.path}: ${entry.cut}`), [], "descriptions the compact profile cuts mid-sentence");
+});
+
+// OpenAI's Chat Completions refuses a function description past 1,024
+// characters ("string too long. Expected a string with maximum length
+// 1024"), and the hosts that copy its validation do too. more_tools joined
+// every closed group's summary into its own and ran to 1,609 with every
+// group closed (gap sweep 2026-11-09).
+test("every function description, full and compact, more_tools with every group closed, is within 1,024 characters", () => {
+  const over = [...byName.values()]
+    .flatMap((tool) => [tool, compactTool(tool)])
+    .filter((tool) => (tool.function.description ?? "").length > 1_024)
+    .map((tool) => `${tool.function.name}: ${tool.function.description.length}`);
+  assert.deepEqual(over, []);
 });
 
 test("a compact description is a sentence the cut did not break", () => {
@@ -101,17 +129,15 @@ const MUST_KEEP = {
   "reveal_item.srdName": [/English/, /SRD or pack/, /omit/i],
   "set_condition.magical": [/magic/, /Fey Ancestry/],
   "declare_intent.kind": [/\bmove\b/],
-  "use_resource.variant": [/flurry of blows/, /patient defense/, /step of the wind/],
+  "use_resource.variant": [/patient defense/, /step of the wind/],
   "apply_hazard.rank": [/'front'/, /'rear'/],
   "start_encounter.ambush": [/'enemies'/, /'party'/],
   "start_encounter.from": [/'ahead'/, /'behind'/],
   "cast_at_enemy.variant": [/Polymorph/, /beast/, /any creature/],
-  "pc_attack.bonusAttack": [/martial arts/, /frenzy/, /feature/, /unarmed strike/],
+  "pc_attack.attacks.feature": [/feature/, /by name/, /omit/],
   "update_sheet": [/never a level/, /heal/, /modify_gold/, /set_condition/],
-  "pc_attack.whirlwind": [/Whirlwind/, /whirlwind true/],
-  "pc_attack.volley": [/Volley/, /volley true/],
   "request_roll.targetEnemyId": [/enemyId/, /no sheet/],
-  "purchase.srdName": [/Only when/, /English/],
+  "purchase.srdName": [/English/, /other words/],
   "modify_gold.delta": [/gold/, /negative/],
   "apply_damage.source": [/Required on an enemy/, /'hazard'/, /'environment'/],
   set_condition: [/duration/],
@@ -124,8 +150,8 @@ const MUST_KEEP = {
 
 test("what the engine reads survives the compact cut", () => {
   for (const [path, facts] of Object.entries(MUST_KEEP)) {
-    const [toolName, name] = path.split(".");
-    const { cut } = field(toolName, name);
+    const [toolName, ...name] = path.split(".");
+    const { cut } = field(toolName, name.length ? name.join(".") : undefined);
     for (const fact of facts) assert.match(cut, fact, `${path} keeps ${fact}: ${cut}`);
   }
 });
@@ -142,7 +168,8 @@ test("a field several tools share reads the same in each", () => {
     creature: ["request_roll", "group_check"],
     coins: ["modify_gold", "party_stash"],
     water: ["travel", "pass_time"],
-    improvised: ["pc_attack", "damage_object"],
+    // A list's entries are read at their path (pc_attack.attacks.weapon).
+    improvised: ["pc_attack.attacks", "damage_object"],
   };
   for (const [name, tools] of Object.entries(SHARED)) {
     const [first, ...rest] = tools.map((tool) => field(tool, name));

@@ -5,9 +5,11 @@ import { preparedFit } from "@/lib/dm/prepared-fit";
 import { resolveEnemyRequests } from "@/lib/dm/encounter-spawn";
 import { resolveMonster } from "@/lib/bestiary";
 import { invokeEngine } from "@/lib/dm/invoke";
-import type { EncounterTemplate } from "@/lib/db/encounter-templates";
+import { getTemplateSetup, type EncounterTemplate } from "@/lib/db/encounter-templates";
+import { layFightSetup } from "@/lib/workshop/fight-setup";
 import { applyTemplateExtras, applyTemplateMap } from "@/lib/dm/template-apply";
 import { rosterSummary, type TemplateEnemy } from "@/lib/dm/encounter-template-logic";
+import { preparedOpening, type OpeningOptions } from "@/lib/dm/fight-opening";
 
 // What a prepared encounter is worth, and what happens when the DM deploys
 // it. Both answers come from the engine that already owns them: the same
@@ -99,23 +101,21 @@ export type DeployOutcome =
 // Deploying is not a second way to start a fight. It fills in the same form
 // the console offers and pushes it through the same façade, so every refusal
 // the engine already makes (a fight is running, too deadly, unknown monster)
-// still happens and still says the same thing.
+// still happens and still says the same thing. The GM says what the
+// console's Start a fight form says as it opens (fight-opening.ts): sent only
+// the roster, the summary and the fight's own ground, a GM who deployed it
+// could not leave an away hero out or catch the foes by surprise.
 export async function deployTemplate(
   campaign: Campaign,
   userId: string,
   template: EncounterTemplate,
+  options: OpeningOptions = {},
 ): Promise<DeployOutcome> {
+  const opening = preparedOpening(template, template.enemies, options);
   const outcome = await invokeEngine(
     campaign,
     { kind: "human", userId },
-    {
-      name: "start_encounter",
-      args: {
-        enemies: template.enemies,
-        summary: template.notes.split("\n")[0]?.slice(0, 200) ?? "",
-        ...(template.map.scene ? { scene: template.map.scene } : {}),
-      },
-    },
+    { name: "start_encounter", args: opening.args },
   );
   if (!outcome.ok) {
     return { ok: false, error: outcome.error };
@@ -129,7 +129,14 @@ export async function deployTemplate(
   // The rest of the plan lands on whatever board the fight ended up with:
   // where each enemy starts, who is hidden, the overrides, and the note.
   applyTemplateExtras(campaign, userId, template);
-  return mapError
-    ? { ok: true, result: outcome.result, mapError }
-    : { ok: true, result: outcome.result };
+  // A set-up saved from a test of it: the foes as the moment left them
+  // (issue 685). The party's part is a test table's alone.
+  const setup = getTemplateSetup(template.id);
+  if (setup) {
+    layFightSetup(campaign, template, setup);
+  }
+  const result = opening.buildingLeftOut
+    ? { ...outcome.result, building: "No building was drawn: this prepared fight lays out its own saved map and positions." }
+    : outcome.result;
+  return mapError ? { ok: true, result, mapError } : { ok: true, result };
 }

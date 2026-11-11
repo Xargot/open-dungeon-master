@@ -32,6 +32,7 @@ import { tilesApart } from "@/lib/dm/board-reach";
 
 import { spendAction } from "@/lib/dm/action-budget";
 import { canAct } from "@/lib/dm/can-act";
+import { heldTurnRefusal } from "@/lib/dm/held-turn";
 import { readiedReleaseFor } from "@/lib/dm/readied-release";
 import type { ConditionMetaMap } from "@/lib/dm/condition-logic";
 import { applyEnemyDamage, publishEncounter, resolveEnemyRef } from "@/lib/dm/enemy-damage";
@@ -63,9 +64,11 @@ export function priceTheAction(
   sheet: CharacterSheet,
   encounter: Encounter | null,
   what: string,
+  // A feature that takes the bonus action (Dragon Wings) prices that one.
+  kind: "action" | "bonus" = "action",
 ): { commit: () => void } | ToolError {
   // Off their turn, a feature they readied: their reaction (readied-release.ts).
-  const readied = readiedReleaseFor(sheet, encounter, "feature");
+  const readied = kind === "action" ? readiedReleaseFor(sheet, encounter, "feature") : null;
   if (readied && "error" in readied) {
     return toolError(readied);
   }
@@ -76,16 +79,20 @@ export function priceTheAction(
       },
     };
   }
-  const able = canAct({ sheet, encounter, kind: "action" });
+  const able = canAct({ sheet, encounter, kind });
   if (!able.ok) {
     return toolError(able);
+  }
+  const heldOff = heldTurnRefusal(encounter, sheet);
+  if (heldOff) {
+    return heldOff;
   }
   const fight = encounter && (encounter.kind ?? "fight") === "fight" ? encounter : null;
   const budget = fight ? budgetFor(fight, sheet.id, attacksAllowedFor(sheet), conditionTurnShape(sheet.conditions)) : null;
   if (!fight || !budget) {
     return { commit: () => {} };
   }
-  const spent = spendAction(budget, "action", what, sheet.name);
+  const spent = spendAction(budget, kind, what, sheet.name);
   if (!spent.ok) {
     return toolError(spent);
   }

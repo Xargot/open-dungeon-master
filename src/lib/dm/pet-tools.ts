@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { recordTrigger } from "@/lib/dm/last-save";
 import { resolveTargetFoe } from "@/lib/dm/sheet-foe";
 import { allocateSeq, type Campaign } from "@/lib/db/campaigns";
 import { getActiveEncounter } from "@/lib/db/encounters";
@@ -20,8 +21,11 @@ import { critDamageExpression } from "@/lib/dm/encounter-logic";
 import { naturalAttackProfile, pickNaturalAttack } from "@/lib/dm/natural-attack";
 import { landNaturalOnHit } from "@/lib/dm/natural-onhit";
 import { landBlow } from "@/lib/dm/pc-attack-damage";
-import { noneNamed, toolError, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
-import { buildPet, defenseWords, DRAKE_ESSENCES } from "@/lib/dm/pet-build";
+import { badArguments, noneNamed, toolError, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { swallowCoverError } from "@/lib/dm/swallow";
+import { buildPet, defenseWords, DRAKE_ESSENCES, petCreatureType } from "@/lib/dm/pet-build";
+import { conditionIncomingAttackState } from "@/lib/srd/condition-effects";
+import { mergeAdvantage } from "@/lib/dm/condition-logic";
 import { damageAdjust } from "@/lib/dm/damage-logic";
 import { findTableMonster } from "@/lib/bestiary/homebrew-monsters";
 import { spellAuthorsFor } from "@/lib/dm/spell-authors";
@@ -59,6 +63,11 @@ export const petTools: ToolDef[] = [
           kind: { type: "string", enum: ["familiar", "beast_companion", "drake", "other"] },
           form: { type: "string", description: "The creature ('owl', 'wolf', 'drake'); for a story pet its stat block's name when it has one." },
           name: { type: "string", description: "The pet's given name. Default: the form." },
+          creatureType: {
+            type: "string",
+            enum: ["celestial", "fey", "fiend"],
+            description: "kind=familiar only, instead of beast. Default: celestial.",
+          },
           essence: {
             type: "string",
             enum: [...DRAKE_ESSENCES],
@@ -117,6 +126,7 @@ const summonSchema = z.object({
   kind: z.enum(["familiar", "beast_companion", "drake", "other"]),
   form: z.string().trim().min(1).max(60),
   name: z.string().trim().max(60).optional(),
+  creatureType: z.enum(["celestial", "fey", "fiend"]).optional(),
   essence: z.string().trim().max(20).optional(),
   hp: z.coerce.number().int().min(1).max(300).optional(),
   ac: z.coerce.number().int().min(1).max(30).optional(),
@@ -165,7 +175,8 @@ function noPet(sheet: CharacterSheet, petName?: string): ToolError {
 
 // The creature a call names, by its whole name or form; with no name, the
 // only one there is. Never the nearest name, nor the first of several.
-function findPet(sheet: CharacterSheet, petName?: string): SheetPet | null {
+// A watch stop names the pet the same way (foresight-saves.ts).
+export function findPet(sheet: CharacterSheet, petName?: string): SheetPet | null {
   const wanted = textKey(petName ?? "");
   if (!wanted) {
     return sheet.pets.length === 1 ? sheet.pets[0] : null;
@@ -192,8 +203,8 @@ export function handleSummonPet(
   let args: z.infer<typeof summonSchema>;
   try {
     args = summonSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: summon_pet needs characterId, kind, and form.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: summon_pet needs characterId, kind, and form.", error, rawArguments);
   }
   const stale = resolveSheetRef(args.characterId, sheets, sheetsById);
   const sheet = stale ? (getSheetById(stale.id) ?? stale) : null;
@@ -217,7 +228,7 @@ export function handleSummonPet(
   publishSheet(campaign, sheet.id);
   return {
     ok: true,
-    pet: `${built.name} (${built.form}): ${built.hp} HP, AC ${built.ac}, speed ${built.speed} ft`,
+    pet: `${built.name} (${built.form}${built.creatureType ? `, a ${built.creatureType}` : ""}): ${built.hp} HP, AC ${built.ac}, speed ${built.speed} ft`,
     ...(built.attacks.length
       ? {
           attacks: built.attacks.map(attackSummary).join(", "),
@@ -238,8 +249,8 @@ export function handlePetAttack(
   let args: z.infer<typeof petAttackSchema>;
   try {
     args = petAttackSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: pet_attack needs characterId and targetEnemyId.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: pet_attack needs characterId and targetEnemyId.", error, rawArguments);
   }
   const stale = resolveSheetRef(args.characterId, sheets, sheetsById);
   const sheet = stale ? (getSheetById(stale.id) ?? stale) : null;
@@ -273,6 +284,12 @@ export function handlePetAttack(
   if (!enemy || enemy.status !== "alive") {
     return { error: "pet_attack needs a living targetEnemyId from GAME STATE.", retry: true };
   }
+  // A creature inside a swallower is out of the pet's reach (swallow.ts).
+  // The pet has no square of its own, so it strikes from outside.
+  const inside = swallowCoverError(null, enemy.id);
+  if (inside) {
+    return inside;
+  }
   // Commanding the pet is the owner's to do, on the owner's turn, and costs
   // what the feature says (src/lib/dm/pet-attack-cost.ts).
   const charge = petAttackCost(sheet, pet, encounter);
@@ -290,7 +307,16 @@ export function handlePetAttack(
     return { error: `${pet.name}'s ${attack.name} strikes only a prone creature, and ${enemy.displayName} is not prone. Nothing was spent.`, refused: "rules" };
   }
 
-  const hitOutcome = rollExpression(d20Expression(attack.toHit));
+  // The target's conditions as they meet this attacker (SRD 5.1): a
+  // restrained target is struck with advantage, and one warded by
+  // Protection from Evil and Good turns a fiend or fey familiar's strike
+  // with disadvantage, by the kind the caster made it (pet-build.ts
+  // petCreatureType).
+  const incoming = conditionIncomingAttackState(enemy.conditions, petCreatureType(pet));
+  const advantage = mergeAdvantage(incoming.sources);
+  // Tagged as an ally's attack, so a foretold number a watch stop armed for
+  // the pet lands on its d20 (foresight-saves.ts).
+  const hitOutcome = rollExpression(d20Expression(attack.toHit, advantage), undefined, { purpose: { roller: "hero", kind: "attack", who: pet.name } });
   const hitRoll = insertRoll({
     campaignId: campaign.id,
     characterId: sheet.id,
@@ -319,6 +345,7 @@ export function handlePetAttack(
       rolled: hitOutcome.total,
       vsAc,
       hit: false,
+      ...(incoming.notes.length ? { situation: incoming.notes.join("; ") } : {}),
       economy,
     };
   }
@@ -398,8 +425,8 @@ export function handleDamagePet(
   let args: z.infer<typeof damagePetSchema>;
   try {
     args = damagePetSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: apply_damage on a pet needs the owner's characterId and an amount.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: apply_damage on a pet needs the owner's characterId and an amount.", error, rawArguments);
   }
   const stale = resolveSheetRef(args.characterId, sheets, sheetsById);
   const sheet = stale ? (getSheetById(stale.id) ?? stale) : null;
@@ -436,6 +463,11 @@ export function handleDamagePet(
   const pets = sheet.pets.map((entry) => (entry === pet ? { ...entry, hp } : entry));
   patchSheet(sheet.id, { pets });
   publishSheet(campaign, sheet.id);
+  // Damage to a pet is the trigger its owner's reaction answers (a drake's
+  // resistance, src/lib/dm/last-save.ts).
+  if (dealt > 0) {
+    recordTrigger(campaign.id, { kind: "pet_damage", characterId: sheet.id, forcer: { id: sheet.id, name: sheet.name }, petName: pet.name, damage: { amount: dealt, type: args.type?.trim() ?? "" } });
+  }
   return {
     ok: true,
     pet: pet.name,
@@ -456,8 +488,8 @@ export function handleDismissPet(
   let args: z.infer<typeof dismissSchema>;
   try {
     args = dismissSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: dismiss_pet needs characterId.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: dismiss_pet needs characterId.", error, rawArguments);
   }
   const stale = resolveSheetRef(args.characterId, sheets, sheetsById);
   const sheet = stale ? (getSheetById(stale.id) ?? stale) : null;

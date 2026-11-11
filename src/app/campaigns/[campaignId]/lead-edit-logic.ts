@@ -1,12 +1,36 @@
 // The pure half of the lead's Adjust dialog (LeadEditDialog.tsx): what the
 // pickers may offer and how an item row keeps everything it stores.
 // Database-free and JSX-free so scripts/test-lead-edit.mjs drives it.
-import { spellClassFor } from "@/lib/classes";
+import { spellPoolKeyFor } from "@/lib/classes";
 import { thirdCasterList, thirdCasterProfileOf } from "@/lib/srd/third-caster";
 import { EXPERTISE_CAP, type CharacterSheet, type EquipmentItem, type Proficiencies } from "@/lib/schemas/sheet";
 import { SRD_SKILLS } from "@/lib/srd";
 import { expertiseSlotsFor } from "@/lib/srd/features";
 import { findNamed } from "@/lib/language/text-logic";
+import { DENOMINATION_COPPER, fromCopper } from "@/lib/srd/currency";
+
+// The purse as the dialog's three fields. The sheet stores the coin under a
+// gold piece as copper; a person counts it as silver and copper.
+export function coinFields(sheet: Pick<CharacterSheet, "gold" | "copper">): { gold: number; silver: number; copper: number } {
+  return { gold: sheet.gold, silver: Math.floor(sheet.copper / 10), copper: sheet.copper % 10 };
+}
+
+// What those fields change on the sheet. They may hold any count ("34 silver"
+// is a fair thing to type), so they are worth what they add up to and the
+// sheet keeps its gold-and-remainder form.
+export function coinCorrection(
+  fields: { gold: unknown; silver: unknown; copper: unknown },
+  sheet: Pick<CharacterSheet, "gold" | "copper">,
+): { gold?: number; copper?: number } {
+  const count = (value: unknown) => Math.max(0, Math.round(Number(value) || 0));
+  const next = fromCopper(
+    count(fields.gold) * DENOMINATION_COPPER.gp + count(fields.silver) * DENOMINATION_COPPER.sp + count(fields.copper),
+  );
+  return {
+    ...(next.gold !== sheet.gold ? { gold: next.gold } : {}),
+    ...(next.copper !== sheet.copper ? { copper: next.copper } : {}),
+  };
+}
 
 // The highest spell level this sheet can actually cast, read from the slots
 // it has stored: the multiclass table, a third caster's slots and a
@@ -26,10 +50,10 @@ export function highestStoredSlot(spellcasting: CharacterSheet["spellcasting"]):
 }
 
 // The class list the pickers search: an Eldritch Knight or Arcane Trickster
-// learns from the wizard's.
+// learns from the wizard's, a workshop class from its own (issue #833).
 export function spellListOf(sheet: Pick<CharacterSheet, "class" | "subclass" | "spellcasting">): string {
   const profile = thirdCasterProfileOf(sheet.class, sheet.subclass, sheet.spellcasting?.progression);
-  return profile ? thirdCasterList(profile) : spellClassFor(sheet.class);
+  return profile ? thirdCasterList(profile) : spellPoolKeyFor(sheet.class);
 }
 
 // Round and clamp shared slot edits before the Adjust dialog sends them. A

@@ -152,8 +152,8 @@ export const SCENARIOS = [
   // a square is pressed (issue 570): the engine catches who stands in them.
   S("spell-fireball-laid", "spell", "wizard", "Fireball", { place: "ranged", aim: "enemy", area: "enemy", enemies: 3 }),
   S("spell-burning-hands-laid", "spell", "wizard", "Burning Hands", { aim: "enemy", area: "enemy", enemies: 2 }),
-  // A zone that stays is laid on a square picked on the board; the engine
-  // leaves a laid area to the model (intent-logic.ts directCardCall).
+  // A zone that stays, laid on a square picked on the board: the engine lays
+  // it (issue 685, src/lib/dm/direct-card-logic.ts lastingAreaCall).
   S("spell-web-area", "spell", "wizard", "Web", { place: "ranged", area: "enemy", enemies: 2 }),
 
   // Between fights: no initiative, no direct path.
@@ -172,7 +172,8 @@ export const SCENARIOS = [
   S("basic-disengage", "basic", "fighter", "Disengage"),
   S("basic-help", "basic", "fighter", "Help", { aim: "ally" }),
   S("basic-hide", "basic", "rogue", "Hide", { place: "ranged" }),
-  S("basic-grapple", "basic", "fighter", "Grapple", { aim: "enemy" }),
+  // A grapple takes a free hand (SRD 5.1, Grappling): the shield is off for it.
+  S("basic-grapple", "basic", "fighter", "Grapple", { aim: "enemy", equipped: ["Longsword"] }),
   S("basic-shove", "basic", "fighter", "Shove", { aim: "enemy" }),
   S("basic-search", "basic", "rogue", "Search", { place: "ranged" }),
   S("basic-stand-up", "basic", "fighter", "Stand up", { conditions: ["prone"] }),

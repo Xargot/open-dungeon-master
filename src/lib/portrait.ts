@@ -2,12 +2,14 @@ import { copyFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { imagesAvailable } from "@/lib/capabilities";
 import { generateStoryImage } from "@/lib/image-generate";
+import { scheduleImageVariants } from "@/lib/image-variants";
 import type { LibraryCharacter } from "@/lib/db/characters";
 import { getCharacter, updateCharacterPortrait } from "@/lib/db/characters";
 import { listSheetsForLibraryCharacter, patchSheet } from "@/lib/db/sheets";
 import { setNpcPortrait } from "@/lib/db/npcs";
 import { publishPersisted } from "@/lib/events";
 import { enqueueMediaJob } from "@/lib/media-queue";
+import { recordsChanged } from "@/lib/workshop/record-events";
 import { toEnglishForImage } from "@/lib/image-english";
 import type { Campaign } from "@/lib/db/campaigns";
 import { presetFor } from "@/lib/worlds/preset";
@@ -20,6 +22,7 @@ import { workshopClassName } from "@/lib/classes/workshop-registry";
 import { ancestryOf, findDraconicAncestry } from "@/lib/srd/racial-grants";
 import { npcRoleLabel } from "@/lib/placeholders";
 import { characterPortraitPrompt, idWords, npcPortraitPrompt, type CharacterLook } from "@/lib/portrait-prompt";
+import { raceWords } from "@/lib/npc-race";
 
 // One-shot portrait render at character creation. Status lives in memory
 // only: a restart mid-job simply drops the entry and the UI falls back to
@@ -97,7 +100,14 @@ export function copyIntoUploads(generatedUrl: string): { id: string; url: string
   const id = crypto.randomUUID();
   const uploadsDir = path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "uploads");
   mkdirSync(uploadsDir, { recursive: true });
-  copyFileSync(source, path.join(/*turbopackIgnore: true*/ uploadsDir, `${id}.png`));
+  const saved = path.join(/*turbopackIgnore: true*/ uploadsDir, `${id}.png`);
+  copyFileSync(source, saved);
+  // The copy gets its own smaller copies, as an upload does
+  // (src/lib/uploads-store.ts). It had none: the render's stayed beside the
+  // render under its other name, so every painted portrait and cover, the
+  // pictures drawn smallest and most often, went out whole (about 3 MB) to
+  // each token that asked for 256 pixels of it.
+  scheduleImageVariants(saved);
   recordMediaFile(`/uploads/${id}.png`);
   return { id, url: `/uploads/${id}.png` };
 }
@@ -188,6 +198,8 @@ export function queueNpcPortrait(
     // face needs. The name is deliberately absent: a render prompt is not
     // improved by a proper noun the model has never seen.
     gender: string;
+    // The stored race id (src/lib/npc-race.ts), "" when unrecorded.
+    race: string;
     // The stored role: a catalog id or the author's own words.
     role: string;
     trait: string;
@@ -200,7 +212,7 @@ export function queueNpcPortrait(
     enqueueMediaJob(`npc portrait ${npc.id}`, async () => {
       try {
         const { trait, role } = await toEnglishForImage(campaign, { trait: npc.trait, role: npcRoleLabel(npc.role) });
-        const prompt = npcPortraitPrompt({ gender: npc.gender, role, trait, personality: npc.personality }, style);
+        const prompt = npcPortraitPrompt({ gender: npc.gender, race: raceWords(npc.race), role, trait, personality: npc.personality }, style);
         const settings = configuredDefaultStorySettings();
         const image = await generateStoryImage(settings, {
           prompt,
@@ -208,8 +220,15 @@ export function queueNpcPortrait(
           aspect: "square",
         });
         const copied = copyIntoUploads(image.url);
+        // The new face reaches the seats as the cast (setNpcPortrait tells
+        // it, src/lib/dm/cast.ts), so only those who know this person see
+        // it. An npc_updated sent every seat the face of someone not yet
+        // introduced, and kept it for replay (issue 733). It was also what
+        // told the workshop's Cast and World tools to read the person again,
+        // so they are told as every write to a Cast member tells them, by
+        // kind and to the story's seats alone.
         if (setNpcPortrait(npc.id, copied.url)) {
-          publishPersisted(campaign.id, "npc_updated", { npcId: npc.id, portraitUrl: copied.url });
+          recordsChanged(campaign.id, "npc", "world");
         }
       } catch (error) {
         console.error(`[portrait] npc generation failed for ${npc.id}:`, error);

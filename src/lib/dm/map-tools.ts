@@ -1,6 +1,7 @@
 import { readiedHeld } from "@/lib/dm/readied-kinds";
 import { carriedLight, lightPlacement } from "@/lib/dm/light-timers";
 import { getClock } from "@/lib/db/clock";
+import { getDatabase } from "@/lib/db/core";
 import type { Campaign } from "@/lib/db/campaigns";
 import {
   getActiveBoard,
@@ -9,11 +10,12 @@ import {
   getEnemy,
   listEnemies,
   saveEncounter,
+  turnKey,
   type Encounter,
   type EncounterEnemy,
 } from "@/lib/db/encounters";
 import type { CombatSide } from "@/lib/dm/combat-sides-logic";
-import { sideOf } from "@/lib/dm/combatant";
+import { sideOf, standingFoesLine } from "@/lib/dm/combatant";
 import {
   createBattleMap,
   getBattleMapForEncounter,
@@ -28,14 +30,15 @@ import {
 } from "@/lib/db/battle-maps";
 import { planTeleportFx } from "@/lib/battlemap/fx-plan";
 import { publishFx } from "@/lib/dm/fx";
-import { generateBattleMap, fnv1a } from "@/lib/battlemap/generate";
+import { buildingSkin, drawBuilding, holdsBuilding, type BuildingPlan } from "@/lib/battlemap/building";
+import { generateBattleMap, fnv1a, spotsForTokens, tilesBetweenSides } from "@/lib/battlemap/generate";
 import { findPath, squeezedAt, walkPathWithBudget } from "@/lib/battlemap/movement";
-import { coverBetween, hasLineOfSight } from "@/lib/battlemap/los";
+import { coverBetweenSpaces, hasLineOfSightBetween } from "@/lib/battlemap/los";
 import { footprintLookup, occupiedTiles } from "@/lib/battlemap/view";
 import { footprintForSize } from "@/lib/battlemap/footprint";
 import { openSquaresBeside } from "@/lib/dm/companion-approach";
 import { aiPlaysSheet } from "@/lib/dm/companion-command";
-import { nearestSquares, tilesApart } from "@/lib/dm/board-reach";
+import { spaceOf, tilesApart } from "@/lib/dm/board-reach";
 
 import {
   blocksMove,
@@ -55,7 +58,9 @@ import { resolveSheetRef } from "@/lib/dm/rolls";
 import { resolvePcOpportunityAttacks } from "@/lib/dm/opportunity";
 import { releaseGrapplesOutOfReach } from "@/lib/dm/grapple";
 import { isIncapacitated } from "@/lib/dm/condition-logic";
-import { canEnemyAct } from "@/lib/dm/can-act";
+import { canAct, canEnemyAct } from "@/lib/dm/can-act";
+import { heldTurnRefusal, ownTurnOf } from "@/lib/dm/held-turn";
+import { afterMoveLeashes, leashRefusal } from "@/lib/dm/condition-leash";
 import { awayFromFear, enemyMoveTraits, fearSourceAt, standUpCost, standUpIfProne } from "@/lib/dm/enemy-approach";
 import { enemyMoveBudget } from "@/lib/dm/enemy-speed";
 import { movementLeft, spendEnemyDisengage } from "@/lib/dm/enemy-actions";
@@ -63,7 +68,7 @@ import { forgetEnemyTurns, enemyTurnEntry, speedWords } from "@/lib/dm/enemy-tur
 import { nearerSquares } from "@/lib/dm/flee-logic";
 import { aggressiveSteps, approachSteps } from "@/lib/dm/enemy-aggressive";
 import { enemyTurnRefusal } from "@/lib/dm/enemy-turn-order";
-import { declaredThisTurn } from "@/lib/dm/player-word";
+import { declaredThisTurn, walkHeld } from "@/lib/dm/player-word";
 import { featureTeleportFeet } from "@/lib/dm/feature-teleport";
 import { distancesFrom, payForTeleport, stillAt, teleportRangeFeet, walkCharacter } from "@/lib/dm/token-rules";
 import type { DmTurn } from "@/lib/db/dm-turns";
@@ -71,10 +76,13 @@ import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { z } from "zod";
 import { zonesAfterMove } from "@/lib/dm/zone-triggers";
 import { zoneCoverBetween } from "@/lib/dm/zone-rules";
+import { longRangeTilesOf, pastNormalRange } from "@/lib/dm/attack-rules";
 import { dragLandings, enemyDrag } from "@/lib/dm/drag-move";
 import { walkCostFactor } from "@/lib/dm/drag";
 import { flightOf, markSqueezing } from "@/lib/dm/token-state";
-import { toolError, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { livePurchase } from "@/lib/dm/legendary-logic";
+import { swallowRowWalk } from "@/lib/dm/swallow";
+import { badArguments, toolError, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
 import { findNamed, textKey } from "@/lib/language/text-logic";
 
 export { landTheFlightless } from "@/lib/dm/token-state";
@@ -115,47 +123,82 @@ export function createBattleMapForEncounter(
   // One side caught the other unawares: the board opens close
   // (battlemap/generate.ts CLOSE_OPENING_TILES) unless distanceFeet said.
   ambush = false,
-): { map: BattleMap; formation: string } | null {
+  // The party inside a building, the enemies outside (issue 743).
+  building?: BuildingPlan,
+): { map: BattleMap; formation: string; distance?: string; building?: string } | null {
   const location = getCurrentLocation(campaign.id);
-  const generated = generateBattleMap({
+  const askedTiles = distanceFeet ? Math.max(1, Math.round(distanceFeet / TILE_FEET)) : undefined;
+  const ground = scene ?? location?.ambience?.bed ?? null;
+  const drawn = generateBattleMap({
     seed: fnv1a(encounter.id),
-    scene: scene ?? location?.ambience?.bed ?? null,
+    // The place itself may be the building: an inn's own ambience would draw
+    // the yard as more inn, so the ground outside it is open ground.
+    scene: building && !holdsBuilding(ground) ? null : ground,
     pcCount: sheets.length,
     enemyCount: enemies.length,
-    enemyDistanceTiles: distanceFeet ? Math.max(1, Math.round(distanceFeet / 5)) : undefined,
+    enemyDistanceTiles: askedTiles,
     ambush,
   });
-  const map = createBattleMap({
-    encounterId: encounter.id,
-    campaignId: campaign.id,
-    width: generated.width,
-    height: generated.height,
-    terrain: generated.terrain,
-    ambient: generated.ambient,
-    theme: generated.theme,
-    lights: generated.lights,
-    seed: fnv1a(encounter.id),
-  });
+  const house = building
+    ? drawBuilding(drawn, {
+        plan: building,
+        seed: fnv1a(encounter.id),
+        pcCount: sheets.length,
+        enemyFootprints: enemies.map((enemy) => footprintForSize(enemy.stats.size)),
+        enemyDistanceTiles: askedTiles,
+      })
+    : null;
+  const generated = house ?? drawn;
+  // Every token's tile is settled before anything is written, and the map and
+  // its tokens are written together: a failure leaves no board without its
+  // tokens (issue 741).
+  const taken = new Set<number>();
+  const partySpots = spotsForTokens(generated, generated.pcSpawns, sheets.length, taken);
+  const enemySpots = spotsForTokens(generated, generated.enemySpawns, enemies.length, taken);
   // The party stands by its travel formation: the front of it nearest the
   // enemy, or the rear when they came from behind (formation-logic.ts).
-  const formation = placeByFormation(sheets, generated.pcSpawns, generated.enemySpawns, getParty(campaign.id).marchingOrder, from);
-  placeTokens(map.id, campaign.id, [
-    ...sheets.map((sheet) => ({
-      kind: "pc" as const,
-      refId: sheet.id,
-      name: sheet.name,
-      spot: formation.spots.get(sheet.id) ?? generated.pcSpawns[0],
-      ...carriedLightFields(campaign.id, sheet),
-    })),
-    ...enemies.map((enemy, index) => ({
-      kind: "enemy" as const,
-      refId: enemy.id,
-      name: enemy.displayName,
-      spot: generated.enemySpawns[index] ?? generated.enemySpawns[0],
-    })),
-  ]);
+  const formation = placeByFormation(sheets, partySpots, enemySpots, getParty(campaign.id).marchingOrder, from);
+  const map = getDatabase().transaction(() => {
+    const created = createBattleMap({
+      encounterId: encounter.id,
+      campaignId: campaign.id,
+      width: generated.width,
+      height: generated.height,
+      terrain: generated.terrain,
+      ambient: generated.ambient,
+      theme: generated.theme,
+      lights: generated.lights,
+      seed: fnv1a(encounter.id),
+      skin: house ? buildingSkin(campaign.gameSettings.genre, generated.theme) : undefined,
+    });
+    placeTokens(created.id, campaign.id, [
+      ...sheets.map((sheet) => ({
+        kind: "pc" as const,
+        refId: sheet.id,
+        name: sheet.name,
+        spot: formation.spots.get(sheet.id) ?? partySpots[0],
+        ...carriedLightFields(campaign.id, sheet),
+      })),
+      ...enemies.map((enemy, index) => ({
+        kind: "enemy" as const,
+        refId: enemy.id,
+        name: enemy.displayName,
+        spot: enemySpots[index],
+      })),
+    ]);
+    return created;
+  })();
   publishBattleMapUpdate(campaign.id);
-  return { map, formation: formation.line };
+  // The tool promises the board places them at the distance asked, so a
+  // distance past the board's edge is said out loud: range and movement run
+  // on the tiles, and a GM narrating 200 feet would misread both.
+  const apart = askedTiles && partySpots.length && enemySpots.length ? tilesBetweenSides(partySpots, enemySpots) : undefined;
+  const distance = askedTiles && apart !== undefined && apart < askedTiles
+    ? `This board cannot hold ${distanceFeet} feet: the nearest enemy stands ${apart * TILE_FEET} feet from the party on it. Range and movement go by the board, so narrate them that far off.`
+    : house && askedTiles && apart !== undefined && apart > askedTiles
+      ? `The building's wall stands between them, so the nearest enemy stands ${apart * TILE_FEET} feet from the party, not ${distanceFeet}. Range and movement go by the board, so narrate them that far off.`
+      : undefined;
+  return { map, formation: formation.line, ...(distance ? { distance } : {}), ...(house ? { building: house.building.line } : {}) };
 }
 
 // ---- teleports and set_movement ----
@@ -269,8 +312,8 @@ export function handleTeleportToken(
   let args: z.infer<typeof teleportArgsSchema>;
   try {
     args = teleportArgsSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: a teleport needs token, x and y.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: a teleport needs token, x and y.", error, rawArguments);
   }
   const token = resolveAnyToken(map, board.id, args.token, sheets, sheetsById);
   if (!token) {
@@ -290,7 +333,11 @@ export function handleTeleportToken(
   const distanceFeet = Math.max(Math.abs(args.x - token.x), Math.abs(args.y - token.y)) * TILE_FEET;
   const spender = args.spell && args.casterCharacterId ? resolveSheetRef(args.casterCharacterId, sheets, sheetsById) : null;
   const featureFeet = spender && args.spell ? featureTeleportFeet(spender.id, args.spell) : null;
-  const rangeFeet = featureFeet ?? (args.spell ? teleportRangeFeet(args.spell) : null) ?? args.rangeFeet;
+  // A legendary action that bought the jump (a sphinx's or a solar's
+  // Teleport) gives its reach and has paid for it.
+  const live = token.kind === "enemy" ? getActiveEncounter(campaign.id) : null;
+  const legendaryFeet = live ? (livePurchase(live.legendary, { turn: turnKey(live), round: live.round }, token.refId)?.teleportFeet ?? null) : null;
+  const rangeFeet = legendaryFeet ?? featureFeet ?? (args.spell ? teleportRangeFeet(args.spell) : null) ?? args.rangeFeet;
   if (rangeFeet !== undefined && rangeFeet !== null && distanceFeet > rangeFeet) {
     return {
       error: `(${args.x},${args.y}) is ${distanceFeet} ft away, past the ${rangeFeet} ft range. Pick a tile within range.`,
@@ -299,7 +346,7 @@ export function handleTeleportToken(
   }
   // Every refusal above spends nothing; the spell is cast (or the enemy's
   // block checked) only now.
-  if (turn?.actor === "ai") {
+  if (turn?.actor === "ai" && legendaryFeet === null) {
     const refused = payForTeleport(
       campaign,
       turn,
@@ -347,8 +394,8 @@ export function handleSetMovement(
   let args: z.infer<typeof movementArgsSchema>;
   try {
     args = movementArgsSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: set_movement needs token and movement (walk, fly or burrow).", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: set_movement needs token and movement (walk, fly or burrow).", error, rawArguments);
   }
   const token = resolveAnyToken(map, board.id, args.token, sheets, sheetsById);
   if (!token) {
@@ -477,6 +524,11 @@ export function handleMoveToken(
   sheets: CharacterSheet[],
   sheetsById: Map<string, CharacterSheet>,
   turn: Pick<DmTurn, "id" | "actor">,
+  // A legendary move (src/lib/dm/legendary-play.ts): this many squares, none
+  // of the creature's own turn's movement, opportunity attacks only when the
+  // option provokes them, aloft for a flight. A move_token after a
+  // legendary_action that bought a move reads the same from the purchase.
+  legendaryMove?: { tiles: number; provokes: boolean; fly: boolean },
 ): ToolResult {
   const encounter = getActiveEncounter(campaign.id);
   if (!encounter) {
@@ -489,13 +541,17 @@ export function handleMoveToken(
   let args: z.infer<typeof moveArgsSchema>;
   try {
     args = moveArgsSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: move_token needs token, x, and y.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: move_token needs token, x, and y.", error, rawArguments);
   }
   const resolved = resolveMoveTarget(map, encounter.id, args.token, sheets, sheetsById);
   if (!resolved) {
     return unknownCombatant(map, args.token);
   }
+  const allowance =
+    resolved.kind === "enemy" && resolved.enemy && !args.forced
+      ? (legendaryMove ?? livePurchase(encounter.legendary, { turn: turnKey(encounter), round: encounter.round }, resolved.enemy.id)?.move ?? null)
+      : null;
   if (resolved.kind === "pc" && !args.forced) {
     // An AI companion walks on its own turn as a player walks from the
     // board: its speed, standing from prone, fear, opportunity attacks. So
@@ -503,15 +559,39 @@ export function handleMoveToken(
     // and a companion a player commands, once they have given the order.
     const walker = resolveSheetRef(args.token, sheets, sheetsById);
     const fresh = walker ? (getSheetById(walker.id) ?? walker) : null;
-    const current = encounter.orderReady ? encounter.order[encounter.turnIndex] : undefined;
     const declared = fresh && turn.actor === "ai" && declaredThisTurn(campaign.id, fresh.id);
-    if (fresh && (aiPlaysSheet(campaign, fresh) || declared) && current?.kind === "pc" && current.characterId === fresh.id) {
+    // Their own turn, not one held for the enemies before them (held-turn.ts
+    // ownTurnOf): the pointer resting on them while the goblins act is the
+    // goblins' turn.
+    const ownTurn = Boolean(fresh && ownTurnOf(encounter, fresh.id));
+    // A player who said their character stays put is not walked, whatever
+    // else they asked for (src/lib/dm/player-word-logic.ts).
+    const held = fresh && ownTurn ? walkHeld(campaign.id, turn, fresh, " Nothing was moved.") : null;
+    if (held) {
+      return held;
+    }
+    if (fresh && (aiPlaysSheet(campaign, fresh) || declared) && ownTurn) {
       return walkCharacter(campaign, encounter, map, fresh, resolved.token, { x: args.x, y: args.y }, { drag: args.drag, careful: args.careful });
     }
     // The move a character readied releases off their turn, by whoever runs
     // the table (readied-release.ts: their reaction, up to their speed).
-    if (fresh && readiedHeld(fresh)?.holds === "move" && !(current?.kind === "pc" && current.characterId === fresh.id)) {
+    if (fresh && readiedHeld(fresh)?.holds === "move" && !ownTurn) {
       return walkCharacter(campaign, encounter, map, fresh, resolved.token, { x: args.x, y: args.y }, { drag: args.drag, careful: args.careful });
+    }
+    // Off their own turn, a character in the order is the game saying no, as
+    // pc_attack and take_action say it (can-act.ts): answered as a retry that
+    // named forced:true, it invited the model to send the walk again as a
+    // push. The retry below stays for a walk on their turn nobody declared.
+    const placed = encounter.orderReady && encounter.order.some((entry) => entry.kind === "pc" && entry.characterId === fresh?.id);
+    if (fresh && placed && !ownTurn) {
+      const heldOff = heldTurnRefusal(encounter, fresh);
+      if (heldOff) {
+        return heldOff;
+      }
+      const able = canAct({ sheet: fresh, encounter, kind: "move" });
+      if (!able.ok) {
+        return toolError(able);
+      }
     }
     return {
       error: fresh?.isCompanion && aiPlaysSheet(campaign, fresh)
@@ -524,10 +604,12 @@ export function handleMoveToken(
   }
   // On their own turn the player moves from the board; a "forced" move here
   // is the model walking a character for them (issue 17: a token that moved
-  // with no input). Pushes and drags happen on somebody else's turn.
+  // with no input). Pushes and drags happen on somebody else's turn, and the
+  // goblins' pass before a hero is theirs though the pointer already rests
+  // on the hero (held-turn.ts ownTurnOf): a goblin's shove of Brom then was
+  // refused as Brom walking himself.
   if (resolved.kind === "pc" && args.forced && encounter.orderReady) {
-    const current = encounter.order[encounter.turnIndex];
-    if (current?.kind === "pc" && current.characterId === resolved.token.refId) {
+    if (ownTurnOf(encounter, resolved.token.refId)) {
       return {
         error: `It is ${resolved.token.name}'s own turn; they move their own token from the board (a companion walks with move_token and no forced). Forced movement is for a push, drag or carry on someone else's turn.`,
         retry: true,
@@ -535,9 +617,12 @@ export function handleMoveToken(
     }
   }
   // An enemy walking is an enemy acting: a surprised one stands where it is
-  // through round 1. A push or a drag moves whoever it moves.
+  // through round 1, on its own (lost) turn too, which the reaction's
+  // question let pass once the pointer had gone by its place. A legendary
+  // move is spent on another creature's turn, and asks as a reaction does. A
+  // push or a drag moves whoever it moves.
   if (resolved.kind === "enemy" && resolved.enemy && !args.forced) {
-    const allowed = canEnemyAct({ enemy: resolved.enemy, encounter, kind: "reaction" });
+    const allowed = canEnemyAct({ enemy: resolved.enemy, encounter, kind: allowance ? "reaction" : "move" });
     if (!allowed.ok && allowed.reason === "surprised") {
       return toolError(allowed);
     }
@@ -577,7 +662,7 @@ export function handleMoveToken(
     ? fearSourceAt(map.id, resolved.enemy.conditions, resolved.enemy.conditionMeta as Record<string, { source?: string }>)
     : null;
   const pathAvoiding = (blocked: Set<number>) =>
-    findPath(map.terrain, map.width, map.height, blocked, resolved.token, { x: args.x, y: args.y }, moverFootprint, resolved.token.movement === "fly", traits);
+    findPath(map.terrain, map.width, map.height, blocked, resolved.token, { x: args.x, y: args.y }, moverFootprint, resolved.token.movement === "fly" || Boolean(allowance?.fly), traits);
   const path =
     (feared ? pathAvoiding(new Set([...occupied, ...nearerSquares(map.width, map.height, resolved.token, feared)])) : null) ??
     pathAvoiding(occupied);
@@ -608,6 +693,12 @@ export function handleMoveToken(
   // stands, fears and Disengages nothing.
   const move = resolved.kind === "enemy" && resolved.enemy ? enemyMoveBudget(encounter, resolved.enemy, resolved.token) : null;
   const walking = move !== null && !args.forced;
+  // Swallowed, as a character is (swallow.ts): no walk inside a living
+  // creature, and out of a dead one the walk is the climb out of its corpse.
+  const climb = walking && resolved.enemy ? swallowRowWalk(campaign, encounter, resolved.enemy, resolved.token, move?.tilesLeft ?? 0) : null;
+  if (climb) {
+    return climb;
+  }
   let standCost = 0;
   let aggressiveCut = false;
   let approachCut = false;
@@ -637,8 +728,11 @@ export function handleMoveToken(
       aggressiveCut = rushed.cut;
       approachCut = drawn.cut;
     }
-    const budget = Math.floor(Math.max(0, (move?.tilesLeft ?? 0) - standCost) / factor);
+    const budget = Math.floor(Math.max(0, (allowance ? allowance.tiles : (move?.tilesLeft ?? 0)) - standCost) / factor);
     const walk = walkPathWithBudget(map.terrain, map.width, steps, budget, traits, resolved.token);
+    if (!walk.at && allowance) {
+      return { error: `${resolved.token.name} cannot get anywhere toward (${args.x},${args.y}) on its legendary move (${allowance.tiles * 5} ft).${stillAt(tokens, resolved.token)}`, refused: "rules" };
+    }
     if (!walk.at) {
       const words = move && resolved.enemy ? speedWords(move.speedTiles, enemyTurnEntry(encounter, resolved.enemy.id)) : "speed 0 ft";
       const why = approachCut
@@ -656,6 +750,12 @@ export function handleMoveToken(
     landing = walk.at;
     spent = walk.spent * factor;
     clamped = !walk.reachedEnd || aggressiveCut || approachCut;
+    // Its own walk keeps to a leash on it (condition-leash.ts): Champion
+    // Challenge's "cannot move more than 30 feet away".
+    const leashed = !args.forced && resolved.enemy ? leashRefusal(map.id, resolved.enemy, resolved.token, landing) : null;
+    if (leashed) {
+      return leashed;
+    }
   }
   const origin = { x: resolved.token.x, y: resolved.token.y };
   const carried = drag ? dragLandings({ map, tokens, mover: resolved.token, landing, walked: [origin, ...walkedPart(path, landing)], held: drag.held, footprintOf: footprints }) : [];
@@ -667,7 +767,7 @@ export function handleMoveToken(
   // above: nothing has changed until here.
   let disengaged: string | null = walking && move.disengaged ? "its Disengage earlier this turn" : null;
   let closesOwedTurn = false;
-  if (args.disengage && walking && resolved.enemy && !disengaged) {
+  if (args.disengage && walking && resolved.enemy && !disengaged && !allowance) {
     const paid = spendEnemyDisengage(campaign.id, resolved.enemy);
     if ("error" in paid) {
       return toolError(paid);
@@ -682,11 +782,15 @@ export function handleMoveToken(
     resolved.token.id,
     landing.x,
     landing.y,
-    resolved.kind === "enemy"
+    resolved.kind === "enemy" && !allowance
       ? (getTokenByRef(map.id, resolved.token.refId)?.movedThisRound ?? resolved.token.movedThisRound) + spent
-      : resolved.token.movedThisRound,
+      : (getTokenByRef(map.id, resolved.token.refId)?.movedThisRound ?? resolved.token.movedThisRound),
     args.forced || resolved.token.movement !== "walk" ? undefined : [origin, ...walkedPart(path, landing)],
   );
+  // A flight takes it up: it stays aloft where it lands (set_movement).
+  if (allowance?.fly && resolved.token.movement !== "fly") {
+    setTokenMovement(resolved.token.id, "fly");
+  }
   for (const entry of carried) {
     moveToken(entry.token.id, entry.at.x, entry.at.y, entry.token.movedThisRound);
   }
@@ -702,8 +806,10 @@ export function handleMoveToken(
     }
   }
   publishBattleMapUpdate(campaign.id);
-  // Moving two creatures apart ends a grapple between them (src/lib/dm/grapple.ts).
+  // Moving two creatures apart ends a grapple between them (src/lib/dm/grapple.ts),
+  // and a leash whose source is now too far (condition-leash.ts).
   releaseGrapplesOutOfReach(campaign);
+  const leashesEnded = afterMoveLeashes(campaign);
   // A large creature that ended its move where only one size smaller fits is
   // squeezing (SRD 5.1); one that has room again is not.
   if (resolved.kind === "enemy" && resolved.enemy) {
@@ -714,7 +820,7 @@ export function handleMoveToken(
   // exactly as the reverse does when a player walks off. Forced movement
   // (a shove, a gust of wind) provokes nothing.
   const opportunity =
-    resolved.kind === "enemy" && !args.forced && !disengaged
+    resolved.kind === "enemy" && !args.forced && !disengaged && (!allowance || allowance.provokes)
       ? resolvePcOpportunityAttacks(
           campaign,
           resolved.token.refId,
@@ -731,6 +837,7 @@ export function handleMoveToken(
     at: `(${landing.x},${landing.y})`,
     ...distancesFrom(tokens, resolved.token, landing),
     ...(zoneEffects.length ? { zoneEffects } : {}),
+    ...(leashesEnded.length ? { released: leashesEnded.join(" ") } : {}),
     ...(opportunity.length
       ? {
           opportunityAttacks: opportunity,
@@ -744,11 +851,14 @@ export function handleMoveToken(
             ? `Command draws ${resolved.token.name} only toward its caster: it stopped at (${landing.x},${landing.y}) short of (${args.x},${args.y}).`
             : aggressiveCut
               ? `Aggressive carries ${resolved.token.name} only toward a hostile creature it can see: it stopped at (${landing.x},${landing.y}) short of (${args.x},${args.y}).`
-              : `Speed limited the move: ${resolved.token.name} stopped at (${landing.x},${landing.y}) short of (${args.x},${args.y}).`,
+              : allowance
+                ? `Its legendary move goes ${allowance.tiles * 5} ft: ${resolved.token.name} stopped at (${landing.x},${landing.y}) short of (${args.x},${args.y}).`
+                : `Speed limited the move: ${resolved.token.name} stopped at (${landing.x},${landing.y}) short of (${args.x},${args.y}).`,
         }
       : {}),
     ...(disengaged ? { disengaged: `Disengaged with ${disengaged}: no opportunity attacks.` } : {}),
-    ...(walking && resolved.enemy ? { movementLeft: movementLeft(campaign.id, resolved.enemy) } : {}),
+    ...(allowance ? { legendaryMove: `A legendary move: none of its own turn's movement spent${allowance.provokes ? "" : ", and no opportunity attacks"}.` } : {}),
+    ...(walking && resolved.enemy && !allowance ? { movementLeft: movementLeft(campaign.id, resolved.enemy) } : {}),
   };
 }
 
@@ -872,18 +982,16 @@ export function pcAttackSpatials(
   if (!attacker || !target) {
     return none;
   }
-  // Nearest square to nearest square: a Large target's space is four
-  // squares, and the sight and cover lines go to the one the attacker faces
-  // (src/lib/dm/board-reach.ts).
+  // Nearest square to nearest square: a Large target's space is four squares.
+  // Cover is read to the one of them the attacker sees best.
   const distance = tilesApart(attacker, target);
-  const line = nearestSquares(attacker, target);
   return {
     // Blade Barrier's three-quarters cover counts as a wall's (zone-rules.ts).
-    cover: Math.max(coverBetween(map.terrain, map.width, map.height, line.from.x, line.from.y, line.to.x, line.to.y), zoneCoverBetween(encounterId, characterId, enemyId, from)) as 0 | 2 | 5,
+    cover: Math.max(coverBetweenSpaces(map.terrain, map.width, map.height, spaceOf(attacker), spaceOf(target)), zoneCoverBetween(encounterId, characterId, enemyId, from)) as 0 | 2 | 5,
 
     // Past the weapon's normal range but inside its long range: the SRD
     // penalty is disadvantage, and checkPcAttackRange allows up to double.
-    longRange: (options.ranged || options.thrown) && distance > options.rangeTiles,
+    longRange: pastNormalRange(options, distance),
     distanceTiles: distance,
     outdoors: map.outdoors,
   };
@@ -904,8 +1012,9 @@ export function checkPcAttackRange(
     longRangeTiles?: number;
   },
 ): (ToolError & { closeIn?: string }) | null {
+  const encounter = getEncounter(encounterId);
   const map = getBattleMapForEncounter(encounterId);
-  if (!map) {
+  if (!encounter || !map) {
     return null;
   }
   const attacker = getTokenByRef(map.id, characterId);
@@ -914,16 +1023,8 @@ export function checkPcAttackRange(
     return null;
   }
   const distance = tilesApart(attacker, target);
-  const line = nearestSquares(attacker, target);
-  const maxTiles = options.longRangeTiles ?? options.rangeTiles * 2;
-  const sighted = hasLineOfSight(
-    map.terrain,
-    map.width,
-    line.from.x,
-    line.from.y,
-    line.to.x,
-    line.to.y,
-  );
+  const maxTiles = longRangeTilesOf(options);
+  const sighted = hasLineOfSightBetween(map.terrain, map.width, spaceOf(attacker), spaceOf(target));
 
   if (!options.ranged && distance <= options.reachTiles) {
     // In reach. Toe to toe nothing can stand between; a reach weapon at 10
@@ -939,8 +1040,18 @@ export function checkPcAttackRange(
       ? null
       : { error: `${attacker.name} has no line of sight to ${target.name}; something blocks the shot. They must move their token to a sightline first or pick another target.`, retry: true };
   }
+  // The foes this same attack reaches from where they stand, for the next
+  // call to aim at instead.
+  const tokens = listTokens(map.id);
+  const within = (tiles: number) => {
+    const line = standingFoesLine(encounter.campaignId, encounter, (id) => {
+      const token = tokens.find((entry) => entry.refId === id);
+      return Boolean(token && tilesApart(attacker, token) <= tiles);
+    });
+    return line ? ` ${options.ranged || options.thrown ? "In range" : "Within reach"}: ${line}.` : "";
+  };
   if (options.ranged || options.thrown) {
-    return { error: `${attacker.name} is ${distance * 5} ft from ${target.name}, beyond this attack's ${maxTiles * 5} ft maximum range. They must move their token closer or pick another target.`, retry: true };
+    return { error: `${attacker.name} is ${distance * 5} ft from ${target.name}, beyond this attack's ${maxTiles * 5} ft maximum range.${within(maxTiles)} They must move their token closer or pick another target.`, retry: true };
   }
   // Named, so a model that cannot count tiles knows where the walk ends.
   // The directions name the model's own tools, so they ride beside the
@@ -948,7 +1059,7 @@ export function checkPcAttackRange(
   // sentence alone, and a model reads both (src/lib/dm/invoke.ts).
   const enemy = listEnemies(encounterId).find((entry) => entry.id === target.refId);
   const square = openSquaresBeside(encounterId, map, attacker, target, footprintForSize(enemy?.stats.size))[0];
-  const refusal = { error: `${attacker.name} is ${distance * 5} ft from ${target.name}, out of melee reach (${options.reachTiles * 5} ft). They must move their token adjacent first or attack with a ranged weapon.`, retry: true as const };
+  const refusal = { error: `${attacker.name} is ${distance * 5} ft from ${target.name}, out of melee reach (${options.reachTiles * 5} ft).${within(options.reachTiles)} They must move their token adjacent first or attack with a ranged weapon.`, retry: true as const };
   return square
     ? { ...refusal, closeIn: `When their player said they close in, send the attack again with approach true: the server walks them to (${square.x},${square.y}), the nearest open square beside ${target.name}, and attacks. The nearest open square beside ${target.name} is (${square.x},${square.y}): move_token ${attacker.name} there, then attack.` }
     : refusal;

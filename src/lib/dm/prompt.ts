@@ -1,3 +1,5 @@
+import { dragonAncestorType } from "@/lib/srd/dragon-ancestor";
+import { subclassChoicePickDescription } from "@/lib/srd/subclass-choice-picks";
 import { advanceRulesLine, openToAdvanceNames } from "@/lib/dm/advance-logic";
 import { defenseWords } from "@/lib/dm/pet-build";
 import { STORYTELLER_SECRET } from "@/lib/dm/viewer";
@@ -10,7 +12,8 @@ import type { StoredRoll } from "@/lib/db/rolls";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { ADVENTURE_BEGINS_NOTE, LEAD_NOTE_PREFIX, OPENING_SCENE_CUE, type CampaignMember } from "@/lib/campaign-types";
 import { heldRollUserIds } from "@/lib/dice/held-rolls";
-import { computeSheetDerived, findClass, findSkill, formatModifier, sizeForRace, speedFor, SRD_SKILLS } from "@/lib/srd";
+import { computeSheetDerived, findClass, findSkill, formatModifier, sizeForRace, spellAbilityFor, spellSaveDcFor, speedFor, SRD_SKILLS } from "@/lib/srd";
+import { innateSpellsFor } from "@/lib/srd/racial-grants";
 import { attackSummary } from "@/lib/srd/creature-attacks";
 import { encumbranceFor } from "@/lib/srd/encumbrance";
 import { wearingIsExplicit } from "@/lib/srd/armor";
@@ -65,11 +68,11 @@ import { renderQuestsForPrompt } from "@/lib/dm/quest-logic";
 import { describeEffect } from "@/lib/dm/effects-logic";
 import { getMounts } from "@/lib/db/mounts";
 import { describeMount } from "@/lib/srd/mounts";
-import { formatCopper } from "@/lib/srd/currency";
+import { formatCopper, formatPrice, purseCoins, purseCopper } from "@/lib/srd/currency";
 import { coverPromptBlock } from "@/lib/dm/delegation";
 import { ENGINE_BOUNDARY_CHECK, ENGINE_BOUNDARY_RULES } from "@/lib/dm/engine-boundary";
 import { normalizeGm, normalizeSafety, renderGmBlock, renderSafetyBlock } from "@/lib/dm/safety-logic";
-import { renderNarrationStyle } from "@/lib/dm/narration-style-logic";
+import { fightNarrationRule, renderNarrationStyle } from "@/lib/dm/narration-style-logic";
 import { renderChapterLod } from "@/lib/dm/chapter-lod";
 import { buildPinnedMemoriesBlock } from "@/lib/dm/pin-logic";
 import { NPC_PROMPT_MAX, rankNpcsForPrompt } from "@/lib/dm/npc-rank-logic";
@@ -86,6 +89,7 @@ import {
 } from "@/lib/dm/context-budget";
 import type { ChatMessage } from "@/lib/model-client";
 import { describeIntent } from "@/lib/dm/intent-logic";
+import { withoutServerLines } from "@/lib/dm/tool-text";
 import { describeEquipmentItem } from "@/lib/dm/equipment-line";
 import { summonStateLine } from "@/lib/dm/summon-rules";
 import { dmSystemText, encounterRulesText, tracksAmmunition, type RuleContext } from "@/lib/dm/prompt-rules";
@@ -178,6 +182,8 @@ export type DmEncounterState = {
   orderReady: boolean;
   order: Array<{ name: string; current: boolean }>;
   awaitingInitiative: string[];
+  // The characters this fight goes on without until they arrive (issue 740).
+  away?: string[];
   // What the combatant whose turn it is still has to spend, or null before
   // they have spent anything (src/lib/dm/action-budget.ts).
   turnBudget: string | null;
@@ -187,6 +193,10 @@ export type DmEncounterState = {
   // The current combatant's name while their turn waits on their player
   // (src/lib/dm/player-word.ts characterAwaitingPlayer).
   awaitingPlayer: string | null;
+  // The current character's name while their player keeps them where they
+  // stand (src/lib/dm/player-word.ts characterHeld); optional for a state
+  // built before it existed.
+  holding?: string | null;
   // The enemies a pass made outside the model's turn left owed their turns
   // before the current character's (src/lib/dm/enemies-due.ts); absent when
   // none are. The pass's table note names them too
@@ -195,6 +205,10 @@ export type DmEncounterState = {
   // `round`: the round the current character's turn is in, the next one
   // when the enemies due close this one.
   enemiesDue?: { before: string; enemies: Array<{ enemyId: string; name: string }>; round: number };
+  // The hits a reaction may still answer, by character (turn.ts
+  // openHitsForState); `ai` marks a companion nobody commands, whose
+  // reactions are the AI's. Absent when none are open.
+  openHits?: Array<{ characterId: string; name: string; ai: boolean; hits: Array<{ hitId: string; what: string }> }>;
   // A lair fight's printed options, numbered as lair_action takes them
   // (src/lib/dm/legendary-tools.ts); absent when the lair prints none.
   lairOptions?: string[];
@@ -440,10 +454,10 @@ ${setting}
 - An ally who will fight or be targeted MUST go through add_companion BEFORE you narrate them joining, exactly like add_enemies for the other side; an ally who never went through add_companion has no sheet and cannot fight, be attacked, or be healed. Ordinary background NPCs (shopkeepers, quest-givers) are NOT companions; only use add_companion for someone who will act alongside the party.
 - A character's OWN bound creature (a familiar from Find Familiar, a Beast Master's companion, a Drakewarden's drake, a story pet) is a pet on their sheet, not a companion: a caster's Find Familiar is cast with cast_buff (the form in variant; the server pays the casting and binds the pet), and the others come with summon_pet (the server validates the granting feature and refuses characters who lack it), attack with pet_attack on the owner's own turn (it costs what the bond says: a Beast Master's companion the owner's action, a drake the bonus action, a Pact of the Chain familiar one attack of the Attack action; ordinary familiars cannot attack, and a downed owner commands nothing), route enemy damage at it with apply_damage, its petName and the damage's type (its own hit points and defenses, never the owner's; a familiar at 0 HP vanishes), and end the bond with dismiss_pet. Pets listed in GAME STATE are real; a pet not listed there does not exist.
 - You play companions fully. Speak their dialogue inline in your narration with a voice matching their personality brief. They are supporting cast: they advise, banter, and fight, but never make the party's decisions, never outshine the players, and never speak for a player character.
-- In combat, on a companion's initiative turn, act for them: move_token with no forced if they need to reposition (it spends their speed and draws opportunity attacks like any walk), then pc_attack or cast_at_enemy with their characterId (or another tool that fits), then end_turn for them if no attack fits. If you do nothing on their turn, the server makes a basic attack for them automatically.
+- In combat, on a companion's initiative turn, act for them: move_token with no forced if they need to reposition (it spends their speed and draws opportunity attacks like any walk), then pc_attack or cast_at_enemy with their characterId (or another tool that fits), then end_turn for them if no attack fits. Their turn ends with your reply: a move after their action is yours to make now with move_token, never a question to the players. If you do nothing on their turn, the server makes a basic attack for them automatically.
 - A companion GAME STATE says a player commands in fights is the exception: on its turn that player gives its orders, and you resolve them from the player's message exactly as you resolve a player character's, never moving or attacking for it on your own. Its voice and choices out of fights stay yours.
 - All sheet rules apply to companions: their tools, spells, slots, and resources work exactly like a player character's, through the same tool calls.
-- Never call request_player_input for a companion and never send_whisper to one; no human is behind them.
+- Never call request_player_input for a companion you play and never send_whisper to a companion; no human is behind them. To ask about a commanded companion's turn, name its commander's own character.
 - When a companion dies, narrate it, record_event the death, and then dismiss_companion once the story moves on.`;
 }
 
@@ -532,6 +546,34 @@ function spellListLabel(lists: {
   return parts.join("; ") || "none";
 }
 
+// The spells the race and its chosen option give (issue #833): a
+// tiefling's, a workshop Half-Dragon's Topaz misty step. None sits on a
+// class's list, so the line beside them read "they can cast nothing else"
+// and a fighter's read "cannot cast any spells". One short line: each spell
+// a class list does not already show, its free uses left, and the ability
+// and DC the engine casts them with (src/lib/srd/species-spell-view.ts).
+function racialSpellsLine(sheet: CharacterSheet): string {
+  const spells = innateSpellsFor(sheet.race, sheet.level, undefined, { features: sheet.features });
+  const listed = new Set(
+    [sheet.spellcasting, ...(sheet.spellcasting?.casters ?? [])]
+      .flatMap((entry) => (entry ? [...(entry.cantrips ?? []), ...entry.known, ...entry.prepared] : []))
+      .map((name) => textKey(name)),
+  );
+  const parts = spells
+    .filter((spell) => !listed.has(textKey(spell.name)))
+    .map((spell) => {
+      const ability = spellAbilityFor(sheet, spell.name);
+      const cast = ability ? ` ${ability.toUpperCase()} DC ${spellSaveDcFor(sheet, spell.name)}` : "";
+      if (spell.castAt === 0) {
+        return `${spell.name} (at will${cast})`;
+      }
+      const state = spell.counterId ? sheet.resources?.[spell.counterId] : undefined;
+      const left = spell.uses - Math.min(state?.used ?? 0, spell.uses);
+      return `${spell.name} (L${spell.castAt}, ${left}/${spell.uses} per ${spell.rest} rest${spell.slotsToo ? " or a slot" : ""}${cast})`;
+    });
+  return parts.length ? `Species spells (no slot, spell tools spend them): ${parts.join("; ")}` : "";
+}
+
 // What GAME STATE adds of a companion a player commands in fights
 // (src/lib/dm/companion-command.ts): whose orders its turns follow, named as
 // the story knows them. The account name went into the GM's narration ("she
@@ -596,9 +638,20 @@ export function describeSheet(
             sheet.subclass;
           const description =
             classFeatureDescription(owner, feature.name) ??
-            subclassFeatureDescription(owner, ownerSubclass, feature.name, extras);
+            subclassFeatureDescription(owner, ownerSubclass, feature.name, extras) ??
+            // A workshop subclass's pick ("Bloodline (Storm)") says what its
+            // option gives (issue #833).
+            (feature.source === "choice" ? subclassChoicePickDescription(feature, extras) : null);
           const tag = engineTags.get(feature.name);
-          const named = description ? `${feature.name} (${description})` : feature.name;
+          // A sorcerer's dragon says its damage type, the one Elemental
+          // Affinity adds to and resists: "Dragon Ancestor: Red" alone left
+          // the model to remember the table (issue #833).
+          const dragonType = dragonAncestorType({ features: [feature] });
+          const named = description
+            ? `${feature.name} (${description})`
+            : dragonType
+              ? `${feature.name} (${dragonType} damage)`
+              : feature.name;
           return tag ? `${named} ${tag}` : named;
         })
         .join(", ")
@@ -634,7 +687,7 @@ export function describeSheet(
     ? encumbranceFor({
         strength: sheet.abilities.str,
         equipment: sheet.equipment ?? [],
-        coins: sheet.gold ?? 0,
+        coins: purseCoins({ gold: sheet.gold ?? 0, copper: sheet.copper ?? 0 }),
         size: sizeForRace(sheet.race),
       })
     : null;
@@ -660,9 +713,14 @@ export function describeSheet(
   }
   const customClass = findCustomClass(sheet.class);
   if (customClass) {
-    const casting = customClass.spellListFrom
-      ? ` Casts ${customClass.spellListFrom}-list spells reflavored as ${customClass.castingLabel ?? "their own arts"} (${customClass.spellAbility?.toUpperCase()}).`
-      : "";
+    // A workshop class with a list of its own names some of it, not its id
+    // (issue #833): the GM reads which spells it draws on.
+    const own = customClass.customSpells;
+    const casting = own
+      ? ` Casts from a spell list of its own (${own.length} spells, among them ${own.slice(0, 8).join(", ")}) as ${customClass.castingLabel ?? "their own arts"} (${customClass.spellAbility?.toUpperCase()}).`
+      : customClass.spellListFrom
+        ? ` Casts ${customClass.spellListFrom}-list spells reflavored as ${customClass.castingLabel ?? "their own arts"} (${customClass.spellAbility?.toUpperCase()}).`
+        : "";
     lines.splice(
       1,
       0,
@@ -690,7 +748,7 @@ export function describeSheet(
     // What it shrugs off, so the damage the DM routes at it carries a type.
     const defenses = defenseWords(pet);
     lines.push(
-      `  Pet: ${pet.name} (${pet.form}, ${pet.kind.replaceAll("_", " ")}): ${pet.hp}/${pet.maxHp} HP, AC ${pet.ac}, speed ${pet.speed} ft.${attacks}${defenses ? ` Defenses: ${defenses}.` : ""}${pet.notes ? ` ${pet.notes}` : ""}`,
+      `  Pet: ${pet.name} (${pet.form}, ${pet.creatureType ? `a ${pet.creatureType} ` : ""}${pet.kind.replaceAll("_", " ")}): ${pet.hp}/${pet.maxHp} HP, AC ${pet.ac}, speed ${pet.speed} ft.${attacks}${defenses ? ` Defenses: ${defenses}.` : ""}${pet.notes ? ` ${pet.notes}` : ""}`,
     );
   }
   // A creature a spell made: its stat block's attacks and how it ends
@@ -751,6 +809,8 @@ export function describeSheet(
       lines.push(`    ${summary}`);
     }
   }
+  const racialSpells = racialSpellsLine(sheet);
+  const besides = racialSpells ? " and their species' spells below" : "";
   if (sheet.spellcasting) {
     const pact = sheet.spellcasting.pact;
     const pactLabel = pact
@@ -771,25 +831,29 @@ export function describeSheet(
         );
       }
       lines.push(
-        `    They can cast nothing beyond those lists.${sheet.concentratingOn ? ` Concentrating on: ${sheet.concentratingOn}` : ""}`,
+        `    They can cast nothing beyond those lists${besides}.${sheet.concentratingOn ? ` Concentrating on: ${sheet.concentratingOn}` : ""}`,
       );
     } else {
       const spellList = spellListLabel(sheet.spellcasting);
       lines.push(
-        `  Spell slots: ${slots || "none"}${pactLabel} | Save DC ${derived.spellSaveDc} | Spells (complete list, they can cast nothing else): ${spellList}${sheet.concentratingOn ? ` | Concentrating on: ${sheet.concentratingOn}` : ""}`,
+        `  Spell slots: ${slots || "none"}${pactLabel} | Save DC ${derived.spellSaveDc} | Spells (complete list${besides}, they can cast nothing else): ${spellList}${sheet.concentratingOn ? ` | Concentrating on: ${sheet.concentratingOn}` : ""}`,
       );
     }
-  } else {
+  }
+  if (racialSpells) {
+    lines.push(`  ${racialSpells}`);
+  } else if (!sheet.spellcasting) {
     lines.push(`  Spellcasting: none (cannot cast any spells)`);
   }
-  // Gold always prints, even with an empty pack: the model cannot keep a
-  // purse it never sees (missed modify_gold calls on purchases).
+  // The purse always prints, even with an empty pack: the model cannot keep a
+  // purse it never sees (missed modify_gold calls on purchases). All of it, so
+  // a hero with only silver left does not read as having nothing.
   lines.push(
     `  Equipment (complete inventory, they carry nothing else): ${
       sheet.equipment.length
         ? sheet.equipment.map((item) => describeEquipmentItem(item, sheet.equipment)).join(", ")
         : "none"
-    } | Gold: ${sheet.gold}`,
+    } | Purse: ${formatPrice(purseCopper({ gold: sheet.gold, copper: sheet.copper ?? 0 }))}`,
   );
   // What the hands hold and the body wears, on a sheet that says (issue
   // #424): an attack with anything else draws it first, the turn's free
@@ -1081,11 +1145,29 @@ export function buildGameStateBlock(state: DmGameState): string {
           `Waiting on ${name}'s player: they have not declared an action this turn. Set the scene and ask what ${name} does; the server refuses any action or end_turn for ${name} until they do.`,
         );
       }
+      if (encounter.holding) {
+        const name = encounter.holding;
+        lines.push(`${name}'s player said ${name} stays where they are: never walk ${name} this turn (no move_token, approach or toward); resolve only what they asked from where they stand.`);
+      }
+      if (encounter.openHits?.length) {
+        const who = encounter.openHits.map(
+          (entry) =>
+            `${entry.name} [characterId=${entry.characterId}${entry.ai ? ", yours to react for" : ""}]: ${entry.hits.map((hit) => `hitId=${hit.hitId} ${hit.what}`).join("; ")}`,
+        );
+        lines.push(
+          `Open hits a reaction may still answer (use_reaction; name the one answered in hit when a character has several): ${who.join(". ")}. A player's character, and a companion a player commands, reacts only when their player says so. A companion marked yours to react for is played by you: when a reaction on its sheet fits (Shield, Uncanny Dodge, Parry, Protection for an ally), you may take it with use_reaction and its characterId.`,
+        );
+      }
     } else {
       lines.push(
         `Combat is starting. Initiative still needed from: ${
           encounter.awaitingInitiative.join(", ") || "nobody"
         }. Call request_roll with kind=initiative for each character listed.`,
+      );
+    }
+    if (encounter.away?.length) {
+      lines.push(
+        `Not at this fight: ${encounter.away.join(", ")}, with no place in the order and no token. When the story brings one here, call request_roll kind=initiative for them.`,
       );
     }
     lines.push(
@@ -1595,12 +1677,12 @@ export const requestPlayerInputTool = {
 // Location tools: the DM keeps a structured record of where the party is
 // and how areas connect, feeding GAME STATE and the map renderer.
 
-// A place's kind from a fixed list, so its sound, battle map and picture
-// never depend on reading its name in some language.
+// A place's kind from a fixed list, so its sound, battle map, picture and
+// light never depend on reading its name in some language.
 const sceneProperty = {
   type: "string",
   enum: sceneIds(),
-  description: "What kind of place this is, for its sound, battle map and picture. Set it when the party arrives somewhere new.",
+  description: "What kind of place this is, for its sound, battle map, picture and light. Set it when the party arrives somewhere new.",
 } as const;
 
 // What both location tools write about a place, worded once.
@@ -1742,7 +1824,7 @@ export const sendWhisperTool = {
         },
         message: {
           type: "string",
-          description: "The private note, addressed to those characters in second person.",
+          description: "The private note, addressed to those characters in second person. Up to 2,000 characters.",
         },
       },
       required: ["characterIds", "message"],
@@ -1840,7 +1922,9 @@ function turnRuleParts(state: TurnRuleState): {
     rulesCarrySecret = Boolean(secretRules);
   }
   const dmSystem = buildDmSystem(state.campaign, settingsRules, state.ruleContext ?? null);
-  const fightRules = state.encounter ? encounterRulesText(tracksAmmunition(state.campaign), state.ruleContext ?? null) : "";
+  const fightRules = state.encounter
+    ? `${encounterRulesText(tracksAmmunition(state.campaign), state.ruleContext ?? null)}\n${fightNarrationRule(state.campaign.gameSettings?.narrationLength)}`
+    : "";
   return { dmSystem, fightRules, secretRules, rulesCarrySecret };
 }
 
@@ -1869,7 +1953,12 @@ export function buildDmMessages(
   // A small model reads the server's "[roll:<id>]" markers in its own past
   // narration as something to write: Qwen3.5 9B wrote "[roll:pc_attack]" in
   // place of the attack. The short rules leave them out of the transcript.
-  const dmText = (text: string) => (state.ruleContext?.brief ? text.replace(/\[roll:[0-9a-f-]{36}\]\s*/g, "") : text);
+  // A passage stored before issue 900's fix may hold the card line the model
+  // copied then: read back as the model's own words, it would be copied again.
+  const dmText = (text: string) => {
+    const said = withoutServerLines(text);
+    return state.ruleContext?.brief ? said.replace(/\[roll:[0-9a-f-]{36}\]\s*/g, "") : said;
+  };
 
   const rendered = history.map((message) => {
     const name = message.characterId
@@ -1894,7 +1983,7 @@ export function buildDmMessages(
     // parsing the sentence (src/lib/dm/intent-logic.ts).
     const card =
       message.authorType === "player" && message.intent
-        ? `\n${describeIntent(message.intent, message.characterId, { resolved: state.engineCardIds?.has(message.id) ?? false })}`
+        ? `\n${describeIntent(message.intent, message.characterId, { resolved: (state.engineCardIds?.has(message.id) ?? false) || Boolean(message.cardResolvedAt) })}`
         : "";
     return { message, id: message.id, seq: message.seq, text: `${content}${card}` };
   });

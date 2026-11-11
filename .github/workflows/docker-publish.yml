@@ -27,10 +27,13 @@ name: Publish Docker image
 
 on:
   release:
-    # prereleased: a beta was published. released: a release is stable,
-    # published that way or promoted from a beta. Each publish fires exactly
-    # one of the two.
-    types: [prereleased, released]
+    # published: a release went out. A beta whose assets gh uploads to a draft
+    # first fires only this one (GitHub sends no prereleased for a draft made
+    # public, so 0.32.0, the first beta, built no image), and the job takes a
+    # published prerelease as the beta. released: a release is stable,
+    # published that way or promoted from a beta; a stable publish fires
+    # published too, which the job leaves to released.
+    types: [published, released]
   workflow_dispatch:
     inputs:
       tag:
@@ -40,11 +43,9 @@ on:
 
 env:
   DOCKERHUB_IMAGE: lebbi/open-game-master
-  # The image's names from before the rename to Open Game Master. Every release
-  # still goes to them too, so an install whose compose file or `docker pull`
-  # names them keeps updating; delete these two once those installs have moved.
-  LEGACY_GHCR_IMAGE: ghcr.io/lebbitheplow/open-dungeon-master
-  LEGACY_DOCKERHUB_IMAGE: lebbi/open-dungeon-master
+  # Releases go to the Open Game Master names only. The names from before the
+  # rename (lebbi/open-dungeon-master, ghcr.io/lebbitheplow/open-dungeon-master)
+  # stopped receiving them at 0.32.3 (docs/docker.md).
 
 # A beta promoted while its own image is still building waits for that build,
 # then finds the image and retags it instead of building it a second time.
@@ -54,6 +55,7 @@ concurrency:
 
 jobs:
   publish:
+    if: ${{ github.event_name != 'release' || github.event.action == 'released' || github.event.release.prerelease }}
     runs-on: ubuntu-latest
     # The build bakes the Open5e pack and the MiniLM model, so it is slower than
     # a plain next build.
@@ -73,14 +75,8 @@ jobs:
         run: |
           # GHCR rejects uppercase in a repository path; the owner may have it.
           images="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-          if [ -n "$LEGACY_GHCR_IMAGE" ]; then
-            images="$(printf '%s\n%s' "$images" "$LEGACY_GHCR_IMAGE")"
-          fi
           if [ "$HAS_DOCKERHUB" = "true" ]; then
             images="$(printf '%s\n%s' "$images" "$DOCKERHUB_IMAGE")"
-            if [ -n "$LEGACY_DOCKERHUB_IMAGE" ]; then
-              images="$(printf '%s\n%s' "$images" "$LEGACY_DOCKERHUB_IMAGE")"
-            fi
           else
             echo "::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set; publishing to GHCR only."
           fi

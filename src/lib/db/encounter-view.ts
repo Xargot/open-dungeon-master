@@ -1,13 +1,19 @@
 import { isKnockedOut } from "@/lib/dm/knockout";
+import { type LastSave } from "@/lib/dm/last-save";
+import { triggerRecords } from "@/lib/dm/reaction-triggers";
+import type { TriggerRecordView } from "@/lib/srd/trigger-table";
 import { defaultSide, type CombatSide } from "@/lib/dm/combat-sides-logic";
 import { sideOf } from "@/lib/dm/combatant";
-import { legendaryProfile } from "@/lib/dm/legendary-logic";
+import { lairChoices, legendaryProfile } from "@/lib/dm/legendary-logic";
 import { enemyActionsView, type PublicEnemyActions, type PublicEnemyMovement } from "@/lib/dm/enemy-actions-view";
 import { enemyMoveBudget } from "@/lib/dm/enemy-speed";
 import { enemyActedThisRound, isSurprised } from "@/lib/dm/can-act";
 import { getCampaignById } from "@/lib/db/campaigns";
+import { castLookup, npcFace, type CastLookup } from "@/lib/db/npc-faces";
+import { foeLook } from "@/lib/actor-sex-logic";
 import { dmPlaysTurn } from "@/lib/dm/companion-command";
-import { freshLastHit, heaviestHit, type LastHit } from "@/lib/dm/last-hit";
+import { aiRunsTestTable } from "@/lib/workshop/test-seats-logic";
+import { answerLabel, critTurnsNormal, heaviestHit, hitIdOf, openHits, reactedLate, type LastHit } from "@/lib/dm/last-hit";
 import { conditionNote, conditionNoteLine, namesLookup } from "@/lib/battlemap/condition-notes";
 import { healthState, type HealthState } from "@/lib/bestiary/health";
 import { creatureTypeOf } from "@/lib/bestiary/creature-type";
@@ -57,6 +63,9 @@ export type PublicEncounter = {
     id: string;
     name: string;
     hidden: boolean;
+    // An "npc" entry the Cast knows: their portrait or the plate their
+    // role, race and gender pick (src/lib/db/npc-faces.ts).
+    face?: string;
     // DM view only, like the enemy numbers below.
     initiative?: number;
     // Thief's Reflexes: the thief's second turn in the first round, a
@@ -80,6 +89,12 @@ export type PublicEncounter = {
     // groupKey has always been this same slug. Optional so a client talking
     // to an older server still renders.
     slug?: string;
+    // Who a humanoid foe is, for the face (enemyNpcPlaceholder): an SRD
+    // race id and a gender. A Cast NPC's come from their record, so an edit
+    // there shows at once; a nameless foe's from start_encounter. Absent
+    // when unrecorded, and nothing a player could not already see.
+    race?: string;
+    gender?: string;
     // Kept off the players' board and tracker by the DM. Only ever true in
     // the DM's own projection: a hidden enemy is absent from a player's.
     hidden: boolean;
@@ -126,6 +141,10 @@ export type PublicEncounter = {
   acting?: { id: string; name: string } | null;
   // While the enemies hold the turn: the player whose turn follows theirs.
   upNext?: { id: string; name: string };
+  // Every view: the character whose End Turn is in while the move waits on a
+  // watcher's stop (src/lib/dm/turn-hold.ts), and the watcher it waits on.
+  // The End Turn controls show it; absent on an older server.
+  turnHeld?: { characterId: string; watcher: string };
   // While the enemies hold the turn: the ones it is held for, by id, as this
   // viewer may know them (a hidden one is left out of a player's), so the
   // trackers light their rows.
@@ -143,11 +162,20 @@ export type PublicEncounter = {
   // server (src/lib/dm/combatant.ts). Absent when everyone is on their
   // kind's side; a combatant hidden from this viewer is left out.
   sides?: Record<string, CombatSide>;
-  // The attacks a reaction may still answer (src/lib/dm/last-hit.ts): one
-  // per character hit this turn, while the engine would accept a reaction
-  // to it. Absent keys mean nothing to answer.
+  // The attacks a reaction may still answer (src/lib/dm/last-hit.ts): every
+  // hit still open on each character, oldest first, while the engine would
+  // accept a reaction to it. Absent keys mean nothing to answer.
   lastHits?: PublicLastHit[];
+  // The triggers open now that no hit record holds (src/lib/dm/last-save.ts,
+  // reaction-triggers.ts triggerRecords): saves made or failed and who forced
+  // them, deaths, a turn's end and the next one's start, casts, a pet's damage,
+  // the running turn's weapon hits and Action Surge. Named for the first of
+  // them it carried (a save, for Vigilant Rebuke); an entry with no kind is a
+  // save made. A creature hidden from this viewer is left out.
+  lastSaves?: PublicSave[];
 };
+
+export type PublicSave = TriggerRecordView;
 
 export type PublicTurn = {
   ownerId: string;
@@ -183,6 +211,10 @@ export type PublicTurn = {
 };
 
 export type PublicLastHit = {
+  // The hit's id, which a reaction card sends to answer this hit and no
+  // other (use_reaction's `hit`). Absent from an older host, which kept one
+  // hit per character.
+  id?: string;
   characterId: string;
   attacker: string;
   // The enemy that made it, when the player may know it (not hidden).
@@ -193,13 +225,24 @@ export type PublicLastHit = {
   attack: string;
   type: string;
   ranged: boolean;
-  source: "attack" | "fall";
+  source: "attack" | "fall" | "missile";
   // Whether any swing hit, and how many did.
   hit: boolean;
   hits: number;
   damage: number;
-  // Reactions already taken against it.
+  // The heaviest critical among its swings that can become a normal hit
+  // (Sentinel at Death's Door), which need not be the hit named above.
+  crit?: { attack: string; damage: number };
+  // Reactions already taken against it, by name. `answeredBy` keeps who took
+  // each (last-hit.ts answerKey), so a second holder of the same feature is
+  // still offered it; an older host sends names only.
   answered: string[];
+  answeredBy?: string[];
+  // How the character stood as it landed: up or already at 0, and their
+  // conditions then. A reaction that answers the hit is asked of them as
+  // they stood (src/lib/dm/reaction-gate.ts), so a card for one the hit
+  // dropped reads this, not the fall. Absent from an older host.
+  stood?: { up: boolean; conditions: string[] };
 };
 
 function turnView(encounter: Encounter): { turn?: PublicTurn } {
@@ -256,11 +299,15 @@ function actingView(encounter: Encounter, hidden: Set<string>, showNumbers: bool
     ...(enemiesFirst ? { enemyTurns: true } : {}),
     ...(enemiesFirst && pointer ? { upNext: pointer } : {}),
     ...(enemiesFirst ? { enemiesUp: owner.enemies.filter((id) => showNumbers || !hidden.has(id)) } : {}),
+    ...(encounter.legendary.heldMove ? { turnHeld: { characterId: encounter.legendary.heldMove.characterId, watcher: encounter.legendary.heldMove.watcher } } : {}),
     surprised: {
       acting: pcIds.filter((id) => isSurprised(encounter, id)),
       reacting: pcIds.filter((id) => isSurprised(encounter, id, true)),
     },
-    reactionsUsed: encounter.reactionsUsed.filter((id) => pcIds.includes(id)),
+    // A character who answered the enemies' pass after their turn began has
+    // their reaction back for that turn, and no second one for the pass
+    // (last-hit.ts reactedLate): the Hand offered one the engine refused.
+    reactionsUsed: pcIds.filter((id) => encounter.reactionsUsed.includes(id) || reactedLate(encounter.campaignId, encounter, id)),
   };
 }
 
@@ -268,7 +315,9 @@ function lastHitView(record: LastHit, hidden: Set<string>, showNumbers: boolean)
   const attackerId = record.attacker.id;
   const index = heaviestHit(record.swings);
   const answered = index >= 0 ? record.swings[index] : null;
+  const critical = record.swings[heaviestHit(record.swings, (swing) => critTurnsNormal(record, swing))];
   return {
+    id: hitIdOf(record),
     characterId: record.characterId,
     attacker: record.attacker.name,
     attackerId: attackerId && (showNumbers || !hidden.has(attackerId)) ? attackerId : null,
@@ -282,8 +331,26 @@ function lastHitView(record: LastHit, hidden: Set<string>, showNumbers: boolean)
     hit: record.source === "fall" || record.swings.some((swing) => swing.hit),
     hits: record.swings.filter((swing) => swing.hit).length,
     damage: answered?.raw ?? 0,
-    answered: record.answered,
+    ...(critical ? { crit: { attack: critical.attack ?? record.attack, damage: critical.raw } } : {}),
+    answered: [...new Set(record.answered.map(answerLabel))],
+    answeredBy: record.answered,
+    stood: { up: record.before.currentHp > 0, conditions: record.before.conditions },
   };
+}
+
+
+// The face an initiative entry for a tracked NPC draws (npc-faces.ts).
+function entryFace(cast: CastLookup, npcId: string, name: string): { face?: string } {
+  const npc = cast.byId(npcId) ?? cast.byName(name);
+  return npc ? { face: npcFace(npc) } : {};
+}
+
+// Who a foe is, for its face: a Cast NPC's own record, read live so an edit
+// there shows in a running fight, else its row's look, the one a 3D board
+// view's model reads too (src/lib/actor-sex-logic.ts).
+function lookOf(cast: CastLookup, enemy: EncounterEnemy): { race?: string; gender?: string } {
+  const { race, gender } = foeLook(enemy, cast.byId(enemy.npcId));
+  return { ...(race ? { race } : {}), ...(gender ? { gender } : {}) };
 }
 
 // How far an enemy may still walk this turn, for the person running it: the
@@ -301,14 +368,18 @@ function movementView(encounter: Encounter, enemy: EncounterEnemy, map: BattleMa
 export function publicEncounter(
   encounter: Encounter,
   enemies: EncounterEnemy[],
-  options: { enemyNumbers?: boolean; hiddenRefIds?: string[]; lastHits?: LastHit[] } = {},
+  options: { enemyNumbers?: boolean; hiddenRefIds?: string[]; lastHits?: LastHit[]; lastSaves?: LastSave[] } = {},
 ): PublicEncounter {
   const showNumbers = options.enemyNumbers === true;
   const board = showNumbers ? getBattleMapForEncounter(encounter.id) : null;
+  // The lair's options while it may act, numbered across the whole fight as
+  // lair_action numbers them: each creature's card carries its own.
+  const lair = showNumbers ? lairChoices(enemies, encounter.legendary) : null;
   // Hidden is one flag on the board token (src/lib/db/battle-maps.ts) and it
   // means the same thing in both places: an ambusher the players have not
   // met yet is neither on the map nor on the tracker.
   const hidden = new Set(options.hiddenRefIds ?? []);
+  const cast = castLookup(encounter.campaignId);
   // Names a condition's "until X's turn" or "from X" may show: the order as
   // this viewer sees it.
   const nameOf = namesLookup(
@@ -338,6 +409,7 @@ export function publicEncounter(
             ...(showNumbers ? { initiative: entry.initiative } : {}),
             ...(entry.kind === "pc" && entry.reflex ? { reflex: true } : {}),
             ...(entry.kind === "pc" && entry.extra ? { extra: entry.extra } : {}),
+            ...(entry.kind === "npc" ? entryFace(cast, entry.npcId, entry.name) : {}),
           }))
       : [],
     enemies: enemies
@@ -351,6 +423,7 @@ export function publicEncounter(
       cr: enemy.cr,
       type: creatureTypeOf(enemy.stats),
       slug: enemy.slug,
+      ...lookOf(cast, enemy),
       groupKey: enemy.slug,
       // Knocked out by a nonlethal blow (src/lib/dm/knockout.ts): alive at
       // 0 hit points, out of the fight, not dying.
@@ -387,7 +460,7 @@ export function publicEncounter(
             ac: enemy.ac,
             initiative: enemy.initiative,
             ...legendaryView(encounter, enemy),
-            actions: enemyActionsView(encounter, enemy, movementView(encounter, enemy, board)),
+            actions: enemyActionsView(encounter, enemy, movementView(encounter, enemy, board), lair ?? undefined),
           }
         : {}),
     })),
@@ -401,7 +474,33 @@ export function publicEncounter(
       ? { lastHits: options.lastHits.map((record) => lastHitView(record, hidden, showNumbers)) }
       : {}),
     ...sidesView(encounter, enemies, hidden, showNumbers),
+    ...savesView(options.lastSaves, hidden, showNumbers),
   };
+}
+
+function savesView(saves: LastSave[] | undefined, hidden: Set<string>, showNumbers: boolean): { lastSaves?: PublicSave[] } {
+  const shown = (saves ?? []).filter((save) => showNumbers || !hidden.has(save.forcer.id));
+  return shown.length
+    ? {
+        lastSaves: shown.map((save) => ({
+          id: save.id,
+          characterId: save.characterId,
+          ability: save.ability,
+          forcerId: save.forcer.id,
+          forcer: save.forcer.name,
+          ...(save.kind ? { kind: save.kind } : {}),
+          ...(save.success !== undefined ? { success: save.success } : {}),
+          ...(save.against ? { against: save.against } : {}),
+          ...(save.damage ? { damage: save.damage } : {}),
+          ...(save.petName ? { petName: save.petName } : {}),
+          ...(save.creatureType !== undefined ? { creatureType: save.creatureType } : {}),
+          ...(save.killerId !== undefined ? { killerId: save.killerId } : {}),
+          ...(save.spell ? { spell: save.spell } : {}),
+          ...(save.enemy !== undefined ? { enemy: save.enemy } : {}),
+          ...(save.answered?.length ? { answered: save.answered } : {}),
+        })),
+      }
+    : {};
 }
 
 // The side exceptions every client draws, a domination's included.
@@ -446,8 +545,10 @@ function dmTurnView(encounter: Encounter, enemies: EncounterEnemy[]) {
   const campaign = getCampaignById(encounter.campaignId);
   return {
     ...(due.length ? { enemiesDue: due } : {}),
-    // A companion turn for the DM to play; one a player commands is theirs.
-    ...(current?.kind === "pc" && campaign && dmPlaysTurn(campaign, current)
+    // A companion turn for the DM to play; one a player commands is theirs,
+    // and at a test the AI GM runs the AI plays it (issue 685), so the
+    // author's tracker offers no button to play it twice.
+    ...(current?.kind === "pc" && campaign && !aiRunsTestTable(campaign) && dmPlaysTurn(campaign, current)
       ? { companionTurn: { id: current.characterId, name: current.name } }
       : {}),
   };
@@ -485,17 +586,15 @@ export function activePublicEncounter(
   }
   const map = getBattleMapForEncounter(encounter.id);
   // Only records a reaction may still answer: the engine's own freshness
-  // rule (same round and turn), asked per character in the order.
-  const lastHits = encounter.order.flatMap((entry) => {
-    if (entry.kind !== "pc") {
-      return [];
-    }
-    const record = freshLastHit(campaignId, entry.characterId);
-    return record ? [record] : [];
-  });
+  // rule, asked per character in the order, every open hit of each. Once per
+  // character: an extra turn (Strength before Death, Thief's Reflexes) puts
+  // them in the order twice, and each of their hits came twice with its cards.
+  const heroes = [...new Set(encounter.order.flatMap((entry) => (entry.kind === "pc" ? [entry.characterId] : [])))];
+  const lastHits = heroes.flatMap((id) => openHits(campaignId, id));
   return publicEncounter(encounter, listEnemies(encounter.id), {
     ...options,
     lastHits,
+    lastSaves: triggerRecords(campaignId),
     hiddenRefIds: map ? listHiddenRefIds(map.id) : [],
   });
 }

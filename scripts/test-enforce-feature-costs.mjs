@@ -41,14 +41,7 @@ const hexblade = world.addHero({
   abilities: { cha: 16 },
   spellcasting: casting("cha", { 1: [2, 0] }, { known: ["Wrathful Smite"] }),
 });
-const cleric = world.addHero({ class: "cleric", subclass: "Light Domain", level: 3, abilities: { wis: 16 } });
-const chronurgist = world.addHero({
-  class: "wizard",
-  subclass: "Chronurgy Magic",
-  level: 2,
-  abilities: { int: 16 },
-  spellcasting: casting("int", { 1: [3, 0] }, { known: ["Shield"], prepared: ["Shield"] }),
-});
+const sorcerer = world.addHero({ class: "sorcerer", subclass: "Clockwork Soul", level: 6, abilities: { cha: 16 } });
 
 // A fight with `first` at the pointer and every hero's uses back.
 async function stage(first) {
@@ -60,7 +53,31 @@ async function stage(first) {
   }
   await kit.fight(1);
   kit.giveTurn(first.id);
-  return world.enemies()[0];
+  // Beside the hero: Hexblade's Curse takes "a creature you can see within
+  // 30 feet of you", and the scattered goblin could stand further off.
+  const [enemy] = world.enemies();
+  kit.place(first.id, 5, 5);
+  kit.place(enemy.id, 5, 6);
+  return enemy;
+}
+
+// Restore Balance answers "a roll within 60 feet" made with advantage or
+// disadvantage, on record (src/lib/srd/trigger-table.ts; SRD 5.1, Reactions:
+// "an instant response to a trigger"): an enemy's attack on a restrained hero,
+// made on its turn, which is where the pointer is left.
+async function edgeRoll(enemy, on = hexblade) {
+  kit.freshRound();
+  const live = world.encounter();
+  encounters.saveEncounter({ ...live, turnIndex: live.order.findIndex((entry) => entry.enemyId === enemy.id), turnBudget: null });
+  kit.place(on.id, 5, 5);
+  kit.place(enemy.id, 5, 6);
+  const was = world.sheet(on.id).conditions;
+  world.patch(on.id, { conditions: [...was, "restrained"] });
+  world.dice(15, 3, 1);
+  const out = await world.invoke("enemy_attack", { enemyId: enemy.id, targetCharacterId: on.id });
+  world.clearDice();
+  world.patch(on.id, { conditions: was });
+  assert.equal(out.ok, true, out.error);
 }
 
 await test("a bonus-action feature after a bonus-action spell is refused, and costs nothing", async () => {
@@ -109,30 +126,36 @@ await test("a spend with no roll reaches the table with the new count", async ()
 });
 
 await test("a reaction feature spends the reaction, on the character's turn or off it", async () => {
-  await stage(hexblade);
-  const flare = await spend(cleric, "Warding Flare");
+  const enemy = await stage(hexblade);
+  await edgeRoll(enemy);
+  const flare = await spend(sorcerer, "Restore Balance");
   assert.equal(flare.ok, true, flare.error);
   assert.equal(flare.result.cost, "their reaction");
-  assert.ok(world.encounter().reactionsUsed.includes(cleric.id));
-  await refusedUnchanged(world, cleric.id, () => spend(cleric, "Warding Flare"), "a second reaction off their turn");
-  assert.equal(used(cleric, "sub_warding_flare"), 1);
+  assert.ok(world.encounter().reactionsUsed.includes(sorcerer.id));
+  await refusedUnchanged(world, sorcerer.id, () => spend(sorcerer, "Restore Balance"), "a second reaction off their turn");
+  assert.equal(used(sorcerer, "sub_restore_balance"), 1);
 
-  kit.giveTurn(chronurgist.id);
-  const shift = await spend(chronurgist, "Chronal Shift");
-  assert.equal(shift.ok, true, shift.error);
-  assert.ok(world.encounter().reactionsUsed.includes(chronurgist.id), "a reaction on their own turn");
+  // On their own turn, against a roll just made: the reaction is theirs to spend
+  // there too, and a reaction spell after it is refused. (Chronal Shift took
+  // this part once; a plain use of it is now sent to use_reaction.)
+  await edgeRoll(enemy);
+  kit.giveTurn(sorcerer.id);
+  const own = await spend(sorcerer, "Restore Balance");
+  assert.equal(own.ok, true, own.error);
+  assert.ok(world.encounter().reactionsUsed.includes(sorcerer.id), "a reaction on their own turn");
   await refusedUnchanged(
     world,
-    chronurgist.id,
-    () => world.invoke("use_reaction", { characterId: chronurgist.id, feature: "Shield", level: 1 }),
+    sorcerer.id,
+    () => world.invoke("use_reaction", { characterId: sorcerer.id, feature: "Shield", level: 1 }),
     "a reaction spell after a reaction feature",
   );
-  const shield = await world.invoke("use_reaction", { characterId: chronurgist.id, feature: "Shield", level: 1 });
+  const shield = await world.invoke("use_reaction", { characterId: sorcerer.id, feature: "Shield", level: 1 });
   assert.match(shield.error, /already used their reaction/);
 
   // The reaction comes back when their next turn starts.
-  kit.giveTurn(cleric.id);
-  const again = await spend(cleric, "Warding Flare");
+  await edgeRoll(enemy);
+  kit.giveTurn(sorcerer.id);
+  const again = await spend(sorcerer, "Restore Balance");
   assert.equal(again.ok, true, again.error);
 });
 
@@ -143,7 +166,7 @@ await test("a refused spend costs nothing and tells the table nothing, whatever 
   // before anything is written.
   for (const [who, name, id] of [
     [hexblade, "Hexblade's Curse", "sub_hexblades_curse"],
-    [cleric, "Warding Flare", "sub_warding_flare"],
+    [sorcerer, "Restore Balance", "sub_restore_balance"],
   ]) {
     world.patch(who.id, { resources: { ...world.sheet(who.id).resources, [id]: { ...world.sheet(who.id).resources[id], used: world.sheet(who.id).resources[id].max } } });
     const budget = world.encounter().turnBudget;
@@ -167,11 +190,13 @@ await test("every spend that rolls nothing reaches the table", async () => {
   assert.equal(curse.ok, true, curse.error);
   assert.equal(updatesSince(world.campaignId, seq).at(-1)?.turn?.bonusUsed, true, "use_resource");
 
+  await edgeRoll(enemy);
   seq = lastSeq(world.campaignId);
-  const flare = await spend(cleric, "Warding Flare");
+  const flare = await spend(sorcerer, "Restore Balance");
   assert.equal(flare.ok, true, flare.error);
-  assert.ok(updatesSince(world.campaignId, seq).at(-1)?.reactionsUsed?.includes(cleric.id), "a reaction feature");
+  assert.ok(updatesSince(world.campaignId, seq).at(-1)?.reactionsUsed?.includes(sorcerer.id), "a reaction feature");
 
+  kit.giveTurn(hexblade.id);
   world.patch(hexblade.id, { equipment: [...world.sheet(hexblade.id).equipment, { name: "Potion of Healing", qty: 1 }] });
   seq = lastSeq(world.campaignId);
   const potion = await world.invoke("use_item", { characterId: hexblade.id, item: "Potion of Healing" });
@@ -237,24 +262,27 @@ await test("Hidden Paths costs a bonus action for the druid and an action for a 
 });
 
 await test("a reaction feature is refused to the surprised and the unconscious, as use_reaction refuses it", async () => {
-  await stage(hexblade);
+  const enemy = await stage(hexblade);
+  await edgeRoll(enemy);
+  // Back to the first in the order, before the surprised sorcerer's turn.
+  kit.giveTurn(hexblade.id);
   const live = world.encounter();
-  encounters.saveEncounter({ ...live, round: 1, surprisedIds: [cleric.id] });
-  const surprised = await spend(cleric, "Warding Flare");
+  encounters.saveEncounter({ ...live, round: 1, surprisedIds: [sorcerer.id] });
+  const surprised = await spend(sorcerer, "Restore Balance");
   assert.match(String(surprised.error), /surprised/);
-  assert.equal(used(cleric, "sub_warding_flare"), 0);
+  assert.equal(used(sorcerer, "sub_restore_balance"), 0);
 
   // Down since an earlier hit: no reaction at all.
   encounters.saveEncounter({ ...world.encounter(), surprisedIds: [] });
-  world.patch(cleric.id, { currentHp: 0, conditions: ["unconscious"] });
-  await refusedUnchanged(world, cleric.id, () => spend(cleric, "Warding Flare"), "an unconscious cleric");
-  world.patch(cleric.id, { currentHp: world.sheet(cleric.id).maxHp, conditions: [] });
+  world.patch(sorcerer.id, { currentHp: 0, conditions: ["unconscious"] });
+  await refusedUnchanged(world, sorcerer.id, () => spend(sorcerer, "Restore Balance"), "an unconscious sorcerer");
+  world.patch(sorcerer.id, { currentHp: world.sheet(sorcerer.id).maxHp, conditions: [] });
 
   // Slowed: no reactions at all.
-  world.patch(cleric.id, { conditions: ["slowed"] });
-  const slowed = await spend(cleric, "Warding Flare");
+  world.patch(sorcerer.id, { conditions: ["slowed"] });
+  const slowed = await spend(sorcerer, "Restore Balance");
   assert.match(String(slowed.error), /cannot take reactions/);
-  world.patch(cleric.id, { conditions: [] });
+  world.patch(sorcerer.id, { conditions: [] });
 });
 
 await test("Adrenaline Surge and the grifter's Vanish take the bonus action and spend a use", async () => {

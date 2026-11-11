@@ -213,6 +213,40 @@ export const equipmentItemSchema = z.object({
   // full: a row written before charges were kept starts with all of them
   // (src/lib/dm/item-charges.ts).
   charges: z.number().int().min(0).max(999).optional(),
+  // What a Ring of Spell Storing holds (src/lib/srd/spell-storing.ts): each
+  // spell at the slot level it was cast from, with its caster's numbers.
+  storedSpells: z
+    .array(
+      z.object({
+        spell: z.string().trim().min(1).max(80),
+        level: z.number().int().min(1).max(5),
+        saveDc: z.number().int().min(1).max(50).optional(),
+        attackBonus: z.number().int().min(-10).max(50).optional(),
+        abilityMod: z.number().int().min(-5).max(20).optional(),
+        by: z.string().trim().min(1).max(80).optional(),
+      }),
+    )
+    .max(5)
+    .optional(),
+  // A spell this item cast that is still running, with the numbers it was cast
+  // with: its later effects use them, not the user's own
+  // (src/lib/srd/item-cast-credit.ts runningItemSpell).
+  castRunning: z
+    .array(
+      z.object({
+        spell: z.string().trim().min(1).max(80),
+        level: z.number().int().min(0).max(9),
+        saveDc: z.number().int().min(1).max(50).optional(),
+        attackBonus: z.number().int().min(-10).max(50).optional(),
+        abilityMod: z.number().int().min(-5).max(20).optional(),
+      }),
+    )
+    .max(6)
+    .optional(),
+  // The beads of a Necklace of Prayer Beads used since dawn, by kind
+  // ("curing"): each casts once a day (src/lib/srd/prayer-beads.ts). Absent
+  // on every other row.
+  beadsSpent: z.array(z.string().trim().min(1).max(20)).max(12).optional(),
   // Pounds per unit, for the optional encumbrance rule. Filled in from the
   // content pack when a sheet is read (src/lib/db/sheets.ts), so rows
   // written before the field still get weighed; a value a player typed
@@ -272,6 +306,16 @@ export const sheetFeatureSchema = z.object({
   // class. Set on regrant so level-scaled features (Sneak Attack, Martial
   // Arts) resolve against the granting class's level on multiclass sheets.
   classId: z.string().trim().max(60).optional(),
+  // A workshop subclass choice's pick ("Bloodline (Storm)") keeps the ids of
+  // its choice and option, "bloodline/storm", so a rename in the workshop
+  // keeps the pick (src/lib/content/subclass-choices.ts, issue #833).
+  optionId: z.string().trim().max(82).optional(),
+  // On a workshop species' choice record ("Draconic ancestry (Topaz)"), the
+  // option's id ("topaz"), written by the server when it admits the sheet
+  // (src/lib/srd/sheet-legality.ts): a sheet at a table keeps no
+  // racialChoices, and the id finds the option's spells through a rename of
+  // the option or of the choice (issue #833).
+  variant: z.string().trim().max(40).optional(),
 });
 export type SheetFeature = z.infer<typeof sheetFeatureSchema>;
 
@@ -669,6 +713,11 @@ export const petSchema = z.object({
   kind: z.enum(["familiar", "beast_companion", "drake", "other"]),
   // The species/form behind the name ("owl", "wolf", "drake").
   form: z.string().trim().min(1).max(60),
+  // What it is instead of its form's own creature type: a Find Familiar
+  // familiar is a celestial, fey or fiend, the caster's choice (SRD 5.1).
+  // Absent on a pet stored before it existed, and on one whose form's own
+  // type stands (a Beast Master's wolf is a beast): petCreatureType reads it.
+  creatureType: z.enum(["celestial", "fey", "fiend"]).optional(),
   hp: z.number().int().min(0).max(300),
   maxHp: z.number().int().min(1).max(300),
   ac: z.number().int().min(1).max(30),
@@ -704,6 +753,7 @@ export const fullPatchSheetSchema = patchSheetSchema.extend({
   concentrationRounds: z.number().int().min(0).max(ROUND_CEILING).nullable().optional(),
   conditionMeta: conditionMetaSchema.optional(),
   resources: resourcesSchema.optional(),
+  foretold: z.array(z.number().int().min(1).max(20)).max(3).optional(),
   wildShape: wildShapeSchema.optional(),
   // Bound creatures (familiars, animal companions, drakes); managed by the
   // pet engine (src/lib/dm/pet-tools.ts), never player-patchable directly.
@@ -791,6 +841,11 @@ export type CharacterSheet = {
   // A creature a spell or feature made: its attacks, Multiattack and who
   // made it (src/lib/schemas/summon.ts). Absent or null on every other sheet.
   summon?: SheetSummon | null;
+  // The numbers Portent foretold at the last long rest, kept until used
+  // (src/lib/dm/foretold-logic.ts).
+  foretold?: number[];
+  // The fight its player is watching for Portent (src/lib/dm/foresight.ts).
+  watchingEncounterId?: string | null;
   exhaustion: number;
   deathSaves: DeathSaves;
   // Spell this character is concentrating on; null when none. Managed by

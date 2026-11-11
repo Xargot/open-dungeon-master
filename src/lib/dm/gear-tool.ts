@@ -14,6 +14,7 @@
 //     (src/lib/db/dropped-items.ts) until someone within reach takes it.
 // One handler for the AI DM, the console and connected agents
 // (src/lib/dm/invoke-dispatch.ts).
+import { z } from "zod";
 import type { Campaign } from "@/lib/db/campaigns";
 import type { DmTurn } from "@/lib/db/dm-turns";
 import { getActiveEncounter, type Encounter } from "@/lib/db/encounters";
@@ -23,6 +24,7 @@ import { spendAction, type TurnBudget } from "@/lib/dm/action-budget";
 import { dualWields } from "@/lib/dm/attack-rules";
 import { hasFastHands } from "@/lib/dm/bonus-routes";
 import { canAct } from "@/lib/dm/can-act";
+import { heldTurnRefusal } from "@/lib/dm/held-turn";
 import { armorChangeMinutes } from "@/lib/dm/don-doff";
 import { drawRow, gearKindOf, handsFor, handsFullError, handsFullFor, holdIfFree, inHand, spendInteraction } from "@/lib/dm/gear-hands";
 import { lineNamed } from "@/lib/srd/item-row";
@@ -35,7 +37,8 @@ import { tokenFootprint } from "@/lib/dm/board-reach";
 import { addRowMath, handedOverRow, removeItemMath } from "@/lib/dm/mutation-math";
 import { characterCallUnasked } from "@/lib/dm/player-word";
 import { resolveSheetRef, unknownSheetRef } from "@/lib/dm/rolls";
-import { toolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { badArguments, toolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { swallowCoverError } from "@/lib/dm/swallow";
 import { storeBudget } from "@/lib/dm/turn-budget";
 import { gearPatch, implicitlyWorn } from "@/lib/dm/usage-rules";
 import type { CharacterSheet, EquipmentItem } from "@/lib/schemas/sheet";
@@ -77,18 +80,23 @@ export const handleItemTool = {
   },
 } as const;
 
-type Args = {
-  characterId?: string;
-  enemyId?: string;
-  action?: string;
-  item?: string;
-  qty?: number;
-  srdName?: string;
-  tags?: unknown;
-  toCharacterId?: string;
-  helped?: boolean;
-  reason?: string;
-};
+// Read with zod before any field is trimmed: an item or a characterId sent
+// as a list threw "trim is not a function", and on the model's turn that
+// ended the whole turn as failed (gap sweep 2026-11-09). A field of the
+// wrong shape is now a retry naming it (tool-errors.ts invalidArguments).
+const argsSchema = z.object({
+  characterId: z.string().optional(),
+  enemyId: z.string().optional(),
+  action: z.string().optional(),
+  item: z.string().optional(),
+  qty: z.coerce.number().optional(),
+  srdName: z.string().optional(),
+  tags: z.unknown().optional(),
+  toCharacterId: z.string().optional(),
+  helped: z.boolean().optional(),
+  reason: z.string().optional(),
+});
+type Args = z.infer<typeof argsSchema>;
 
 export function handleItemCall(
   campaign: Campaign,
@@ -99,9 +107,9 @@ export function handleItemCall(
 ): ToolResult {
   let args: Args;
   try {
-    args = JSON.parse(rawArguments || "{}") as Args;
-  } catch {
-    return retry("Invalid arguments.");
+    args = argsSchema.parse(JSON.parse(rawArguments || "{}"));
+  } catch (error) {
+    return badArguments("Invalid arguments: handle_item needs an action.", error, rawArguments);
   }
   const action = (args.action ?? "").trim() as GearAction;
   if (!(ACTIONS as readonly string[]).includes(action)) {
@@ -161,6 +169,11 @@ export function handleItemCall(
       if (!to || to.id === sheet.id) {
         return retry("hand needs toCharacterId: the ally who receives it.");
       }
+      // Nothing passes a swallower's wall, either way (swallow.ts).
+      const inside = swallowCoverError(sheet.id, to.id);
+      if (inside) {
+        return inside;
+      }
       return handOver(campaign, turn, encounter, sheet, to, row, qty, reason);
     }
   }
@@ -212,6 +225,10 @@ function changeWear(
     const able = canAct({ sheet, encounter, kind: kind === "shield" ? "action" : "free" });
     if (!able.ok) {
       return toolError(able);
+    }
+    const heldOff = heldTurnRefusal(encounter, sheet);
+    if (heldOff) {
+      return heldOff;
     }
     const own = ownBudget(encounter, sheet);
     if (!own) {
@@ -287,6 +304,10 @@ function handOver(
     const able = canAct({ sheet, encounter, kind: "free" });
     if (!able.ok) {
       return toolError(able);
+    }
+    const heldOff = heldTurnRefusal(encounter, sheet);
+    if (heldOff) {
+      return heldOff;
     }
     const own = ownBudget(encounter, sheet);
     if (!own) {

@@ -138,14 +138,15 @@ export function featSpellSpec(desc: string): FeatSpellSpec {
   // Telepathic: "you can cast detect thoughts once per long rest without a
   // slot". A spell named without its level is sorted by the catalog when
   // the grant is applied (featSpellGrants).
-  const learnsNamed = /\byou learn ([a-z' ]+?) and can cast it\b/.exec(text);
+  // Never a pronoun: ODM's Magic Initiate reads "you learn it and can cast
+  // it once", and "it" became a cantrip on every Magic Initiate's sheet.
+  const learnsNamed = /\byou learn (?!(?:it|them)\b)([a-z' ]+?) and can cast it\b/.exec(text);
   if (learnsNamed && !learnNamed) {
     spec.fixedCantrips.push(learnsNamed[1].trim());
   }
   const castsOnce = /\byou can cast ([a-z' ]+?) once per long rest without a (?:spell )?slot\b/.exec(text);
   if (castsOnce) {
     spec.fixedSpells.push(castsOnce[1].trim());
-    spec.freeCast = true;
   }
 
   // "learn two cantrips of your choice from the Cleric, Druid, or Wizard spell list"
@@ -194,8 +195,11 @@ export function featSpellSpec(desc: string): FeatSpellSpec {
     spec.lists = ["bard", "cleric", "druid", "sorcerer", "warlock", "wizard"];
   }
 
+  // Telepathic's "cast detect thoughts once per long rest without a slot"
+  // (castsOnce, above) is a free cast too: this line used to overwrite it,
+  // and a Telepathic fighter had no slot to cast it with.
   spec.freeCast =
-    /\bcastable once per long rest without a slot\b|\bcast it once without (?:expending )?a spell slot\b|\bonce without (?:expending )?a spell slot\b|\bmust finish a long rest before you can cast it again\b|\bcast this spell once per long rest\b/.test(text) &&
+    (Boolean(castsOnce) || /\bcastable once per long rest without a slot\b|\bcast it once without (?:expending )?a spell slot\b|\bonce without (?:expending )?a spell slot\b|\bmust finish a long rest before you can cast it again\b|\bcast this spell once per long rest\b/.test(text)) &&
     spec.spells + spec.fixedSpells.length > 0 && !spec.ritualBook;
 
   if (/\b(?:intelligence|wisdom|charisma)(?:, (?:wisdom|charisma))*,? or (?:wisdom|charisma) is your spellcasting ability\b|\bchoose (?:intelligence|wisdom|charisma)\b.*\bspellcasting ability\b/.test(text)) {
@@ -350,7 +354,9 @@ export function featSpellGrants(input: FeatSpellInput): FeatSpellVerdict {
   return { grants, problems, ...(owedPicks.length ? { owed: owedPicks } : {}) };
 }
 
-const capital = (value: string) => value.replace(/(^|\s|')([a-z])/g, (_, before, letter) => `${before}${letter.toUpperCase()}`);
+// Each word's first letter, not the one after a possessive's apostrophe
+// ("Tasha's", never "Tasha'S").
+const capital = (value: string) => value.replace(/(^|\s)(['‘]?)([a-z])/g, (_, before, quote, letter) => `${before}${quote}${letter.toUpperCase()}`);
 
 // ---- the free cast, as a feature and a counter ----
 
@@ -385,6 +391,56 @@ export function freeCastSpellOf(id: string): string {
 // Every Free cast feature the grants call for.
 export function freeCastFeatures(grants: FeatSpellGrant[]): string[] {
   return grants.flatMap((grant) => grant.freeCasts.map((spell) => freeCastFeatureName(spell, grant.feat)));
+}
+
+// ---- the ability a feat's spell is cast with ----
+
+// What a sheet records of its feats' spells and of the scores they raised.
+export type FeatSpellSheet = {
+  feats?: ReadonlyArray<string>;
+  features?: ReadonlyArray<{ name: string }>;
+  featChoices?: Record<string, FeatSpellPicks | undefined> | null;
+  asiChoices?: ReadonlyArray<{ mode: string; feat?: string; ability?: Ability }>;
+  racialChoices?: { featAbility?: Ability } | null;
+};
+
+// The ability a spell a feat teaches is cast with, read from the sheet's
+// own record (issue #833: FeatSpellGrant.ability was worked out when the
+// feat was taken and never read again, so Fey Touched's misty step was cast
+// with the class's ability, or a fighter's with none). The feat is the one
+// whose picks name the spell or whose Free cast feature does; its ability
+// is the class list's the player chose (Magic Initiate's), else the score
+// the half-feat raised, else the one the player named. Null for a spell no feat teaches.
+export function featSpellAbility(sheet: FeatSpellSheet, spell: string): CastingAbility | null {
+  const wanted = textKey(spell);
+  const choices = sheet.featChoices ?? {};
+  const feats = Object.entries(choices)
+    .filter(([, picks]) => [...(picks?.cantrips ?? []), ...(picks?.spells ?? [])].some((name) => textKey(name) === wanted))
+    .map(([feat]) => feat);
+  for (const feature of sheet.features ?? []) {
+    const free = freeCastOf(feature.name);
+    if (free && textKey(free.spell) === wanted) {
+      feats.push(free.feat);
+    }
+  }
+  for (const feat of feats) {
+    const picks = featChoice(choices, feat);
+    // The score the feat raised: its improvement's, or for the feat a
+    // variant human took with the race (on the sheet, with no improvement
+    // for it) the race's pick. Another feat's improvement that raised
+    // nothing is no reason to read the race's: a variant human's racial Fey
+    // Touched (+Charisma) left a later Magic Initiate (cleric) on Charisma.
+    const entry = sheet.asiChoices?.find((choice) => choice.mode === "feat" && textKey(choice.feat ?? "") === textKey(feat));
+    const racialFeat = !entry && (sheet.feats ?? []).some((name) => textKey(name) === textKey(feat));
+    const raised = entry ? entry.ability : racialFeat ? sheet.racialChoices?.featAbility : undefined;
+    // A class list the player chose answers first (Magic Initiate: "Charisma
+    // for bard, sorcerer, or warlock; Wisdom for cleric or druid").
+    const ability = (picks?.list ? listAbility(picks.list) : null) ?? castingAbility(raised) ?? castingAbility(picks?.ability);
+    if (ability) {
+      return ability;
+    }
+  }
+  return null;
 }
 
 // ---- the sheet's lists with the feat spells in ----
@@ -431,6 +487,34 @@ export function withFeatSpells<T extends SpellLists>(lists: T | null, grants: Fe
   return next as T;
 }
 
+const PHANTOM_CANTRIP = "it";
+
+// A sheet stored before featSpellSpec read ODM's own feats right, mended:
+// Magic Initiate's "you learn it" had made a cantrip named "It", and
+// Telepathic's detect thoughts, free once a long rest, had no free cast (so
+// no counter, and a slot to pay). Null when nothing needs mending. The boot
+// migration runs it once over the stored sheets and the library
+// (src/lib/db/feat-spell-repair.ts).
+export function mendedFeatSpells<T extends SpellLists>(sheet: {
+  feats?: ReadonlyArray<string> | null;
+  features?: ReadonlyArray<{ name: string }> | null;
+  spellcasting?: T | null;
+}): { features: Array<{ name: string }>; spellcasting: T | null } | null {
+  const feats = new Set((sheet.feats ?? []).map(textKey));
+  const lists = sheet.spellcasting ?? null;
+  const phantom = feats.has("magic initiate") && Boolean(lists?.cantrips?.some((name) => textKey(name) === PHANTOM_CANTRIP));
+  const telepathic = freeCastFeatureName("Detect Thoughts", "Telepathic");
+  const features = [...(sheet.features ?? [])];
+  const freeCast = feats.has("telepathic") && !features.some((feature) => textKey(feature.name) === textKey(telepathic));
+  if (!phantom && !freeCast) {
+    return null;
+  }
+  return {
+    features: freeCast ? [...features, { name: telepathic }] : features,
+    spellcasting: phantom && lists ? { ...lists, cantrips: (lists.cantrips ?? []).filter((name) => textKey(name) !== PHANTOM_CANTRIP) } : lists,
+  };
+}
+
 // The lists without the feats' spells: what an edit or a re-pick starts
 // from, so a changed pick replaces the old one rather than piling on.
 export function withoutFeatSpells<T extends SpellLists>(lists: T | null, grants: FeatSpellGrant[]): T | null {
@@ -438,6 +522,10 @@ export function withoutFeatSpells<T extends SpellLists>(lists: T | null, grants:
     return lists;
   }
   const drop = new Set(grants.flatMap((grant) => [...grant.cantrips, ...grant.spells, ...grant.rituals]).map(textKey));
+  // The cantrip "It" the old reading of Magic Initiate wrote (featSpellSpec)
+  // goes too: no spell has that name, and a sheet restored from before the
+  // fix (a rewind, an imported module) is mended at its next edit.
+  drop.add(PHANTOM_CANTRIP);
   if (!drop.size) {
     return lists;
   }

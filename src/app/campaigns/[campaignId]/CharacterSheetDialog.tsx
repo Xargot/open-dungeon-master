@@ -19,10 +19,12 @@ import {
   type DerivedPart,
 } from "@/lib/srd";
 import { attunementSlotsFor } from "@/lib/srd/armor";
+import { formatPrice, purseCoins, purseCopper } from "@/lib/srd/currency";
 import { encumbranceFor } from "@/lib/srd/encumbrance";
 import { magicItemRiders } from "@/lib/srd/magic-items";
 import type { WearConflict } from "@/lib/srd/wear-slots";
-import { RESOURCE_DEFS } from "@/lib/srd/class-resources";
+import { resourceDef, resourceName } from "@/lib/srd/class-resources";
+import { foretoldLeft } from "@/lib/dm/foretold-logic";
 import { GameTerm } from "@/components/ui/GameTerm";
 import {
   AbilityTiles,
@@ -36,10 +38,13 @@ import {
   SkillRows,
   VitalTiles, TrainingLines } from "@/components/sheet/SheetParts";
 import { SheetSpells } from "@/components/sheet/SheetSpells";
+import { speciesSpellsShown } from "@/lib/srd/species-spell-view";
+import { SummonDoor } from "@/app/campaigns/[campaignId]/SummonDoor";
 import { DefensesLine, HitDiceSpend, StateTags } from "@/components/sheet/SheetState";
 import { SheetBetween } from "@/components/sheet/SheetBetween";
 import { conditionDetail, hitDiceLine, itemStatus, maxHpView, otherSpeedsLine, speedView, wearableGear } from "@/components/sheet/sheet-state";
 import { FeatureChoicePicker, OtherSpeeds } from "@/components/sheet/SheetChoices";
+import { OwedPicks } from "@/components/sheet/OwedPicks";
 import { SheetGearRows, type PendingWear } from "@/components/sheet/SheetGearRow";
 import { LoadBreakdown } from "@/components/sheet/LoadBreakdown";
 import { ResourceRow, SlotRow, STEP_BUTTON } from "@/components/sheet/SheetCounters";
@@ -52,10 +57,11 @@ function titleCase(value: string) {
   return value.replace(/[-_]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-const RESOURCE_NAMES = new Map(RESOURCE_DEFS.map((def) => [def.id, def.displayName]));
 // Every resource already carries a line explaining what spending it does; it
 // was written for the DM model and reads just as well for the player.
-const RESOURCE_HELP = new Map(RESOURCE_DEFS.map((def) => [def.id, def.guidance]));
+// A counter made from its id (a race's spell, a feat's free cast) is no
+// row of the table: its help is read from its id too.
+const resourceHelp = (id: string) => resourceDef(id)?.guidance;
 
 // Full character sheet, opened by selecting any party member. Read-only,
 // except the owner may mark counters their class actually has as spent
@@ -134,7 +140,7 @@ export function CharacterSheetDialog({
   const load = encumbranceFor({
     strength: sheet.abilities.str,
     equipment: sheet.equipment,
-    coins: sheet.gold,
+    coins: purseCoins(sheet),
     size: sizeForRace(sheet.race),
     wearer: sheet,
   });
@@ -281,7 +287,7 @@ export function CharacterSheetDialog({
                   title: explainParts(derived.parts.passivePerception),
                 },
                 { glyph: "rest-proficiency", label: "Proficiency", value: formatModifier(derived.proficiencyBonus) },
-                { glyph: "coin-gp", label: "Gold", value: `${sheet.gold} gp` },
+                { glyph: "coin-gp", label: "Coin", value: formatPrice(purseCopper(sheet)) },
                 { glyph: "rest-xp", label: "Experience", value: `${sheet.xp} XP` },
                 {
                   glyph: `die-${sheet.hitDice.die}`,
@@ -314,7 +320,7 @@ export function CharacterSheetDialog({
               onOpenChange={setLoadOpen}
               name={sheet.name}
               equipment={sheet.equipment}
-              gold={sheet.gold}
+              purse={sheet}
               load={load}
             />
             <OtherSpeeds speeds={derived.speeds} />
@@ -445,6 +451,18 @@ export function CharacterSheetDialog({
               ) : null}
               <div className="reveal mt-3">
                 <SheetSpells sheet={sheet} editable={mine} />
+                {/* Summoning spells cast from here, the creature picked (issue 685). */}
+                <SummonDoor sheet={sheet} mine={mine} inCombat={inCombat} />
+              </div>
+            </SheetBlock>
+          ) : null}
+
+          {/* A character with no Spellcasting may still cast its species'
+              spells (issue #833): a tiefling fighter's hellish rebuke. */}
+          {!sheet.spellcasting && speciesSpellsShown(sheet).length ? (
+            <SheetBlock className="mt-4" title="Spells">
+              <div className="reveal">
+                <SheetSpells sheet={sheet} editable={mine} />
               </div>
             </SheetBlock>
           ) : null}
@@ -489,8 +507,8 @@ export function CharacterSheetDialog({
                     key={id}
                     id={id}
                     pool={pool}
-                    name={RESOURCE_NAMES.get(id) ?? titleCase(id)}
-                    help={RESOURCE_HELP.get(id)}
+                    name={resourceName(id)}
+                    help={resourceHelp(id)}
                     spends={spends}
                     corrects={corrects}
                     busy={busy}
@@ -499,6 +517,9 @@ export function CharacterSheetDialog({
                     onRecover={() => adjustUsage({ resources: { [id]: pool.used - 1 } })}
                   />
                 ))}
+                {foretoldLeft(sheet).length ? (
+                  <p className="text-xs">Foretold rolls: {foretoldLeft(sheet).join(", ")}</p>
+                ) : null}
               </div>
               {spends ? (
                 <p className="reveal mt-1.5 text-[11px] text-stone-500">
@@ -576,9 +597,7 @@ export function CharacterSheetDialog({
 
           {owedChoices(sheet).length ? (
             <SheetBlock className="mt-4" title="Choices owed">
-              <p className="text-sm text-amber-200/90">
-                Earned and not yet made: {owedChoices(sheet).join("; ")}. The next level-up takes them.
-              </p>
+              <OwedPicks sheet={sheet} mine={mine} />
             </SheetBlock>
           ) : null}
           {sheet.features.length ? (

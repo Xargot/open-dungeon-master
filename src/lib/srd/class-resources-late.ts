@@ -129,7 +129,7 @@ export const LATE_RESOURCE_DEFS: ResourceDef[] = [
       target: "self",
     },
     guidance:
-      "The warlock adds a d10 to one ability check or saving throw. The server holds the die on them and adds it to their next check or save.",
+      "The warlock adds a d10 to one ability check or saving throw. On a check or save from request_roll the player chooses after they see the roll: the server offers it and waits, so there is nothing to call.",
   },
   {
     id: "hurl_through_hell",
@@ -140,7 +140,10 @@ export const LATE_RESOURCE_DEFS: ResourceDef[] = [
     maxFor: () => 1,
     recharge: "long",
     effect: { kind: "narrative" },
+    // Spent by the hit it rides (pc_attack hurlThroughHell, attack-choice-rules.ts),
+    // never bare (WAVE1 R10).
+    passive: true,
     guidance:
-      "After a hit, the creature vanishes through the lower planes until the end of the warlock's next turn and, unless it is a fiend, takes 10d10 psychic damage when it returns. Resolve the damage with apply_damage on the creature (type psychic); no save is allowed.",
+      "After a hit, the creature vanishes through the lower planes until the end of the warlock's next turn and, unless it is a fiend, takes 10d10 psychic damage when it returns: pc_attack with hurlThroughHell true, and the server spends the use on the hit.",
   },
 ];

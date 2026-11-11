@@ -137,12 +137,16 @@ export function authoredSaveDieVs(
 
 // The dice a caster's features add to one roll of a spell: damage of a type,
 // healing, a spell of a class's list, cast through an item the caster carries.
+// A spell of two types counts for either (Enhanced Bond's fire on a spell whose
+// fire is its second type); a die only the second type earned rides that
+// type's dice (`diceSecond`), so it meets that type's resistance.
 export function authoredSpellDice(
   sheet: AuthoredSheet & { level?: number },
-  spell: { damageType?: string | null; healing?: boolean; level?: number },
+  spell: { damageType?: string | null; secondType?: string | null; healing?: boolean; level?: number },
   mods: Record<string, number> = {},
-): { dice: string[]; notes: string[] } {
+): { dice: string[]; diceSecond: string[]; notes: string[] } {
   const dice: string[] = [];
+  const diceSecond: string[] = [];
   const notes: string[] = [];
   for (const { effect, held } of activeAuthored(sheet, "spell_rider")) {
     // Potent Spellcasting: cantrips only.
@@ -150,8 +154,9 @@ export function authoredSpellDice(
       continue;
     }
     const byType = effect.damageTypes?.includes(textKey(spell.damageType ?? ""));
+    const bySecond = !byType && Boolean(spell.secondType && effect.damageTypes?.includes(textKey(spell.secondType)));
     const byHealing = effect.healing && spell.healing;
-    const typed = effect.damageTypes || effect.healing ? Boolean(byType || byHealing) : true;
+    const typed = effect.damageTypes || effect.healing ? Boolean(byType || bySecond || byHealing) : true;
     // An artificer spell is one the caster casts as an artificer: the class
     // is the caster's (a spell list is shared by several classes).
     const casterClasses = [textKey(sheet.class ?? ""), ...(sheet.classes ?? []).map((entry) => textKey(entry.id))];
@@ -162,10 +167,10 @@ export function authoredSpellDice(
       continue;
     }
     const rolled = resolveFormula(effect.dice, held.level, mods);
-    dice.push(rolled);
+    (bySecond ? diceSecond : dice).push(rolled);
     notes.push(`${held.feature}: +${rolled}${item ? ` (through the ${item.name})` : ""}`);
   }
-  return { dice, notes };
+  return { dice, diceSecond, notes };
 }
 
 // Grasping Tentacles: the spell whose concentration damage cannot break, and
@@ -307,6 +312,19 @@ export function authoredSlotRefund(
     }
   }
   return null;
+}
+
+// Whether a casting opens the surge's chance for a spent Tides of Chaos: a
+// spell of 1st level or higher on the sorcerer's list, cast by a sheet whose
+// Tides of Chaos counter (sub_tides_of_chaos, a Wild Magic sorcerer's alone)
+// has no use left. With the use still there, the surge would give nothing back.
+// The casting then leaves SURGE_CHANCE (authored-effects-data4.ts) for a round.
+export function opensSurgeChance(
+  resources: Record<string, { max: number; used: number }> | undefined,
+  spell: { level: number; classes: string[] } | null,
+): boolean {
+  const tides = resources?.sub_tides_of_chaos;
+  return Boolean(tides && tides.max > 0 && tides.used >= tides.max && spell && spell.level >= 1 && spell.classes.some((entry) => textKey(entry) === "sorcerer"));
 }
 
 // A creature's Hit Die by its size: an SRD block's hit points are the

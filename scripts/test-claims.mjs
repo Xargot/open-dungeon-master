@@ -14,10 +14,13 @@ import { READER_PROMPT_START } from "./lib/claims-reader.mjs";
 const { test, finish } = suite("test-claims");
 const world = await openWorld({ gameSettings: { ttsEnabled: false } });
 
-const { checkClaims, claimKindsFor, englishEndsTurn, namedSpeakers, parseReaderReply, readerSystem, renderReaderInput, withoutAsides } = await import(
+const { checkClaims, claimKindsFor, englishEndsTurn, englishKeepsTurn, namedSpeakers, parseReaderReply, quoteAsks, readerSystem, renderReaderInput, withoutAsides } = await import(
   "../src/lib/dm/claims-logic.ts"
 );
-const { leveledSpellNames, readClaims, ruledFor } = await import("../src/lib/dm/claims.ts");
+const { askedThisTurn, leveledSpellNames, readClaims, ruledFor } = await import("../src/lib/dm/claims.ts");
+const { createCompanionUser } = await import("../src/lib/db/users.ts");
+const { createSheet, listSheets, markSheetAsCompanion, setCompanionCommander } = await import("../src/lib/db/sheets.ts");
+const { withoutCombatBookkeeping } = await import("../src/lib/dm/narration-tidy-logic.ts");
 const { guardOutcomes, normalizeSpellName } = await import("../src/lib/dm/engine-boundary.ts");
 const campaigns = await import("../src/lib/db/campaigns.ts");
 
@@ -76,9 +79,76 @@ await test("The plain English ways a player ends their turn are read beside the 
   for (const said of ["I close in on the nearest goblin and attack it, then I end my turn.", "That's my turn.", "Kara ends her turn.", "I'm ending my turn here", "My turn is over."]) {
     assert.equal(englishEndsTurn(said), true, said);
   }
+  // A phone keyboard's curly apostrophe, and the short ways a player closes a
+  // turn, said as a sentence of their own (issue 761: "No more attacks, I'm
+  // done." was asked again instead of ending).
+  for (const said of ["That’s my turn.", "No more attacks, I'm done.", "I won't attack again. That’s all for me.", "I’m done for this turn!", "I am finished.", "That's all", "Nothing else, end turn."]) {
+    assert.equal(englishEndsTurn(said), true, said);
+  }
+  for (const said of ["I'm done for!", "I'm done with this goblin, I attack it.", "That's all I've got left?", "Am I done?", "I'm done?", "When I'm done, I'll move.", "I'm not done."]) {
+    assert.equal(englishEndsTurn(said), false, said);
+  }
   for (const said of ["I attack the goblin.", "Whose turn is it?", "I wait for my turn.", "It's my turn now, right?"]) {
     assert.equal(englishEndsTurn(said), false, said);
   }
+  // The words that keep a turn open, and a question, end nothing.
+  for (const said of [
+    "I cast Web over the goblins. Don't end my turn yet, I want to move after.",
+    "Don’t end her turn yet.",
+    "I throw a dagger at the nearest goblin. I'm not ending my turn yet.",
+    "I'll tell you when I end my turn.",
+    "Before I end my turn, I cast Web.",
+    "Before Tamsin ends her turn, she casts Web.",
+    "Should I end my turn?",
+    "If I move there, can I end my turn after?",
+    "I won't end my turn until I've moved.",
+  ]) {
+    assert.equal(englishEndsTurn(said), false, said);
+  }
+  // A keeping word in another clause, or on an earlier line, leaves the end said.
+  for (const said of ["I wasn't sure, but I end my turn.", "Before moving I checked the door. That's my turn.", "Don't end it yet.\n\nOkay, I end my turn."]) {
+    assert.equal(englishEndsTurn(said), true, said);
+  }
+});
+
+await test("English words that name the end only to keep the turn or ask about it answer without the reader; words that never name it are the reader's (issue 761).", () => {
+  for (const said of ["I cast Web over the goblins. Don't end my turn yet, I want to move after.", "Should I end my turn?", "Before I end my turn, I cast Web."]) {
+    assert.equal(englishKeepsTurn(said), true, said);
+  }
+  for (const said of ["I Dash.", "I attack the goblin.", "Then I end my turn.", "Don't end it yet.\n\nOkay, I end my turn."]) {
+    assert.equal(englishKeepsTurn(said), false, said);
+  }
+});
+
+await test("A turn handed on in a question ends nothing, at a table in any language; a statement beside a question still hands it on (issue 761).", () => {
+  const base = { attackRefs: new Set(), creatureRefs: new Set(), party: new Map(), leveledSpells: new Set(), normalizeSpell: (name) => name, skills: new Set(), spent: new Map(), speakers: new Map(), kinds: ["turn_over"] };
+  const asked = [
+    ["Whurrard manca il colpo. Whurrard, ti resta giusto un passo: lo usi o chiudi qui il turno?", "chiudi qui il turno"],
+    ["Whurrard manca il colpo. Whurrard, ti resta giusto un passo: lo usi o chiudi qui il turno?", "lo usi o chiudi qui il turno?"],
+    ["Avery misses. ¿Terminas tu turno o te mueves?", "Terminas tu turno"],
+    ["Avery misses. Do you end your turn here, or keep moving?", "end your turn here"],
+    ["Avery misses. « Tu finis ton tour ? »", "Tu finis ton tour"],
+    // A player's own words, read the same way.
+    ["Should I end my turn?", "end my turn"],
+  ];
+  for (const [text, quote] of asked) {
+    assert.equal(quoteAsks(text, quote), true, quote);
+    assert.deepEqual(checkClaims([{ kind: "turn_over", quote }], { ...base, text }), [], quote);
+  }
+  const told = [
+    ["Avery misses. Your turn ends. What does Kara do?", "Your turn ends."],
+    ["Avery misses. Your turn ends. What does Kara do?", "Your turn ends. What does Kara do?"],
+    ["Whurrard manca il colpo. Il tuo turno finisce qui.", "Il tuo turno finisce qui"],
+    ["I swing, then I end my turn.", "then I end my turn"],
+  ];
+  for (const [text, quote] of told) {
+    assert.equal(quoteAsks(text, quote), false, quote);
+    assert.equal(checkClaims([{ kind: "turn_over", quote }], { ...base, text }).length, 1, quote);
+  }
+  const system = readerSystem([], false);
+  assert.match(system, /"kind":"turn_over".*Never for: a question, whether about what they do next or about ending the turn/);
+  assert.match(system, /"kind":"turn_over".*a turn that ends only later or not yet/);
+  assert.match(system, /"kind":"turn_over".*an action taken on its own, such as an attack, a spell, a Dash or a Dodge/);
 });
 
 await test("The request lists the kinds, the refs and the narration; the instructions name every skill id.", () => {
@@ -195,23 +265,38 @@ await test("What a small model writes about the turn is cut without the reader; 
 });
 
 // Qwen3.5 9B on the short rules copied the game state into the story: the
-// turn order as a list and the board squares it reads.
-await test("The turn order recited and the board's squares quoted are cut without the reader; the scene around them stays.", () => {
-  const order =
-    "The shadows circle, claws drawn.\n\n**Initiative order:**\n1. Shadow Aberration 1 (moves to (7,13))\n2. **Avery (your turn)**\n3. Bram\n\nThe purple mist swirls around the wagons. What do you do?";
-  assert.equal(withoutAsides(order, [], "english"), "The shadows circle, claws drawn.\n\nThe purple mist swirls around the wagons. What do you do?");
-  const inline = "**Current Initiative:** 1. Shadow 1 (at 7,13) 2. Avery (your turn)\nThe river roars.";
-  assert.equal(withoutAsides(inline, [], "english").trim(), "The river roars.");
-  const squares = "Avery, you're up. You're currently at (15,1) with the nearest enemy at (7,11). The mist thickens.";
-  assert.equal(withoutAsides(squares, [], "english").trim(), "Avery, you're up. The mist thickens.");
+// turn order as a list and the board squares it reads. The squares go with
+// the asides; the order goes by the fight's own names when the table reads
+// the turn (narration-tidy-logic.ts), at every table alike.
+await test("The board's squares quoted are cut without the reader, and the turn order recited goes by the fight's names, at a table in any language; the scene around them stays.", () => {
+  const fight = ["Shadow Aberration 1", "Shadow 1", "Avery", "Bram"];
+  const read = (text, language) => withoutCombatBookkeeping(withoutAsides(text, [], language), fight, language).trim();
+  for (const language of ["english", "italian", "french", "spanish", "german"]) {
+    const order =
+      "The shadows circle, claws drawn.\n\n**Initiative order:**\n1. Shadow Aberration 1 (moves to (7,13))\n2. **Avery (your turn)**\n3. Bram\n\nThe purple mist swirls around the wagons. What do you do?";
+    assert.equal(read(order, language), "The shadows circle, claws drawn.\n\nThe purple mist swirls around the wagons. What do you do?", language);
+    const inline = "**Current Initiative:** 1. Shadow 1 (at 7,13) 2. Avery (your turn)\nThe river roars.";
+    assert.equal(read(inline, language), "The river roars.", language);
+    const squares = "Avery, you're up. You're currently at (15,1) with the nearest enemy at (7,11). The mist thickens.";
+    assert.equal(withoutAsides(squares, [], language).trim(), "Avery, you're up. The mist thickens.", language);
+  }
   const fiction = "The old map marks two wells, a mill and the ford. The order of the watch changes at dusk.\nInitiative wins fights, the old sergeant says.";
   assert.equal(withoutAsides(fiction, [], "english"), fiction, "words like order and numbers in prose stay");
-  // The recited order's English heading is read at an English table only;
-  // at every table the board's squares quoted still go.
-  for (const language of ["italian", "french", "spanish", "german"]) {
-    const ordine = "Le ombre girano attorno.\n\n**Initiative order:**\n1. Ombra 1\n2. Avery\n\nAvery, sei a (15,1). La nebbia si addensa.";
-    assert.equal(withoutAsides(ordine, [], language), "Le ombre girano attorno.\n\n**Initiative order:**\n1. Ombra 1\n2. Avery\n\n La nebbia si addensa.", language);
+});
+
+// Issue 744: a sentence ends at its full stop, so cutting "*(I'll check.)*"
+// left its ")*" behind, on a line of its own or beside the story.
+await test("A cut aside takes the closers it opened with it, and closers it did not open stay.", () => {
+  const aside = [{ kind: "aside", quote: "I'll set the hour first." }];
+  const story = "The hammer hangs from the strap.";
+  for (const [open, close] of [["*(", ")*"], ["*[", "]*"], ["_(", ")_"], ["*_(", ")_*"], ["**(", ")**"], ["(", ")"]]) {
+    const wrapped = `${open}I'll set the hour first.${close}`;
+    assert.equal(withoutAsides(`${wrapped}\n\n${story}`, aside, "english"), story, wrapped);
+    assert.equal(withoutAsides(`${story} ${wrapped}`, aside, "english"), story, wrapped);
   }
+  assert.equal(withoutAsides("*(I'll set the hour first.)*", aside, "english"), "", "nothing of the story is left");
+  assert.equal(withoutAsides("*(The bell tolls. I'll set the hour first.)*", aside, "english"), "*(The bell tolls.)*", "the aside opened in a sentence that stays");
+  assert.equal(withoutAsides("A door (the old one) I'll set the hour first.)* creaks.", [{ kind: "aside", quote: "A door (the old one) I'll set the hour first." }], "english"), ")* creaks.", "the cut sentence closed its own bracket");
 });
 
 await test("A claim of a kind not asked, about a creature the engine does not know, or by someone outside the party never acts.", () => {
@@ -395,6 +480,29 @@ await test("Who speaks is read from the public cast, the party and an NPC the re
   model.close();
 });
 
+await test("The reader gives a player's character a line only where the words say so too; an AI companion needs no such check.", async () => {
+  const { modelTextLines } = await import("../src/lib/dm/speech-lines.ts");
+  const npcs = await import("../src/lib/db/npcs.ts");
+  const { markSheetAsCompanion } = await import("../src/lib/db/sheets.ts");
+  const hero = { kind: "pc", id: mira.id, name: "Mira" };
+  const stored = (text, read) => modelTextLines(world.campaign(), text, read).map((entry) => [entry.line, entry.speaker.name]);
+  // A newcomer with no row yet, and the player's character the only name to
+  // hand: the reader's answer is dropped and the line stays the narrator's.
+  assert.deepEqual(stored('Fella looks at Mira. "Who\'s asking?"', [{ line: "Who's asking?", speaker: hero }]), []);
+  assert.deepEqual(stored('Fella looks at Mira. "Who\'s asking?"', [{ line: "Who's asking?", speaker: { kind: "npc", id: "", name: "Mira" } }]), [], "the same, found by name");
+  assert.deepEqual(stored('Mira raises her sword. "Let us go."', [{ line: "Let us go.", speaker: hero }]), [["Let us go.", "Mira"]], "the words tie this one to her");
+  assert.deepEqual(stored('"Who\'s asking?" Fella says to Mira.', [{ line: "Who's asking?", speaker: hero }]), [], "a tag naming someone else");
+  // What the words around a dropped line say still counts.
+  const gerda = npcs.upsertNpc({ campaignId: world.campaignId, name: "Gerda" });
+  assert.deepEqual(stored('"Who\'s asking?" says Gerda, eyeing Mira.', [{ line: "Who's asking?", speaker: hero }]), [["Who's asking?", "Gerda"]]);
+  assert.deepEqual(stored('"Hello," says Gerda.', [{ line: "Hello,", speaker: { kind: "npc", id: gerda.id, name: "Gerda" } }]), [["Hello,", "Gerda"]]);
+  const ally = world.addHero({ name: "Tobin", class: "fighter", level: 5 });
+  markSheetAsCompanion(ally.id, "party", "steady");
+  const tobin = { kind: "pc", id: ally.id, name: "Tobin" };
+  assert.deepEqual(stored('Fella nods to Tobin. "Agreed."', [{ line: "Agreed.", speaker: tobin }]), [["Agreed.", "Tobin"]], "a companion takes the reader's word");
+  assert.deepEqual(stored('Fella nods to Tobin. "Agreed."', [{ line: "Agreed.", speaker: { kind: "npc", id: "", name: "Tobin" } }]), [["Agreed.", "Tobin"]], "a companion the reply itself added");
+});
+
 await test("A call that names the character as its actor, a healer or a caster among them, is a ruling for them.", () => {
   const exchange = (name, args) => [
     { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name, arguments: JSON.stringify(args) } }] },
@@ -408,6 +516,33 @@ await test("A call that names the character as its actor, a healer or a caster a
     assert.ok(ruledFor(exchange(name, args), mira), `${name} names Mira and rules for her`);
   }
   assert.ok(!ruledFor(exchange("stabilize", { characterId: "someone-else" }), mira), "a call that does not name her is no ruling for her");
+});
+
+await test("A turn asked for its player's answer is one the GM waits on: the character's own, or for a commanded companion its commander's character (issue 761).", () => {
+  const bot = createCompanionUser("Tamsin");
+  const tamsin = createSheet(world.campaignId, bot.id, 3, { ...world.sheet(mira.id), name: "Tamsin" });
+  markSheetAsCompanion(tamsin.id, "party", "steady");
+  const ask = (ids) => [
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "request_player_input", arguments: JSON.stringify({ characterIds: ids, prompt: "Move or stop?" }) } }] },
+    { role: "tool", tool_call_id: "c1", content: JSON.stringify({ ok: true }) },
+  ];
+  const campaign = () => world.campaign();
+  const sheets = () => listSheets(world.campaignId);
+  assert.equal(askedThisTurn(campaign(), ask([mira.id]), sheets(), mira.id), true, "the player's own character was asked");
+  assert.equal(askedThisTurn(campaign(), ask(["someone-else"]), sheets(), mira.id), false);
+  assert.equal(askedThisTurn(campaign(), [], sheets(), mira.id), false);
+  // A ruling is no question.
+  const ruling = [
+    { role: "assistant", content: "", tool_calls: [{ id: "c2", type: "function", function: { name: "end_turn", arguments: JSON.stringify({ characterId: mira.id }) } }] },
+    { role: "tool", tool_call_id: "c2", content: JSON.stringify({ ok: true }) },
+  ];
+  assert.equal(askedThisTurn(campaign(), ruling, sheets(), mira.id), false);
+  // Tamsin nobody commands: no human answers for her.
+  assert.equal(askedThisTurn(campaign(), ask([mira.id]), sheets(), tamsin.id), false);
+  setCompanionCommander(tamsin.id, world.owner.id);
+  assert.equal(askedThisTurn(campaign(), ask([mira.id]), sheets(), tamsin.id), true, "her commander's character was asked");
+  assert.equal(askedThisTurn(campaign(), ask([tamsin.id]), sheets(), tamsin.id), true, "she was asked by her own id");
+  setCompanionCommander(tamsin.id, null);
 });
 
 world.close();

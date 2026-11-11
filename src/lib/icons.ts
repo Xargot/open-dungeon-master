@@ -40,6 +40,25 @@ const ICON_ALIASES: Record<string, { kind: IconKind; slug: string }> = {
   // A feature's second spend wears the feature's own painting (issue 233).
   "feature/activate-cannon": { kind: "feature", slug: "eldritch-cannon" },
   "feature/move-spirit-totem": { kind: "feature", slug: "spirit-totem" },
+  // The Echo Knight's echo (src/lib/srd/authored-effects-data-b.ts) wears its
+  // sibling Unleash Incarnation's painting, a sword and its spectral double:
+  // the catalogue's own prompt for it read only the duration.
+  "feature/manifest-echo": { kind: "feature", slug: "unleash-incarnation" },
+  // The pick-lists issue #833 added wear the paintings of what they choose
+  // for, not new art: a dragon for the sorcerer's ancestor, the ranger's and
+  // the wizard's own features, the druid's circle.
+  "family/option-dragon-ancestor": { kind: "spell", slug: "summon-draconic-spirit" },
+  "family/option-favored-enemy": { kind: "feature", slug: "favored-enemy" },
+  "family/option-favored-terrain": { kind: "feature", slug: "natural-explorer" },
+  "family/option-land-circle": { kind: "feature", slug: "druid-circle" },
+  "family/option-spell-mastery-1": { kind: "feature", slug: "spell-mastery" },
+  "family/option-spell-mastery-2": { kind: "feature", slug: "spell-mastery" },
+  "family/option-signature-spell": { kind: "feature", slug: "signature-spells" },
+  // A Draconic sorcerer's three spends (issue #833): wings for the wings,
+  // fear for the aura, warding against an element for the resistance.
+  "feature/dragon-wings": { kind: "feature", slug: "wings-unfurled" },
+  "feature/draconic-presence": { kind: "spell", slug: "fear" },
+  "feature/elemental-affinity": { kind: "spell", slug: "protection-from-energy" },
 };
 
 export function iconPath(kind: IconKind, key: string): string {

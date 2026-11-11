@@ -56,7 +56,7 @@ export const LIFESTYLE_COST_CP: Record<Lifestyle, number> = {
   aristocratic: 1000,
 };
 
-const purseOf = (sheet: Pick<CharacterSheet, "gold" | "copper">) => sheet.gold * 100 + (sheet.copper ?? 0);
+export const purseOf = (sheet: Pick<CharacterSheet, "gold" | "copper">) => sheet.gold * 100 + (sheet.copper ?? 0);
 
 // What the days cost, and what they make, written with their audit rows: the
 // turn whose days were spent gives the coin and the work back when it is
@@ -71,6 +71,14 @@ function pay(campaignId: string, sheet: CharacterSheet, copper: number, why: str
     reason: `${formatPrice(copper)} for ${why}`,
     delta: { delta: -copper / 100, gold: paid.gold },
   });
+}
+
+// The best lifestyle a purse can keep up for `days`, down to wretched (free).
+export function livedLifestyle(chosen: Lifestyle, purse: number, days: number, coveredCp = 0): Lifestyle {
+  return [...LIFESTYLES]
+    .slice(0, LIFESTYLES.indexOf(chosen) + 1)
+    .reverse()
+    .find((lifestyle) => Math.max(0, LIFESTYLE_COST_CP[lifestyle] - coveredCp) * days <= purse) ?? "wretched";
 }
 
 // `days` of this character's lifestyle, less what their work covers each
@@ -89,11 +97,7 @@ export function chargeLifestyle(
     return null;
   }
   const daily = (lifestyle: Lifestyle) => Math.max(0, LIFESTYLE_COST_CP[lifestyle] - coveredCp);
-  const purse = purseOf(sheet);
-  const affordable = [...LIFESTYLES]
-    .slice(0, LIFESTYLES.indexOf(chosen) + 1)
-    .reverse()
-    .find((lifestyle) => daily(lifestyle) * days <= purse) ?? "wretched";
+  const affordable = livedLifestyle(chosen, purseOf(sheet), days, coveredCp);
   const paidCp = daily(affordable) * days;
   pay(campaign.id, sheet, paidCp, `${days} day${days === 1 ? "" : "s"} of a ${affordable} lifestyle`);
   const covered = coveredCp > 0 ? ` (their work covers ${formatPrice(coveredCp)} a day)` : "";
@@ -136,7 +140,9 @@ const proficientWith = (sheet: CharacterSheet, tool: string) =>
 // Why this entry cannot be done, checked before any time passes.
 export function downtimeProblem(campaign: Campaign, sheet: CharacterSheet, entry: DowntimeEntry): ToolError | null {
   if (sheet.deathSaves?.dead) {
-    return { error: `${sheet.name} is dead and spends no downtime.`, retry: true };
+    // The game saying no, as every other door refuses the dead (finding
+    // doors-16; src/lib/dm/tool-errors.ts), not a mistake in the call.
+    return { error: `${sheet.name} is dead and spends no downtime.`, refused: "rules" };
   }
   if (entry.activity === "crafting") {
     if (!entry.item?.trim() || !entry.tool?.trim()) {
@@ -192,7 +198,7 @@ export function downtimeProblem(campaign: Campaign, sheet: CharacterSheet, entry
 }
 
 // What `days` of this activity cover of the lifestyle, in copper a day.
-function coverOf(sheet: CharacterSheet, entry: DowntimeEntry): number {
+export function coverOf(sheet: CharacterSheet, entry: DowntimeEntry): number {
   if (entry.activity === "crafting") {
     return LIFESTYLE_COST_CP.modest;
   }

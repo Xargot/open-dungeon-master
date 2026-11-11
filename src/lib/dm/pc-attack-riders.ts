@@ -9,15 +9,13 @@ import { settleEnemyIncapacitation } from "@/lib/dm/enemy-incapacitation";
 import { storeBudget } from "@/lib/dm/turn-budget";
 import { untilTurnEnd } from "@/lib/dm/turn-end";
 import type { Campaign } from "@/lib/db/campaigns";
-import type { PendingAttack } from "@/lib/db/dm-turns";
 import { getActiveEncounter, patchEnemyConditions, type EncounterEnemy } from "@/lib/db/encounters";
 import { rollEnemySave } from "@/lib/dm/forced-save";
-import type { CreatureOnHit } from "@/lib/srd/creature-attacks";
 import { resourceLeft } from "@/lib/dm/attack-rules";
 import type { ManeuverPick } from "@/lib/dm/pc-attack-plan";
 import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
-import { isIncapacitated, removeConditions, type ConditionMeta } from "@/lib/dm/condition-logic";
+import { addConditionInstance, isIncapacitated, removeConditions, type ConditionMeta } from "@/lib/dm/condition-logic";
 import { sizeRank } from "@/lib/bestiary/enemy-numbers";
 import { publishEncounter } from "@/lib/dm/enemy-damage";
 import { applyDmMutation } from "@/lib/dm/mutations";
@@ -26,7 +24,7 @@ import type { CharacterSheet } from "@/lib/schemas/sheet";
 import type { ToolError } from "@/lib/dm/tool-errors";
 import { optionsOfKind } from "@/lib/srd/options";
 import { textKey } from "@/lib/language/text-logic";
-import { immuneToCondition, type WeaponMaterial } from "@/lib/dm/damage-logic";
+import { immuneToCondition } from "@/lib/dm/damage-logic";
 import { ammoKindForWeapon } from "@/lib/srd/ammunition";
 import { isNamed } from "@/lib/srd/feature-names";
 
@@ -109,37 +107,6 @@ export type OnHitSpends = {
   critExtraDice: number;
 };
 
-// `nonlethal`: a knockout blow, carried to the damage stage
-// (src/lib/dm/enemy-damage.ts applyPendingDamageRoll).
-// `hitSpent`: the attacker's conditions the hit uses up (the smites);
-// `spell`: an attack spell whose rider lands on the hit.
-export type ParkedAttack = PendingAttack & {
-  // The wielded item's material (damage-logic.ts weaponMaterial).
-  material?: WeaponMaterial;
-  onHit?: OnHitSpends;
-  nonlethal?: boolean;
-  hitSpent?: string[];
-  // The once-per-turn riders the hit spends (Sneak Attack): pc-attack-damage.ts claimHitRiders.
-  hitClaims?: string[];
-  spell?: string;
-  // A melee attack, which a monster's Parry answers (enemy-reactions.ts).
-  melee?: boolean;
-  // A magic weapon's dice on a natural 20 (src/lib/dm/gear-attack.ts).
-  critGear?: { suffix: string; typed: Array<{ dice: string; type: string }>; notes: string[] };
-  // What rides the roll and the hit beyond the damage
-  // (src/lib/dm/attack-features.ts, attack-onhit.ts).
-  extras?: {
-    foeSlayer?: number;
-    strokeOfLuck?: boolean;
-    openHand?: { choice: "prone" | "push" | "no reactions"; dc: number };
-    hurl?: boolean;
-    poison?: boolean;
-    tempHp?: { amount: number; feature: string };
-    // A creature's natural attack's rider (src/lib/dm/natural-onhit.ts).
-    creature?: CreatureOnHit;
-  };
-};
-
 // Pays for what the hit carries and returns the dice it bought. A spend the
 // sheet can no longer afford (the slot went elsewhere while the roll was
 // parked) buys nothing and says so.
@@ -149,10 +116,11 @@ export function spendOnHit(
   spends: OnHitSpends,
   sheets: CharacterSheet[],
   sheetsById: Map<string, CharacterSheet>,
-): { suffix: string; notes: string[]; stunPaid: boolean } {
+): { suffix: string; notes: string[]; stunPaid: boolean; maneuverPaid: boolean } {
   let suffix = "";
   const notes: string[] = [];
   let stunPaid = false;
+  let maneuverPaid = false;
   if (spends.stun) {
     const spent = applyDmMutation(
       campaign,
@@ -191,6 +159,7 @@ export function spendOnHit(
     if ("error" in spent) {
       notes.push(`${spends.maneuver.name}: no Superiority Die left, so the hit lands without it`);
     } else {
+      maneuverPaid = true;
       suffix += `+1${spends.maneuver.die}`;
       if (spends.maneuver.use === "ally_move") {
         markAttacker(campaign, spends.characterId, MANEUVERED, spends.maneuver.targetId);
@@ -219,7 +188,7 @@ export function spendOnHit(
       suffix += `+${spends.smite.dice}d8`;
     }
   }
-  return { suffix, notes, stunPaid };
+  return { suffix, notes, stunPaid, maneuverPaid };
 }
 
 // A mark a maneuver's hit leaves on the attacker for the rest of this turn
@@ -254,7 +223,7 @@ export function openCurvingShot(campaignId: string, sheet: CharacterSheet, enemy
     return null;
   }
   storeBudget(encounter, { ...budget, oncePerTurn: [...budget.oncePerTurn.filter((key) => !key.startsWith(CURVING_SHOT)), `${CURVING_SHOT}${enemyId}`] });
-  return "Curving Shot: the bonus action may reroll this arrow at a different creature within 60 feet of this one (pc_attack bonusAttack \"feature\" at it)";
+  return "Curving Shot: the bonus action may reroll this arrow at a different creature within 60 feet of this one (pc_attack feature \"Curving Shot\" at it)";
 }
 
 // Temporary hit points a hit gives the attacker (Hungry Jaws): they do not
@@ -297,15 +266,14 @@ export function stunningStrikeSave(
   if (save.success) {
     return `Stunning Strike: ${fresh.displayName} holds (CON save ${save.total ?? "failed outright"} vs DC ${dc}${save.legendaryResistance ? ", Legendary Resistance" : ""}); no stun.`;
   }
-  if (!fresh.conditions.includes("stunned")) {
-    patchEnemyConditions(fresh.id, [...fresh.conditions, "stunned"], {
-      ...fresh.conditionMeta,
-      stunned: untilTurnEnd(monkId, { source: monkId }),
-    });
-    // Stunned is out of action: its concentration and grapples end.
-    settleEnemyIncapacitation(fresh.id, isIncapacitated(fresh.conditions));
-    publishEncounter(campaign.id);
-  }
+  // A creature this monk stunned on an earlier turn is stunned again "until
+  // the end of your next turn": the same source's instance is replaced, so
+  // the stun runs on, and another source's keeps its own end.
+  const stunned = addConditionInstance(fresh.conditions, fresh.conditionMeta, "stunned", untilTurnEnd(monkId, { source: monkId }));
+  patchEnemyConditions(fresh.id, stunned.conditions, stunned.meta);
+  // Stunned is out of action: its concentration and grapples end.
+  settleEnemyIncapacitation(fresh.id, isIncapacitated(fresh.conditions));
+  publishEncounter(campaign.id);
   return `Stunning Strike: ${fresh.displayName} fails the CON save (${save.autoFailed ? "automatic" : save.total} vs DC ${dc}) and is stunned until the end of the monk's next turn.`;
 }
 

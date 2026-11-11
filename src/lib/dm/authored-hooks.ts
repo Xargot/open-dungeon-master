@@ -21,6 +21,7 @@
 // hit points, concentration, death, the token), so this module never imports
 // enemy-damage.ts, which reaches it.
 
+import { fightMarked, markFight } from "@/lib/dm/turn-marks";
 import { textKey } from "@/lib/language/text-logic";
 import { isConditionNamed } from "@/lib/srd/feature-names";
 import { UNWAVERING_STRIKE } from "@/lib/dm/feature-bonus-attacks";
@@ -46,6 +47,8 @@ import { activeAuthored, resolveFormula } from "@/lib/srd/authored-effects";
 import { effectiveMaxHp, isIncapacitated, removeConditions, type ConditionMetaMap } from "@/lib/dm/condition-logic";
 import { hurtEnemy } from "@/lib/dm/spell-aura";
 import { withinFeet } from "@/lib/dm/authored-saves";
+import { vowedFoe } from "@/lib/srd/vow-of-enmity";
+import { ENTROPIC_EDGE, entropicQuarry } from "@/lib/dm/reaction-kinds";
 import { naturalWeaponOnHit } from "@/lib/dm/authored-attacks";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { rollCard, sheetAttacker } from "@/lib/dm/roll-card";
@@ -208,7 +211,7 @@ export function authoredAfterHit(
       if (updated) {
         publishPersisted(campaign.id, "sheet_updated", { sheet: updated });
       }
-      lines.push(`Unwavering Mark: ${input.attacker.displayName} struck someone other than ${cavalier.name}, who may make a bonus-action melee attack against it on their next turn, with advantage and +half their fighter level damage (pc_attack bonusAttack "feature").`);
+      lines.push(`Unwavering Mark: ${input.attacker.displayName} struck someone other than ${cavalier.name}, who may make a bonus-action melee attack against it on their next turn, with advantage and +half their fighter level damage (a pc_attack entry with feature "Unwavering Mark").`);
     }
   }
   const spurned = featuresSetAside(input.attacker, target);
@@ -239,10 +242,12 @@ export function authoredAttackSituation(input: {
   sheet: CharacterSheet;
   enemy: EncounterEnemy;
   melee: boolean;
-}): { sources: Advantage[]; notes: string[]; autoCrit: string | null } {
+}): { sources: Advantage[]; notes: string[]; autoCrit: string | null; spent: string[] } {
   const { encounter, sheet, enemy } = input;
   const sources: Advantage[] = [];
   const notes: string[] = [];
+  // Marks this attack uses up, cleared with the attack's other one-shots.
+  const spent: string[] = [];
   let autoCrit: string | null = null;
   const type = textKey(enemy.stats.type ?? "");
   for (const { effect, held } of activeAuthored(sheet, "attack_adv")) {
@@ -268,6 +273,16 @@ export function authoredAttackSituation(input: {
       notes.push(`${held.feature}: advantage`);
     }
   }
+  if (vowedFoe(sheet) === enemy.id) {
+    sources.push("advantage");
+    notes.push("Vow of Enmity: advantage");
+  }
+  // Entropic Ward's miss: this creature's next attack roll from the warlock.
+  if (entropicQuarry(sheet) === enemy.id) {
+    sources.push("advantage");
+    notes.push("Entropic Ward: advantage, spent by this attack");
+    spent.push(sheet.conditions.find((entry) => textKey(entry) === ENTROPIC_EDGE)!);
+  }
   for (const { held } of activeAuthored(sheet, "auto_crit")) {
     if (encounter.surprisedIds.includes(enemy.id)) {
       autoCrit = held.feature;
@@ -289,7 +304,7 @@ export function authoredAttackSituation(input: {
       }
     }
   }
-  return { sources, notes, autoCrit };
+  return { sources, notes, autoCrit, spent };
 }
 
 // A character's attack has hit (and may have killed). Returns the lines for
@@ -388,12 +403,12 @@ function markEnemy(encounter: Encounter, sheet: CharacterSheet, target: Encounte
   return lines;
 }
 
-// Grim Harvest works once a turn: the turn it last worked, per holder.
-const HARVEST_USED = new Map<string, string>();
-
-// Keeper of Souls works once until the start of the cleric's next turn: the
-// round it last worked, per holder.
-const KEEPER_USED = new Map<string, string>();
+// Grim Harvest works once a turn (the turn it last worked, per holder), and
+// Keeper of Souls once until the start of the cleric's next turn (the round
+// it last worked): marks the fight's row keeps (turn-marks.ts), which a
+// restart remembers.
+const harvestKey = (holderId: string) => `grim harvest:${holderId}`;
+const keeperKey = (holderId: string) => `keeper of souls:${holderId}`;
 
 // A creature dropped to 0: Touch of Death for a monk within 5 feet (the
 // killer off the board), Keeper of Souls for a Grave cleric within 60.
@@ -415,10 +430,10 @@ export function authoredOnKill(
   if (killer && spell && spell.level >= 1 && !/construct|undead/.test(creature)) {
     const harvest = activeAuthored(killer, "grim_harvest")[0];
     const stamp = `${encounter.id}:${turnKey(encounter)}`;
-    if (harvest && HARVEST_USED.get(killer.id) !== stamp) {
+    if (harvest && !fightMarked(encounter.id, harvestKey(killer.id), stamp)) {
       const amount = spell.level * (textKey(spell.school ?? "") === "necromancy" ? 3 : 2);
       const given = heal(campaign, killer, amount);
-      HARVEST_USED.set(killer.id, stamp);
+      markFight(encounter.id, harvestKey(killer.id), stamp);
       if (given > 0) {
         lines.push(`${harvest.held.feature}: ${killer.name} regains ${given} hit points from the life the spell took.`);
       }
@@ -444,7 +459,7 @@ export function authoredOnKill(
       }
     }
     for (const { effect, held } of activeAuthored(holder, "death_heal")) {
-      if (!near(holder, effect.rangeFt) || KEEPER_USED.get(holder.id) === stamp || isIncapacitated(holder.conditions)) {
+      if (!near(holder, effect.rangeFt) || fightMarked(encounter.id, keeperKey(holder.id), stamp) || isIncapacitated(holder.conditions)) {
         continue;
       }
       const party = fielded(campaign.id).filter((ally) => !board || withinFeet(encounter.id, holder.id, ally.id, effect.rangeFt));
@@ -454,7 +469,7 @@ export function authoredOnKill(
       }
       const given = heal(campaign, hurt, hitDiceOf(enemy));
       if (given > 0) {
-        KEEPER_USED.set(holder.id, stamp);
+        markFight(encounter.id, keeperKey(holder.id), stamp);
         lines.push(`${held.feature}: ${hurt.name} regains ${given} hit points from the fallen creature's life.`);
       }
     }

@@ -10,7 +10,7 @@ import { cn } from "@/lib/cn";
 import { GENRE_PRESETS, type GenrePreset } from "@/lib/genres";
 import type { WorldPackSummary } from "@/lib/worlds/types";
 import { WorldPackGallery } from "@/components/WorldPackGallery";
-import { VoicePicker } from "@/components/VoicePicker";
+import { NarratorLanguageNote, VoicePicker } from "@/components/VoicePicker";
 import { NarrationNote } from "@/app/campaigns/[campaignId]/NarrationNote";
 import { CharacterVoices } from "@/app/campaigns/[campaignId]/CharacterVoices";
 import { VoicePreviewButton } from "@/components/VoicePreviewButton";
@@ -179,7 +179,7 @@ export function CharacterGroup({ settings, patch, serverRerollLabel }: Base & { 
     <>
       <div className="flex flex-wrap items-center gap-2">
         <span className="pk-rowlabel">Dice</span>
-        <Tooltip content="Real dice lets each player opt in to rolling at their table: the game parks until they type the result, read it from a paired Pixels Bluetooth die, or let the server roll per die (Dice sources, in the Party tab).">
+        <Tooltip content="Real dice lets each player opt in to rolling at their table: the game parks until they type the result, read it from a paired Pixels Bluetooth die, or let the server roll per die (Dice sources, in the Party tab). They roll their attacks and damage, initiative, and the checks and saves the GM asks for; the table rolls the rest, such as death saves and concentration.">
           <span className="inline-flex min-w-0 max-w-full">
             <Select<DicePolicy>
               size="sm"
@@ -274,11 +274,12 @@ export function NarrationGroup({
         </SettingToggle>
         {narrating ? (
           <>
-            <VoicePicker size="sm" label="Narration voice" value={settings.ttsVoice} onChange={(ttsVoice) => patch({ ttsVoice })} />
+            <VoicePicker size="sm" label="Narration voice" value={settings.ttsVoice} onChange={(ttsVoice) => patch({ ttsVoice })} language={settings.tableLanguage} />
             <VoicePreviewButton voice={settings.ttsVoice} />
           </>
         ) : null}
       </div>
+      {narrating ? <NarratorLanguageNote language={settings.tableLanguage} /> : null}
       {narrating ? <CharacterVoices campaignId={campaignId} settings={settings} steersStory patch={patch} /> : null}
       {narrating || narrationOff ? <NarrationNote /> : null}
       <p className="text-stone-500">
@@ -357,6 +358,7 @@ export function SafetyGroup({ settings, patch }: Base) {
       onSafety={(safety) => patch({ safety })}
       onGm={(gm) => patch({ gm })}
       onVoice={(ttsVoice) => patch({ ttsVoice })}
+      tableLanguage={settings.tableLanguage}
     />
   );
 }

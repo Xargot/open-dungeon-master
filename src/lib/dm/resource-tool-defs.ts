@@ -18,7 +18,7 @@ export const resourceTools: ToolDef[] = [
     function: {
       name: "use_item",
       description:
-        "Resolve a character using up ONE consumable they carry (potion, scroll, thrown flask, ration, torch); one taken in the same action (from a chest, off a fallen foe) is given with grant_item first. In a fight it is the Use an Object action. Kept items (weapons, armor) are refused, unless they cast a spell. Never narrate a consumable's use without calling it.",
+        "Resolve a character using up ONE consumable they carry (potion, scroll, ration, torch); one taken in the same action (from a chest, off a fallen foe) is given with grant_item first. In a fight it is the Use an Object action; a flask thrown at a creature is an attack, made with pc_attack. Kept items (weapons, armor) are refused, unless they cast a spell. Never narrate a consumable's use without calling it.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -39,7 +39,7 @@ export const resourceTools: ToolDef[] = [
           spell: {
             type: "string",
             description:
-              "The spell the item casts (Wand of Fireballs: Fireball; Hat of Disguise: Disguise Self). A scroll needs none.",
+              "The spell the item casts (Wand of Fireballs: Fireball; a Ring of Spell Storing: one it holds). A scroll needs none.",
           },
           reason: { type: "string", description: "Short in-fiction cause." },
         },
@@ -52,7 +52,7 @@ export const resourceTools: ToolDef[] = [
     function: {
       name: "purchase",
       description:
-        "Resolve a character buying or selling an item in one audited step. A shop standing here that stocks the item (or buys it) trades it from its own shelf at its own prices; anywhere else the list price is paid, and a seller gets half. Loot no list has, or a spell scroll, is granted with grant_item (its tags, its spell) and paid for with modify_gold.",
+        "Resolve a character buying or selling items in one audited step. Every item of the trade goes in items, one entry each, in one call. A shop standing here that stocks the item (or buys it) trades it from its own shelf at its own prices; anywhere else the list price is paid, and a seller gets half. Loot no list has, or a spell scroll, is granted with grant_item (its tags, its spell) and paid for with modify_gold.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -60,25 +60,33 @@ export const resourceTools: ToolDef[] = [
           ...waypointProperty,
           characterId: { type: "string", description: "Exact characterId from GAME STATE." },
           action: { type: "string", enum: ["buy", "sell"] },
-          item: { type: "string", description: "Item name, without its worth: price carries that." },
-          qty: { type: "integer", minimum: 1, maximum: 99 },
           shop: {
             type: "string",
-            description: "A shop in SHOPS HERE the party picks; omit it and the server picks one that stocks (or buys) it.",
+            description: "A shop in SHOPS HERE the party picks. Omit it and the server picks one that stocks (or buys) it.",
           },
-          srdName: {
-            type: "string",
-            description: "Only when item is in the table's own words: the SRD or pack item's English name ('Longsword'). Send it with the first call, as grant_item does; omit it when item already is that English name.",
-          },
-          price: {
-            type: "number",
-            minimum: 0,
-            maximum: 100000,
-            description: "Gold each, for a thing no shelf or list prices.",
+          // As grant_item's: no additionalProperties on the entries, and a
+          // price's bounds left to the handler's schema, for the compact
+          // first call of a 16K window (src/lib/dm/mutations.ts).
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                item: { type: "string", description: "Item name, without its worth: price carries that." },
+                qty: { type: "integer", minimum: 1, maximum: 99 },
+                srdName: {
+                  type: "string",
+                  description:
+                    "The SRD or pack item's English name ('Longsword') when item is in other words. Sent with the first call: the server prices an item only by that name. Omit it when item already is that English name.",
+                },
+                price: { type: "number", description: "Gold each, for a thing no shelf or list prices." },
+              },
+              required: ["item"],
+            },
           },
           reason: { type: "string", description: "Short in-fiction cause." },
         },
-        required: ["characterId", "action", "item"],
+        required: ["characterId", "action", "items"],
       },
     },
   },
@@ -96,7 +104,7 @@ export const resourceTools: ToolDef[] = [
           resource: {
             type: "string",
             description:
-              "Resource name from their Resources list ('Rage', 'Ki Points'). Subclass features the server resolves go by their own name, no counter needed: Kensei's Shot, Shadow Step, Symbiotic Entity, Visage of the Astral Self, Sharpen the Blade (amount), Planar Warrior, Otherworldly Wings, Umbral Form, Fanatical Focus, Summon Wildfire Spirit, Slayer's Prey (targetEnemyId), Gathered Swarm (variant 'push', targetEnemyId), Arcane Jolt (variant 'burn' and targetEnemyId, or 'heal' and targetCharacterId), Peerless Skill, Quivering Palm (targetEnemyId; again to end the vibrations), Draconic Presence (variant 'fear' or 'charm'), Hide in Plain Sight, Primeval Awareness (amount: the slot level).",
+              "Resource name from their Resources list ('Rage', 'Ki Points'). Subclass features the server resolves go by their own name, no counter needed: Kensei's Shot, Shadow Step, Symbiotic Entity, Visage of the Astral Self, Sharpen the Blade (amount), Planar Warrior, Otherworldly Wings, Umbral Form, Fanatical Focus, Summon Wildfire Spirit, Slayer's Prey (targetEnemyId), Gathered Swarm (variant 'push', targetEnemyId), Arcane Jolt (variant 'burn' and targetEnemyId, or 'heal' and targetCharacterId), Peerless Skill, Quivering Palm (targetEnemyId; again to end the vibrations), Draconic Presence (variant 'fear' or 'charm'), Dragon Wings (out, or away again), Elemental Affinity (1 sorcery point: an hour's resistance), Hide in Plain Sight, Primeval Awareness (amount: the slot level).",
           },
           amount: {
             type: "integer",
@@ -114,6 +122,11 @@ export const resourceTools: ToolDef[] = [
             description:
               "The creature a feature is aimed at: exact enemyId from GAME STATE. Intimidating Presence and the subclass features aimed at a creature use it (Touch of the Long Death, Psychic Blades, Unsettling Words, Hound of Ill Omen, Versatile Trickster, Mighty Impel, Elemental Fury, Storm Aura's sea, Insightful Fighting, Cauterizing Flames' burn): the server rolls their saves and damage.",
           },
+          targetEnemyIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "The creatures of the user's choice an area feature takes, exact enemyIds. Default: every foe in reach.",
+          },
           form: {
             type: "string",
             description: "Wild Shape only: the beast being assumed ('dire wolf').",
@@ -121,7 +134,7 @@ export const resourceTools: ToolDef[] = [
           variant: {
             type: "string",
             description:
-              "The chosen option; Ki Points: 'flurry of blows', 'patient defense', 'step of the wind'. Features with a choice: Starry Form's archer/chalice/dragon, Spirit Totem's bear/hawk/unicorn; Totem Spirit or Transmuter's Stone, outside a fight. Flurry of blows: after the Attack action, two unarmed strikes, each a pc_attack call; 'step of the wind dash' to Dash. The server spends the ki and the bonus action and applies the effect.",
+              "The chosen option; Ki Points: 'patient defense', 'step of the wind'. Features with a choice: Starry Form's archer/chalice/dragon, Spirit Totem's bear/hawk/unicorn; Totem Spirit or Transmuter's Stone, outside a fight. Flurry of Blows is pc_attack's attacks with feature \"Flurry of Blows\"; 'step of the wind dash' to Dash. The server spends the ki and the bonus action and applies the effect.",
           },
           formHp: {
             type: "integer",

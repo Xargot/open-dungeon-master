@@ -7,17 +7,24 @@
 // resumed with the result, the refusals are worded for a model, and a field
 // it leaves unnamed that the character's traits would read is asked for.
 // Everything else is shared: the expression comes from the sheet, conditions
-// can decide the roll outright, an inspiration die is spent whether the
-// dice are physical or digital, an initiative roll feeds the encounter, and
-// a damage roll aimed at an enemy applies itself.
+// can decide the roll outright, a held die waits for its holder to spend it
+// after the dice land (src/lib/dm/after-roll.ts) whether they are physical or
+// digital, an initiative roll feeds the encounter, and a damage roll aimed at
+// an enemy applies itself.
+import { afterRollOptions, canWaitOnRoll } from "@/lib/dm/after-roll-logic";
+import { allyChoicesFor, reactionFreeFor, rollsCanWait } from "@/lib/dm/after-roll";
+import { noteShift, takeShift } from "@/lib/dm/chronal-shift";
+import { LUCK_SPEND } from "@/lib/dm/roll-riders";
+import { foretoldLeft } from "@/lib/dm/foretold-logic";
 import { claimedAdvantage } from "@/lib/dm/pc-attack-options";
 import { askedFields, unnamedTraitFields } from "@/lib/dm/roll-feature-riders";
 import { rollExpression } from "@/lib/dice";
+import { heroRollTag } from "@/lib/dice-script-logic";
 import { getActiveEncounter } from "@/lib/db/encounters";
 import { getFoe } from "@/lib/dm/sheet-foe";
 import { charmedBy } from "@/lib/dm/enemy-profile";
 import { insertRoll } from "@/lib/db/rolls";
-import { createPendingRoll, publicPendingRoll, type DmTurn } from "@/lib/db/dm-turns";
+import { createPendingRoll, listOpenPendingRolls, publicPendingRoll, setPendingCombatNote, type DmTurn } from "@/lib/db/dm-turns";
 import { getSheetById } from "@/lib/db/sheets";
 import { publishPersisted, publishWithSeq } from "@/lib/events";
 import { allocateSeq } from "@/lib/db/campaigns";
@@ -38,7 +45,10 @@ import type { Campaign } from "@/lib/db/campaigns";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { moteAfterRoll, moteOf } from "@/lib/dm/authored-mote";
 import { applyRollGates } from "@/lib/dm/roll-gates";
-import { invalidArguments, toolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { afterRollDeadline, armAfterRollKeep } from "@/lib/dm/after-roll-timer";
+import { badArguments, invalidArguments, toolError, type ToolResult } from "@/lib/dm/tool-errors";
+import { swayUnasked } from "@/lib/dm/player-word";
+import { swaySkill } from "@/lib/dm/player-word-logic";
 
 export function handleRequestRoll(
   campaign: Campaign,
@@ -59,12 +69,15 @@ export function handleRequestRoll(
   let raw: unknown;
   try {
     raw = JSON.parse(rawArguments || "{}");
-  } catch {
-    return { error: needs, retry: true };
+  } catch (error) {
+    return badArguments(needs, error, rawArguments);
   }
   const parsed = rollArgsSchema.safeParse(raw);
   if (!parsed.success) {
-    return model ? invalidArguments(needs, parsed.error) : { error: needs, retry: true };
+    // Each field zod refused, with its reason, at the console as for the
+    // model: the fixed line answered a valid call with one null optional in
+    // it, and named no field (#875, gap sweep 2026-11-09).
+    return invalidArguments(needs, parsed.error, raw);
   }
   let args: RollArgs = parsed.data;
   args = {
@@ -87,6 +100,14 @@ export function handleRequestRoll(
         error: `${fresh.name} is dead and makes no rolls. Only magic that raises the dead brings them back.`,
         refused: "rules",
       };
+    }
+  }
+  // A roll to sway someone answers an attempt, and a player who only asked
+  // a question made none (src/lib/dm/player-word.ts swayUnasked).
+  if (sheet && args.kind === "skill_check" && swaySkill(args.skill)) {
+    const unasked = swayUnasked(campaignId, turn, sheet);
+    if (unasked) {
+      return unasked;
     }
   }
   // No stealth on a normal or fast march, and a contest rolls the
@@ -138,14 +159,36 @@ export function handleRequestRoll(
     if (held) {
       return { error: held, refused: "rules" };
     }
+    // Nor does one for a character whose initiative card is already with
+    // their player in this fight: the AI's fight asks its real-dice seats
+    // itself (src/lib/dm/initiative-ask.ts), and a model that also asked
+    // put a second card for the same roll in front of them.
+    const fight = getActiveEncounter(campaignId);
+    const carded = fight
+      ? listOpenPendingRolls(campaignId).some(
+          (pending) => pending.kind === "initiative" && pending.characterId === sheet.id && pending.createdAt >= fight.createdAt,
+        )
+      : false;
+    if (carded) {
+      return {
+        error: model
+          ? `${sheet.name}'s initiative roll card is already with their player, so nothing was rolled. The order locks once every initiative is in.`
+          : `${sheet.name} already has an initiative roll to make. The order locks once every initiative is in.`,
+        refused: "rules",
+      };
+    }
   }
 
   // A check aimed at a creature the roller charmed (SRD 5.1, Charmed): an
   // enemy row, or a character fighting on the other side (sheet-foe.ts).
   const aimedAt = sheet && args.againstEnemyId ? getFoe(args.againstEnemyId.trim()) : null;
   const charmedTarget = sheet && aimedAt && charmedBy(aimedAt.conditions, aimedAt.conditionMeta, sheet.id) ? aimedAt.displayName : undefined;
+  // A check or a save in the open can wait on its player once its dice land
+  // (src/lib/dm/after-roll.ts): a roll behind the screen cannot.
+  const fresh = sheet ? (getSheetById(sheet.id) ?? sheet) : null;
+  const canWait = (Boolean(model) || (args.visibility ?? "public") === "public") && canWaitOnRoll(args.kind) && rollsCanWait(fresh);
   const extras = sheet
-    ? { ...rollExtrasFor(campaign, sheet, args.kind), ...(charmedTarget ? { charmedTarget } : {}) }
+    ? { ...rollExtrasFor(campaign, sheet, args.kind), ...(charmedTarget ? { charmedTarget } : {}), keepHeldDie: canWait }
     : { encumbrance: campaign.gameSettings.variantRules.encumbrance };
   // A trait of the character's that a field the model left unnamed would
   // call on (src/lib/dm/roll-about.ts): it names the field, or 'none', before
@@ -182,7 +225,13 @@ export function handleRequestRoll(
     spendRollCarriers(campaignId, sheet.id, resolved.spendInspiration);
   }
 
-  if (sheet && realDiceUserIds.has(sheet.userId)) {
+  const contestLine = gated.contest ? `${gated.contest.name} rolled ${gated.contest.skill} ${gated.contest.total}; ${gated.contest.answering ? "a tie goes to the character" : "the character must beat it"}.` : null;
+  // Portent replaces the d20 before it is thrown, so a wizard holding a number
+  // decides here: the roll waits unthrown, and the model waits with it.
+  // Not on initiative: the watch leaves it be (a ruling the maintainer has
+  // still to make), and so does a wizard's own card.
+  const foretelling = canWait && fresh && args.kind !== "initiative" ? foretoldLeft(fresh).length > 0 : false;
+  if (sheet && (foretelling || realDiceUserIds.has(sheet.userId))) {
     const pending = createPendingRoll({
       campaignId,
       turnId: turn.id,
@@ -196,19 +245,80 @@ export function handleRequestRoll(
       dc: args.dc ?? null,
       reason: args.reason?.slice(0, 200) ?? "",
       targetEnemyId: args.kind === "damage" ? args.targetEnemyId ?? null : null,
+      // The mote the spent inspiration die carried, set off as the roll lands.
+      ...(mote ? { carry: { mote } } : {}),
       // The screen holds while the player's dice are on their way.
       visibility: model ? "public" : args.visibility ?? "public",
+      ...(realDiceUserIds.has(sheet.userId) ? {} : { parkedFor: "foretold" as const }),
     });
+    if (foretelling) {
+      const told = [contestLine, ...(resolved.conditionNotes ?? [])].filter(Boolean).join("; ");
+      if (told) {
+        setPendingCombatNote(pending.id, told);
+      }
+    }
     publishPersisted(campaignId, "roll_pending", { pendingRoll: publicPendingRoll(pending) });
     return {
       ok: true,
       parked: true,
-      note: `Waiting on ${sheet.name} to enter ${resolved.expression}.`,
+      note: foretelling ? `Waiting on ${sheet.name} to roll or to use Portent.` : `Waiting on ${sheet.name} to enter ${resolved.expression}.`,
     };
   }
 
   try {
-    const outcome = rollExpression(resolved.expression);
+    const purpose = sheet ? heroRollTag(args.kind, sheet.name) : undefined;
+    let outcome = rollExpression(resolved.expression, undefined, { purpose });
+    // A Chronal Shift a watching wizard set on this roll at the stop before
+    // it (src/lib/dm/chronal-shift.ts): it goes the wrong way, and the d20s
+    // are thrown again, the new roll standing.
+    if (sheet && typeof args.dc === "number" && canWaitOnRoll(args.kind)) {
+      const by = takeShift(campaignId, purpose, outcome.total >= args.dc);
+      if (by) {
+        const first = outcome.total;
+        outcome = rollExpression(resolved.expression, undefined, { purpose });
+        noteShift(campaignId, `${by} used Chronal Shift: ${sheet.name} rolled the ${args.kind.replaceAll("_", " ")} again (${first} became ${outcome.total}), and the new roll stands.`);
+      }
+    }
+    // The server threw it: the dice wait on the player when something they
+    // hold could change the result, or a wizard beside them could make them
+    // roll it again, and the model waits with them.
+    const options = canWait && sheet && fresh
+      // A luck point spent before the throw (luck: true) was this roll's one.
+      ? [
+          ...afterRollOptions(fresh, { kind: args.kind, outcome, dc: args.dc ?? null, spent: resolved.spendInspiration?.split("|").includes(LUCK_SPEND) ? ["lucky"] : [], reactionFree: reactionFreeFor(campaignId, fresh.id) }),
+          ...allyChoicesFor(campaignId, fresh, { kind: args.kind, outcome, dc: args.dc ?? null }),
+        ]
+      : [];
+    if (sheet && options.length) {
+      const pending = createPendingRoll({
+        campaignId,
+        turnId: turn.id,
+        toolCallId: model?.toolCallId ?? null,
+        userId: sheet.userId,
+        characterId: sheet.id,
+        kind: args.kind,
+        detail: resolved.detail,
+        expression: resolved.expression,
+        advantage: args.advantage ?? "none",
+        dc: args.dc ?? null,
+        reason: args.reason?.slice(0, 200) ?? "",
+        parkedFor: "after_roll",
+        thrown: { outcome, options, choosing: false, landing: { status: "fallback", physical: false, source: "digital" }, deadline: afterRollDeadline(campaignId, sheet.userId) },
+      });
+      // What the digital answer would have told the model, for the answer the
+      // resumed turn writes.
+      const told = [contestLine, ...(resolved.conditionNotes ?? [])].filter(Boolean).join("; ");
+      if (told) {
+        setPendingCombatNote(pending.id, told);
+      }
+      publishPersisted(campaignId, "roll_pending", { pendingRoll: publicPendingRoll(pending) });
+      armAfterRollKeep(pending.id, pending.thrown?.deadline);
+      return {
+        ok: true,
+        parked: true,
+        note: `Waiting on ${sheet.name} to decide what to do with their roll.`,
+      };
+    }
     const roll = insertRoll({
       campaignId,
       characterId: sheet?.id ?? null,
@@ -255,7 +365,7 @@ export function handleRequestRoll(
       total: roll.total,
       dice: outcome.terms,
       ...(args.dc !== undefined ? { dc: args.dc, success: roll.total >= args.dc } : {}),
-      ...(gated.contest ? { contest: `${gated.contest.name} rolled ${gated.contest.skill} ${gated.contest.total}; ${gated.contest.answering ? "a tie goes to the character" : "the character must beat it"}.` } : {}),
+      ...(contestLine ? { contest: contestLine } : {}),
       ...(outcome.crit ? { crit: outcome.crit } : {}),
       ...(resolved.conditionNotes ? { conditionEffects: resolved.conditionNotes } : {}),
       ...(combatNote ? { combat: combatNote } : {}),

@@ -65,7 +65,9 @@ export const AUTHORED_DATA_A: Record<string, AuthoredEntry> = {
         aliases: ["Totemic Attunement Wolf"],
         action: "bonus",
         gate: { ...RAGING, choice: "wolf" },
-        does: { kind: "note", text: "The Large or smaller creature the barbarian hit with a melee weapon attack this turn is knocked prone (set_condition prone)." },
+        // The creature beside the barbarian is knocked prone, no save: it was
+        // a note the GM had to act on.
+        does: { kind: "buff", target: "enemy", condition: "prone", rounds: 10, rangeFt: 5 },
       },
     ],
     effects: [
@@ -272,7 +274,8 @@ export const AUTHORED_DATA_A: Record<string, AuthoredEntry> = {
   "bard::Blade Flourish": {
     subclass: "College of Swords",
     spends: [
-      { name: "Blade Flourish", pool: { id: "bardic_inspiration" }, oncePerTurn: true, does: { kind: "flourish" } },
+      // "when you hit a creature with a weapon attack" (XGtE): after the hit.
+      { name: "Blade Flourish", pool: { id: "bardic_inspiration" }, oncePerTurn: true, afterWeaponHit: true, does: { kind: "flourish" } },
     ],
   },
   "bard::Psychic Blades": {
@@ -302,7 +305,7 @@ export const AUTHORED_DATA_A: Record<string, AuthoredEntry> = {
     // The die this bard gives carries the mote: a check rolls the die twice
     // and keeps the higher, a save gives the roller temporary hit points,
     // an attack's burst deals the die in thunder (rolls.ts, forced-save.ts,
-    // pc-attack-resolve.ts through src/lib/dm/authored-mote.ts).
+    // attack-swing.ts through src/lib/dm/authored-mote.ts).
     effects: [{ kind: "mote" }],
   },
 
@@ -342,7 +345,7 @@ export const AUTHORED_DATA_A: Record<string, AuthoredEntry> = {
       {
         name: "Blessing of the Trickster",
         action: "action",
-        does: { kind: "buff", target: "ally", condition: "blessing of the trickster", rounds: 600 },
+        does: { kind: "buff", target: "ally", othersOnly: true, condition: "blessing of the trickster", rounds: 600 },
       },
     ],
   },
@@ -350,7 +353,7 @@ export const AUTHORED_DATA_A: Record<string, AuthoredEntry> = {
     subclass: "Death Domain",
     effects: [{ kind: "ignore_resist", types: ["necrotic"] }],
   },
-  // cast_at_enemy secondTargetEnemyId (src/lib/dm/authored-reaper.ts): a
+  // cast_at_enemy's second target (src/lib/dm/authored-reaper.ts): a
   // necromancy cantrip from 1st level, a 1st to 5th level necromancy spell
   // from 17th, at no further cost.
   "cleric::Reaper": {

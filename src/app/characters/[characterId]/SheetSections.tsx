@@ -12,10 +12,12 @@ import {
   SkillRows,
   VitalTiles, TrainingLines } from "@/components/sheet/SheetParts";
 import { SheetSpells } from "@/components/sheet/SheetSpells";
+import { speciesSpellsShown } from "@/lib/srd/species-spell-view";
 import { Ribbon } from "@/components/ui/Ribbon";
 import { cn } from "@/lib/cn";
 import type { CreateSheetInput } from "@/lib/schemas/sheet";
 import { computeSheetDerived, formatModifier, speedFor, type DerivedPart } from "@/lib/srd";
+import { formatPrice, purseCopper } from "@/lib/srd/currency";
 import { ui } from "@/lib/ui";
 
 export type CharacterEvent = {
@@ -95,7 +97,7 @@ export function SheetSections({ sheet, level = 1 }: { sheet: CreateSheetInput; l
                 value: `${speedFor(sheet)} ft`,
                 title: speedFor(sheet) === sheet.speed ? "Their walking speed." : `Base ${sheet.speed} ft, changed by what they wear and their features.`,
               },
-              { glyph: "coin-gp", label: "Gold", value: `${sheet.gold} gp` },
+              { glyph: "coin-gp", label: "Coin", value: formatPrice(purseCopper(sheet)) },
               {
                 glyph: "rest-initiative",
                 label: <GameTerm id="initiative">Initiative</GameTerm>,
@@ -129,7 +131,7 @@ export function SheetSections({ sheet, level = 1 }: { sheet: CreateSheetInput; l
         <TrainingLines proficiencies={sheet.proficiencies} />
       </SheetPanel>
 
-      {sheet.spellcasting ? (
+      {sheet.spellcasting || speciesSpellsShown({ ...sheet, level }).length ? (
         <SheetPanel title="Spells">
           <SheetSpells sheet={{ ...sheet, level }} />
         </SheetPanel>

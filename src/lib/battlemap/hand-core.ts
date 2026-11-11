@@ -15,10 +15,16 @@ import type { OrderEntry } from "@/lib/db/encounters";
 import type { IconRef } from "@/lib/icons";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { conditionBlocksReactions } from "@/lib/srd/condition-effects";
+import { combatRiders } from "@/lib/srd/feature-effects";
 import type { HandGearAction, HandIntentExtras } from "@/lib/battlemap/hand-intent";
 import type { HandArea } from "@/lib/battlemap/hand-area";
+// A type alone: the catalogue's stat blocks stay on the server.
+import type { SummonCatalogue } from "@/lib/srd/summon-spells";
 
-export type HandCost = "action" | "bonus" | "reaction" | "rider" | "free";
+// "legendary" and "lair" are the GM's monsters' Hand only: a legendary
+// creature's action at the end of another creature's turn, and the lair's own
+// on initiative count 20 (src/lib/battlemap/monster-hand.ts).
+export type HandCost = "action" | "bonus" | "reaction" | "rider" | "free" | "legendary" | "lair";
 export type HandCardType = "attack" | "rider" | "spell" | "control" | "mend" | "ward" | "feature" | "basic";
 export type HandTarget = "enemy" | "ally" | "self" | "none";
 export type BasicActionId =
@@ -36,7 +42,7 @@ export type HandIntent = (
   | { card: "spell"; spell: string; slotLevel: number | null }
   | { card: "feature"; resourceId: string }
   | { card: "basic"; action: BasicActionId }
-  | { card: "reaction"; feature: string; spell?: string; slotLevel?: number | null }
+  | { card: "reaction"; feature: string; spell?: string; slotLevel?: number | null; hit?: string; variant?: string }
   // A gear card (issue #424, hand-gear.ts): a shield, a weapon, a thing
   // dropped, picked up, handed over or drunk. `item` rides as the extra.
   | { card: "gear"; action: HandGearAction }
@@ -44,7 +50,27 @@ export type HandIntent = (
   // one of its stat block's attacks, a save ability, or breaking off. Sent
   // to the console's invoke route, never to the actions route.
   // Dash, Disengage and Dodge are take_action with its enemyId (issue #621).
-  | { card: "monster"; enemyId: string; action: "attack" | "ability" | "flee" | MonsterMove; attackName?: string; ability?: MonsterAbilityUse }
+  // A legendary action names its option, and the attack or ability it buys
+  // (attackName, ability); a lair action its option's number and save.
+  | {
+      card: "monster";
+      enemyId: string;
+      action: "attack" | "ability" | "flee" | "legendary" | "lair" | MonsterMove;
+      attackName?: string;
+      ability?: MonsterAbilityUse;
+      legendary?: string;
+      // A legendary option's way to play when it has several, what it is
+      // aimed at, the square a move or a jump needs, the spells it may cast
+      // (src/lib/dm/enemy-actions-view.ts PublicLegendaryRoute).
+      use?: string;
+      aim?: "one" | "many";
+      rows?: boolean;
+      pick?: "allies" | "anyone";
+      most?: number;
+      square?: { feet: number; optional: boolean };
+      spells?: string[];
+      lair?: MonsterLairUse;
+    }
 ) &
   HandIntentExtras;
 
@@ -62,6 +88,13 @@ export type MonsterAbilityUse = {
   halfOnSave?: boolean;
   condition?: string;
   rounds?: number;
+};
+
+// A lair option as lair_action takes it (its number among the fight's), and
+// the save it forces as aoe_damage takes it (legendary-logic.ts lairSave).
+export type MonsterLairUse = {
+  number: number;
+  save?: { dc: number; saveAbility: string; damage?: string; type?: string; halfOnSave?: boolean; condition?: string; rounds?: number };
 };
 
 export type HandCard = {
@@ -84,9 +117,20 @@ export type HandCard = {
   icon: IconRef;
   target: HandTarget;
   toHit: number | null;
+  // Dice the attack roll adds beside its bonus ("+1d4" while blessed), and
+  // the advantage a held condition gives it (True Strike), as the roll is
+  // made (hand-attack-lines.ts attackRollLine). Absent when none.
+  toHitDice?: string;
+  rollAdvantage?: Array<"advantage" | "disadvantage">;
+  // A ranged or thrown attack's reach in feet: its melee reach (0 for a
+  // ranged weapon), its normal and its long range. The preview reads the
+  // board's distance against them (hand-attack-lines.ts attackReach).
+  shot?: { reachFt: number; normalFt: number; longFt: number; thrown: boolean };
   // A dice expression the preview can average; null when nothing is rolled.
   damage: string | null;
   damageType: string;
+  // The second type of a spell that deals two at once (Ice Storm's cold).
+  secondType?: string;
   heals: boolean;
   save: { ability: string; dc: number } | null;
   melee: boolean;
@@ -101,6 +145,14 @@ export type HandCard = {
   // hit points when absent (Lay on Hands).
   unit?: string;
   intent: HandIntent;
+  // An ally card the holder cannot aim at themselves (Blessing of the
+  // Trickster's "other than yourself"): the aim bar leaves out their chip.
+  othersOnly?: boolean;
+  // A card that takes "a creature you can see" (its spend's sight flag, the
+  // one use_resource gates on): the aim bar leaves out the chip of a creature
+  // the board says the holder cannot see, or, for "seesHolder", one that
+  // cannot see the holder (hand-play.ts aimUnseen).
+  sight?: true | "seesHolder";
   // The class options this attack may carry, each already judged by the
   // engine's checkAttackOptions (Reckless Attack, Stunning Strike, knock out).
   options?: HandAttackOption[];
@@ -114,12 +166,19 @@ export type HandCard = {
   // restoration ends, the spell a Ready holds. Sent under the tool
   // argument's own name (hand-intent.ts).
   choice?: HandChoice;
+  // A summoning spell that calls more than one creature at this slot
+  // (issue 685, hand-summon.ts): its choice is the creature, and this says
+  // how many of each the casting may bring.
+  summon?: HandSummon;
   // The card is the turn's object interaction (hand-gear.ts): a draw, a
   // stow, a pick-up, a hand-over.
   interaction?: boolean;
   // An attack that is the whole action, not a swing of the Attack action
   // (Flame Blade, hand-granted.ts): afterCommit spends the action for it.
   wholeAction?: boolean;
+  // The magic item a spell card casts from: Items shows a section per item with
+  // what it has left (hand-groups.ts), as Spells shows one per level with its slots.
+  fromItem?: { key: string; label: string; note: string };
   // A spell that leaves an area on the battle map: the square it is laid on
   // is picked on the board (src/lib/battlemap/hand-area.ts) and sent as the
   // tool's atX/atY/towardX/towardY.
@@ -141,9 +200,37 @@ export type HandCard = {
   // to a hero who is not the one acting (hand-react.ts offTurnReactionCards).
   // Absent, the card is the acting character's.
   actor?: { id: string; name: string };
+  // The hit a reaction card answers (hand-react.ts): the character hit, the
+  // hit's id when the host gives one, and who made it. Its aim is fixed by
+  // it (reactionAim), not picked.
+  answers?: { characterId: string; hitId?: string; attackerId: string | null; attacker: string };
+  // A reaction whose creature the player picks, from those this near the holder
+  // other than the attacker (Misdirection): no aim is fixed by the hit
+  // (reactionPicks).
+  pickWithin?: number;
 };
 
 export type HandShares = { count: number; unit: "dart" | "ray" | "beam" | "creature"; stack: boolean };
+
+// "Each creature of your choice" within an area feature's reach: the player
+// aims at one and adds the others (Order's Demand, Champion Challenge,
+// Conquering Presence, Dreadful Aspect). The engine refuses any outside the reach. Twelve is the most a
+// card's intent carries (hand-intent.ts shares).
+export const CHOSEN_CREATURES: HandShares = { count: 12, unit: "creature", stack: false };
+
+// Each creature a summoning card's choice offers: the numbers it may come
+// in from the card's slot, fewest first (the last is the most, what the
+// engine brings when no number is picked), and the challenge rating it is
+// listed under when the spell calls by rating ("CR 1/4").
+export type HandSummon = {
+  forms: Record<string, { counts: number[]; group?: string }>;
+  // The kinds the creature may be instead of its own (Find Steed's
+  // celestial, fey or fiend), the first being the engine's default.
+  kinds?: Array<{ value: string; label: string }>;
+  // A spell whose targets each take their own form (Animate Dead, Animate
+  // Objects): the budget the forms share at this slot, and each one's cost.
+  mix?: { budget: number; cost: Record<string, number> };
+};
 
 export type HandChoice = {
   arg: "condition" | "variant" | "readySpell" | "item";
@@ -178,6 +265,9 @@ export type HandAttackOption = {
   disabled: string | null;
   // Options of one group exclude each other (Open Hand's three riders).
   group?: "openHand";
+  // Open only on a swing with advantage (Rapid Strike): shut as dealt, and
+  // judged again against the creature aimed at (hand-odds.ts aimedCard).
+  needsAdvantage?: true;
 };
 
 // The turn so far, read from the engine's TurnBudget
@@ -253,6 +343,11 @@ export type SpellFact = {
 
 export type HandOptions = {
   spells?: Record<string, SpellFact>;
+  // The creatures each summoning spell on the sheet can call, by the
+  // spell's name as the sheet holds it (textKey), read from the server's
+  // own catalogue (GET /api/campaigns/[id]/summons, issue 685). Absent on a
+  // host that has none, whose summon cards ask nothing as before.
+  summons?: Record<string, SummonCatalogue>;
   // The table's ammunition variant rule. Undefined = unknown: the count is
   // shown but an empty quiver only warns.
   trackAmmo?: boolean;
@@ -262,7 +357,21 @@ export type HandOptions = {
   // false for a host too old to catch the creatures in it, whose blasts are
   // aimed at one enemy as before. Absent means it is.
   blasts?: boolean;
+  // Whether the spells items cast are dealt as cards (hand-items.ts): false
+  // for a host too old to resolve them (src/lib/capabilities.ts
+  // handItemCasts). Absent means they are.
+  items?: boolean;
+  // What the board says of the character's own square (PlayerMapView.self).
+  board?: HandBoardFacts;
 };
+
+// The engine's own verdicts on the square a character stands on, sent by
+// the board view for the viewer's own token (src/lib/battlemap/view.ts):
+// take_action's refusal of a Hide there (hide-traits.ts hideRefusal), and
+// the Silence it stands in, by who cast it ("" for nobody named;
+// zone-rules.ts silenceAround). Absent off the map and from an older host,
+// whose cards are dealt as before.
+export type HandBoardFacts = { hide?: string; silence?: { by: string } };
 
 // The board and the party as the gear cards read them: what lies on the
 // ground near this character (the board view's drops), the mount they ride,
@@ -456,3 +565,12 @@ export function slotLine(slot: SlotPick): string {
 
 
 export const SAVE_LABEL: Record<string, string> = { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" };
+
+// Swings the Attack action grants this character (1 + Extra Attack), which
+// is what afterCommit needs to know when the action closes. Here rather than
+// in hand.ts so the board's token menu (hand-hud.ts) asks it without pulling
+// every card builder into the board's first load: the table display page
+// loads the board and never deals a hand.
+export function attacksAllowed(sheet: CharacterSheet): number {
+  return 1 + combatRiders(sheet).extraAttacks;
+}

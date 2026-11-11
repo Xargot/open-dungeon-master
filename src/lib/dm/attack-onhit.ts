@@ -38,6 +38,7 @@ import {
   type OpenHandChoice,
 } from "@/lib/dm/attack-choice-rules";
 import { matchWeapon } from "@/lib/srd/weapons";
+import { coatsAsBonusAction } from "@/lib/srd/feat-combat";
 import { poisonAt } from "@/lib/srd/table-hazards";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import type { ToolError } from "@/lib/dm/tool-errors";
@@ -68,7 +69,7 @@ function damageEnemy(campaign: Campaign, enemy: EncounterEnemy, amount: number, 
 
 // Spends one use of a feature's counter the hit (or the miss it rescued)
 // paid for, with its audit row. False when none was left.
-export function spendFeatureUse(campaign: Campaign, sheetId: string, resourceId: string, label: string): boolean {
+export function spendFeatureUse(campaign: Campaign, sheetId: string, resourceId: string, label: string, actor?: "player"): boolean {
   const sheet = getSheetById(sheetId);
   const state = sheet?.resources?.[resourceId];
   if (!sheet || !state || state.max - state.used <= 0) {
@@ -80,6 +81,7 @@ export function spendFeatureUse(campaign: Campaign, sheetId: string, resourceId:
     campaignId: campaign.id,
     characterId: sheet.id,
     turnId: null,
+    ...(actor ? { actor } : {}),
     kind: "use_resource",
     delta: { resource: label, spent: 1 },
     reason: label,
@@ -103,11 +105,21 @@ export const POISON_COAT = "poisoned weapon";
 // Poison, Wyvern Poison: src/lib/srd/afflictions.ts) or the table's workshop
 // (src/lib/srd/table-hazards.ts), by the row the vial is (src/lib/srd/
 // item-row.ts). Null for anything else.
-function coatOf(item: RowItem, campaignId?: string): { name: string; dc: number; damage?: string; halfOnSave?: boolean; conditions?: string[]; minutes?: number; unconsciousIfFailBy?: number } | null {
+// The Poisoner's coat (ODM's Poisoner: "you can coat a weapon as a bonus
+// action so its next hit forces a DC 14 Constitution save for 2d8 poison
+// damage and the poisoned condition"), the potent poison of the feat's
+// source, poisoned until the end of the poisoner's next turn: about a round.
+type Coat = { name: string; dc: number; damage?: string; halfOnSave?: boolean; conditions?: string[]; minutes?: number; unconsciousIfFailBy?: number; basic?: true };
+const POTENT_POISON: Coat = { name: "potent poison", dc: 14, damage: "2d8", conditions: ["poisoned"], minutes: 0.1 };
+
+function coatOf(item: RowItem, campaignId?: string): Coat | null {
+  if (textKey(rowName(item)) === textKey(POTENT_POISON.name)) {
+    return POTENT_POISON;
+  }
   const row = rowName(item);
   // The SRD's basic poison, by its row (src/lib/srd/adventuring-gear.ts).
   if (catalogName(row) === "Poison, Basic (vial)") {
-    return { name: "basic poison", dc: 10, damage: "1d4" };
+    return { name: "basic poison", dc: 10, damage: "1d4", basic: true };
   }
   const poison = poisonAt(row, campaignId);
   return poison && poison.type === "injury" ? poison : null;
@@ -138,10 +150,14 @@ export function poisonCoatRefusal(sheet: CharacterSheet, item: RowItem): ToolErr
 // The vial just used: the coat goes on, for a minute (ten rounds). Which
 // poison it is rides in the coat's source.
 export function coatWithPoison(campaign: Campaign, user: CharacterSheet, item: RowItem): Record<string, unknown> | null {
-  const coat = coatOf(item, campaign.id);
-  if (!coat) {
+  const vial = coatOf(item, campaign.id);
+  if (!vial) {
     return null;
   }
+  // A Poisoner makes a vial of basic poison their potent poison; a stronger
+  // injury poison stays itself. The engines coated a Poisoner's blade with
+  // the vial's DC 10 and 1d4, and the feat's DC 14 and 2d8 ran nowhere.
+  const coat = vial.basic && coatsAsBonusAction(user) ? POTENT_POISON : vial;
   const fresh = getSheetById(user.id) ?? user;
   const meta: ConditionMetaMap = { ...(fresh.conditionMeta as ConditionMetaMap), [POISON_COAT]: { rounds: 10, source: coat.name.toLowerCase() } };
   const conditions = fresh.conditions.some((entry) => textKey(entry) === POISON_COAT) ? fresh.conditions : [...fresh.conditions, POISON_COAT];

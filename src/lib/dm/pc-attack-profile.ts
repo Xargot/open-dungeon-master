@@ -11,6 +11,7 @@ import { getMounts } from "@/lib/db/mounts";
 import { isValidExpression } from "@/lib/dice";
 import { acBreakdownFor, computeSheetDerived, spellAbilityFor, spellAttackFor, type SheetDerived, castsSpells } from "@/lib/srd";
 import { spellDamageFor, spellEngineName, spellFactsFor, spellMechanicsFor, spellSchoolFor } from "@/lib/content";
+import { splitDamageExpression } from "@/lib/dm/aoe-parts";
 import { spellDamageRiders } from "@/lib/srd/spell-damage-riders";
 import { isMeleeSpellAttack } from "@/lib/dm/spell-attack-riders";
 import type { ConditionMetaMap } from "@/lib/dm/condition-logic";
@@ -41,7 +42,10 @@ import type { CreatureAttack } from "@/lib/srd/creature-attacks";
 import { noneNamed, type ToolError } from "@/lib/dm/tool-errors";
 import { textKey } from "@/lib/language/text-logic";
 import { weaponMaterial } from "@/lib/dm/damage-logic";
-import { hasName, namesOf } from "@/lib/dm/cast-rules";
+import { grantedCastOf, hasName, namesOf } from "@/lib/dm/cast-rules";
+import { paidByItem, runningItemSpell } from "@/lib/srd/item-cast-credit";
+import { scrollNumbers } from "@/lib/dm/consumables";
+import { itemCastOpen } from "@/lib/dm/item-casts";
 import { magicItemRiders } from "@/lib/srd/magic-items";
 
 export type AttackKind = "weapon" | "spell" | "natural" | "granted";
@@ -111,9 +115,6 @@ export function buildAttackProfile(
   // A lineage's bite or claws (src/lib/srd/racial-weapons.ts).
   const racial = !granted && !natural && !args.spell?.trim() && !sheet.wildShape ? racialNaturalWeapon(sheet.features, weaponName) : null;
   if (granted) {
-    if (derived.spellAttack === null) {
-      return { error: `${sheet.name}'s sheet has no spell attack bonus (no spellcasting ability), so ${granted.attack.name} cannot be rolled.`, refused: "rules" };
-    }
     const grantedMeta = (sheet.conditionMeta as ConditionMetaMap)[granted.condition];
     // The spell the attack comes from: the one the casting recorded on the
     // condition, else a spell of the attack's own name (Spiritual Weapon).
@@ -122,21 +123,28 @@ export function buildAttackProfile(
     // Cast from a higher slot, a scaling attack (Spiritual Weapon) rolls the
     // slot's dice: the level the condition carries, else the caster's last
     // casting of the spell on the audit trail.
+    const fromItemCast = grantedSpell ? runningItemSpell(sheet, grantedSpell) : null;
+    // A spell an item cast strikes with the numbers it was cast with.
+    if (derived.spellAttack === null && fromItemCast?.attackBonus === undefined) {
+      return { error: `${sheet.name}'s sheet has no spell attack bonus (no spellcasting ability), so ${granted.attack.name} cannot be rolled.`, refused: "rules" };
+    }
     const slotLevel =
       grantedMeta?.slotLevel ??
+      fromItemCast?.level ??
       (granted.attack.upcast ? lastCastSlot(sheet.id, granted.attack.name) : null);
     const dice = grantedAttackDice(granted.attack, sheet.level, slotLevel);
     // A multiclass caster's spell attack and modifier are those of the class
     // whose list carries the spell (a cleric and wizard's Spiritual Weapon
     // rolls with Wisdom), as a cast spell's are.
     const ability = grantedSpell ? spellAbilityFor(sheet, grantedSpell) : (sheet.spellcasting?.ability ?? null);
-    const abilityMod = granted.attack.abilityToDamage && ability ? derived.abilityMods[ability] : 0;
+    // A spell an item cast keeps the modifier it was stored with.
+    const abilityMod = granted.attack.abilityToDamage ? (fromItemCast?.abilityMod ?? (ability ? derived.abilityMods[ability] : 0)) : 0;
     // A ranged one reaches its own range and no farther: a spell attack has
     // no long range (SRD 5.1, Range), so Crown of Stars' 120 feet is all of it.
     const rangeTiles = Math.max(1, Math.round((granted.attack.rangeFeet ?? 60) / 5));
     profile = {
       weapon: granted.attack.name,
-      toHit: grantedSpell ? (spellAttackFor(sheet, grantedSpell) ?? derived.spellAttack) : derived.spellAttack,
+      toHit: (grantedSpell ? spellAttackFor(sheet, grantedSpell) : null) ?? derived.spellAttack ?? 0,
       damageExpression:
         abilityMod > 0 ? `${dice}+${abilityMod}` : abilityMod < 0 ? `${dice}${abilityMod}` : dice,
       damageType: granted.attack.type,
@@ -168,7 +176,17 @@ export function buildAttackProfile(
     kind = "granted";
   } else if (args.spell?.trim()) {
     const spellName = args.spell.trim();
-    if (!castsSpells(sheet)) {
+    // A spell an item paid for needs no Spellcasting feature and is on no list
+    // of theirs, as it runs on too.
+    // So is a later ray of a casting an item made this turn.
+    const fromItem = paidByItem(sheet, spellName) ?? itemCastOpen(campaignId, sheet, spellName);
+    // A spell the species or its chosen option gives (a workshop Mistkin's
+    // Fire Bolt), or an invocation's, sits on no class list and needs no
+    // Spellcasting feature: the cast guard reads the same grant
+    // (src/lib/srd/granted-casts.ts), so this check reads it too. It read
+    // only the class lists, and refused a cantrip the Hand dealt.
+    const grant = grantedCastOf(sheet, spellName, spellFactsFor(spellName, sheetSpellAuthors(sheet)));
+    if (!castsSpells(sheet) && !fromItem && !grant) {
       return { error: `${sheet.name} cannot cast spells.`, refused: "rules" };
     }
     // The content pack knows how a known spell resolves; a save or buff
@@ -181,7 +199,7 @@ export function buildAttackProfile(
     const mechDamageType = resolvedMech?.mech.damageType;
     const spellList = allSpellNames(sheet.spellcasting);
     const spellNames = namesOf(spellName, spellFactsFor(spellName, sheetSpellAuthors(sheet)));
-    const onList = hasName(spellList, spellNames);
+    const onList = Boolean(fromItem) || Boolean(grant) || hasName(spellList, spellNames);
     if (!onList) {
       // A spell the rules know is one they lack; a name nobody knows is the
       // call's to fix, from their list.
@@ -211,15 +229,43 @@ export function buildAttackProfile(
     if (scaled) {
       scalingNote = scaled.note;
     }
+    // Empowered Evocation, Elemental Affinity, a subclass die
+    // (src/lib/srd/spell-damage-riders.ts).
+    const facts = spellFactsFor(spellName, sheetSpellAuthors(sheet));
+    // A spell attack of two types (Storm Kick's thunder and lightning): its
+    // last dice ride the blow under their own type, as a magic weapon's do,
+    // so each meets its own resistance and a critical doubles both. The whole
+    // sum used to land as the first type.
+    const secondType = resolvedMech?.mech.secondType;
+    const [firstDice, secondDice] = splitDamageExpression(damageArg, secondType) ?? [];
+    const spellRiders = spellDamageRiders(sheet, { school: spellSchoolFor(spellName, sheetSpellAuthors(sheet)), damageType: mechDamageType || args.damageType, secondType, level: facts?.level ?? 0, classes: facts?.classes });
+    // A rider's die is written beside the dice of the type that earned it:
+    // the first type's after the first dice, the second's after the second,
+    // so the second type's dice are read back from the end (damage-parts.ts)
+    // and never take a first-type die of the same size for their own.
+    const spellDice = firstDice && secondDice
+      ? [firstDice, ...spellRiders.dice, secondDice, ...spellRiders.diceSecond].join("+")
+      : [damageArg, ...spellRiders.dice, ...spellRiders.diceSecond].join("+");
     // Multiclass: the to-hit follows the class whose list carries the spell.
-    const spellProfile = spellAttackProfile(
-      { spellAttack: spellAttackFor(sheet, spellName) },
+    const baseSpellProfile = spellAttackProfile(
+      { spellAttack: spellAttackFor(sheet, spellName) ?? scrollNumbers(fromItem?.level ?? 1).attackBonus },
       spellName,
-      damageArg,
+      spellDice,
       // A known spell deals its own damage type; the caller's word counts
       // only for a spell the content does not know (SRD 5.1).
       (mechDamageType || args.damageType || "").trim().toLowerCase(),
     );
+    // Affinity's Charisma on the second type rides those dice as their own
+    // flat part, once, as a critical never doubles it (damage-parts.ts).
+    const spellProfile = secondDice && secondType
+      ? {
+          ...baseSpellProfile,
+          gearTyped: [
+            { dice: spellRiders.flatSecond > 0 ? `${secondDice}+${spellRiders.flatSecond}` : secondDice, type: secondType },
+            ...spellRiders.diceSecond.map((dice) => ({ dice, type: secondType })),
+          ],
+        }
+      : baseSpellProfile;
     // A melee spell attack (a touch) is a melee attack: it reaches only the
     // creature beside the caster, and the rules for ranged attacks do not
     // apply to it.
@@ -241,12 +287,13 @@ export function buildAttackProfile(
         }
       }
     }
-    // Empowered Evocation, Elemental Affinity (src/lib/srd/spell-damage-riders.ts).
-    const facts = spellFactsFor(spellName, sheetSpellAuthors(sheet));
-    const spellRiders = spellDamageRiders(sheet, { school: spellSchoolFor(spellName, sheetSpellAuthors(sheet)), damageType: mechDamageType || args.damageType, level: facts?.level ?? 0, classes: facts?.classes });
-    if (spellRiders.flat > 0 || spellRiders.dice.length) {
-      const extra = [...spellRiders.dice, ...(spellRiders.flat > 0 ? [String(spellRiders.flat)] : [])].join("+");
-      profile = { ...profile, damageExpression: `${profile.damageExpression}+${extra}`, riderNotes: [...profile.riderNotes, ...spellRiders.notes] };
+    // The riders' flat bonuses (their dice are already in the spell's).
+    const flatTotal = spellRiders.flat + spellRiders.flatSecond;
+    if (flatTotal > 0) {
+      profile = { ...profile, damageExpression: `${profile.damageExpression}+${flatTotal}` };
+    }
+    if (spellRiders.notes.length) {
+      profile = { ...profile, riderNotes: [...profile.riderNotes, ...spellRiders.notes] };
     }
   } else if (sheet.summon && !sheet.wildShape) {
     // A creature a spell made fights with its stat block (summon-rules.ts).

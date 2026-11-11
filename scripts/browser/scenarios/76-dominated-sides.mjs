@@ -2,7 +2,8 @@
 // dice. At the Dominate Table, which the lead runs, the player's Sela holds
 // an ogre by Dominate Monster and an enemy mage holds the player's Bran by
 // Dominate Person. The ogre's token wears the party's stone band outside its
-// health ring and Bran's the foes' red; the initiative rail, the DM's order,
+// health ring and Bran's the foes' red, and the ogre's hover plate shows its
+// charm's painting large with what charmed does; the initiative rail, the DM's order,
 // the monster hand, the enemy roster and the party cards say who fights for
 // whom in words, and the ogre's cards aim at the foes and at Bran, never at
 // Sela. When the charms end the bands fade and the words go. At the Held
@@ -61,25 +62,55 @@ export default {
     check(branBand.opacity === "1" && branBand.stroke === FOE_RIM, `the dominated ${bran.name} wears the foes' red band (${JSON.stringify(branBand)})`);
     check((await frame.getByRole("img", { name: new RegExp(`^${bran.name}.*against the party`) }).count()) === 1, `${bran.name}'s name says he fights against the party`);
     check((await band(sela.name)).opacity === "0" && (await rimSide(sela.name)) === null, `${sela.name} fights on her kind's side, unmarked`);
-    const zoomIn = board.getByRole("button", { name: "Zoom in", exact: true }).first();
-    for (let step = 0; step < 4 && (await zoomIn.count()); step += 1) {
-      await t.tap(zoomIn);
-    }
-    await untilStill(page);
-    await t.shot("board");
-    await frame.screenshot({ path: t.shotPath("board-close") }).catch(() => {});
-    // The ogre up close, where a band is a few pixels: the board zooms at
-    // the pointer.
-    const at = await figureOf(ogre.name).boundingBox();
-    if (at) {
-      await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
-      for (let step = 0; step < 3; step += 1) {
+    // The ogre up close, where a band is a few pixels. The board zooms at
+    // the pointer, so the ogre stays where it rests: the zoom buttons zoom
+    // at the middle of the map above the Hand, and on the staged board that
+    // carried a figure resting just above the cards down under them, where
+    // no pointer reaches it (the Hand lies over the map's lower edge).
+    const rest = await figureOf(ogre.name).boundingBox();
+    if (rest) {
+      await page.mouse.move(rest.x + rest.width / 2, rest.y + rest.height / 2);
+      for (let step = 0; step < 6; step += 1) {
         await page.mouse.wheel(0, -400);
       }
       await untilStill(page);
-      const box = await figureOf(ogre.name).boundingBox();
-      if (box) await page.screenshot({ path: t.shotPath("ogre-close"), clip: { x: Math.max(0, box.x - 40), y: Math.max(0, box.y - 40), width: box.width + 80, height: box.height + 80 } }).catch(() => {});
     }
+    await t.shot("board");
+    await frame.screenshot({ path: t.shotPath("board-close") }).catch(() => {});
+    const box = await figureOf(ogre.name).boundingBox();
+    if (box) await page.screenshot({ path: t.shotPath("ogre-close"), clip: { x: Math.max(0, box.x - 40), y: Math.max(0, box.y - 40), width: box.width + 80, height: box.height + 80 } }).catch(() => {});
+
+    // The ogre's hover plate lists its charm with the painting large and
+    // what charmed does (condition-rules.ts), above who laid it. It is
+    // pinned to the page, outside the game's root, so a short board's frame
+    // does not cut it off.
+    const ogreAt = await figureOf(ogre.name).boundingBox();
+    check(ogreAt, `the ${ogre.name} is on the board to point at`);
+    const pointAt = { x: ogreAt.x + ogreAt.width / 2, y: ogreAt.y + ogreAt.height / 2 };
+    const underPointer = await page.evaluate(({ x, y }) => {
+      const node = document.elementFromPoint(x, y);
+      return { onFigure: Boolean(node?.closest('[role="img"]')), what: node ? `${node.tagName.toLowerCase()}.${node.getAttribute("class") ?? ""}` : "nothing" };
+    }, pointAt);
+    check(underPointer.onFigure, `the pointer reaches the ${ogre.name}, not what lies over it (${underPointer.what} at ${JSON.stringify(pointAt)})`);
+    await page.mouse.move(pointAt.x, pointAt.y);
+    const plate = page.locator('[role="tooltip"]').locator("visible=true").filter({ hasText: "charmed" }).first();
+    await eventually(() => plate.isVisible(), { timeoutMs: 10_000, label: `the ${ogre.name}'s hover plate` });
+    const plateText = (await plate.textContent()) ?? "";
+    check(plateText.includes("Can't attack the charmer"), `the plate says what charmed does (${plateText.slice(0, 160)})`);
+    check(plateText.includes(sela.name), `the plate says who laid the charm (${plateText.slice(0, 160)})`);
+    const art = plate.locator('img[src*="/icons/condition/charmed"]').first();
+    await eventually(() => art.count(), { label: "the charm's painting on the plate" });
+    const artWidth = await art.evaluate((node) => node.parentElement.getBoundingClientRect().width);
+    check(artWidth >= 40, `the charm's painting is shown large (${artWidth}px)`);
+    const plateBox = await plate.boundingBox();
+    const windowSize = page.viewportSize();
+    check(
+      plateBox && windowSize && plateBox.x >= 0 && plateBox.y >= 0 && plateBox.x + plateBox.width <= windowSize.width && plateBox.y + plateBox.height <= windowSize.height,
+      `the plate sits whole inside the window (${JSON.stringify(plateBox)})`,
+    );
+    await untilStill(page);
+    await t.shot("condition-plate");
+    await page.mouse.move(0, 0);
 
     // The initiative rail says it in words and opens the DM's order, where
     // each row wears its side down its edge.

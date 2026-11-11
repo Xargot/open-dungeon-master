@@ -67,6 +67,7 @@ import { useQuickFill, type FillRequest } from "./useQuickFill";
 import { useTableRules } from "./useTableRules";
 import { hitDieChip } from "./lineage";
 import { useShowNumbers } from "./numbersPref";
+import { withPoolSupply } from "./spellSupply";
 
 export type { BuilderResult } from "./submit";
 
@@ -370,15 +371,16 @@ function CharacterBuilderForm({
     if (!state.undo) {
       return;
     }
+    // The bar goes with the undo, and the button holding focus with it: focus
+    // goes to the step's heading first, in this same press. Moved on a timer
+    // it sat on the page until the browser reached that timer, after the
+    // re-render's frame (the key's own keyup landed on the body, and CI's
+    // check now and then read "focus fell to the page").
+    document
+      .querySelector<HTMLElement>(`[data-builder-root="${rootId}"] section[data-active] .wizard-step-heading`)
+      ?.focus({ preventScroll: true });
     setPutBackSaid(putBackMessage(state.undo));
     state.putBack();
-    // The bar goes with the undo; focus goes to the step's heading rather
-    // than being dropped on the page.
-    window.setTimeout(() => {
-      document
-        .querySelector<HTMLElement>(`[data-builder-root="${rootId}"] section[data-active] .wizard-step-heading`)
-        ?.focus({ preventScroll: true });
-    }, 0);
   }
   const [cameFrom, setCameFrom] = useState<SummaryRowKey | null>(null);
   const [returnTo, setReturnTo] = useState<{ row: SummaryRowKey } | null>(null);
@@ -582,7 +584,7 @@ function CharacterBuilderForm({
       ...abilitiesBlocks(derived, state, featJudge),
       ...racialFeatBlock(unmetFeatMessage(featJudge, state.feats.slice(0, race ? racialFeatCount(race.id) : 0))),
     ],
-    spells: [...spellsBlocks(derived, klass), ...(gear ? [gear] : [])],
+    spells: [...spellsBlocks(withPoolSupply(derived, spellPool), klass), ...(gear ? [gear] : [])],
   };
   const blockers = {
     identity: owed.identity[0] ?? null,

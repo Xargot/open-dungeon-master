@@ -8,6 +8,8 @@
 // request_roll (src/lib/dm/invoke-roll.ts), group_check and aoe_damage call
 // in here; cast_at_player and cast_at_enemy are meant to.
 
+import { noteShift, takeSaveHelp, takeShift } from "@/lib/dm/chronal-shift";
+import { recordSave } from "@/lib/dm/last-save";
 import { diehardSaveAdvantage, shieldMasterSaveBonus } from "@/lib/srd/feat-combat";
 import { LUCK_SPEND } from "@/lib/dm/roll-riders";
 import { spendLuckCounter } from "@/lib/srd/class-resources";
@@ -18,7 +20,8 @@ import { insertRoll } from "@/lib/db/rolls";
 import { getSheetById } from "@/lib/db/sheets";
 import { patchSheetAudited, type AuditActor } from "@/lib/dm/audited-patch";
 import { currentTurnId } from "@/lib/dm/job-control";
-import { d20Expression, rollExpression } from "@/lib/dice";
+import { d20Expression, rollExpression, type RollResult } from "@/lib/dice";
+import { heldBardicDie, heldOwnLuckDie, holdsMoteDie, sidesOf, withBonusDie } from "@/lib/dm/after-roll-logic";
 import { publishPersisted, publishWithSeq } from "@/lib/events";
 import { saveModFor } from "@/lib/bestiary/enemy-numbers";
 import type { SaveAbility } from "@/lib/bestiary/statblock";
@@ -48,6 +51,7 @@ import { enemyExhaustion, hasTrait } from "@/lib/dm/monster-abilities";
 import { authoredEnemySave } from "@/lib/dm/authored-saves";
 import { authoredSaveDieVs } from "@/lib/srd/authored-effects-more";
 import { moteAfterRoll, moteOf } from "@/lib/dm/authored-mote";
+import { rollCharacterD20 } from "@/lib/dm/character-roll";
 
 // Everything resolveRollExpression cannot read for itself, for one roll of
 // one character: the aura over them (saves only), the lasting effects on
@@ -129,6 +133,50 @@ export function spendRollCarriers(campaignId: string, sheetId: string, spent: st
     delta: { resource: carriers.map(carrierWords).join(" and "), spent: 1 },
     actor: actor ?? (currentTurnId() ? "dm" : "player"),
   });
+}
+
+// A held Bardic Inspiration or Dark One's Own Luck die on a roll that cannot
+// wait for its holder (a save the engine forces, a death save, a check rolled
+// with its DC): the holder may decide once the d20 is rolled (SRD 5.1, Bardic
+// Inspiration), so the die is added when the d20 falls short and could be
+// carried over, as they would choose. Riding every such roll, it was spent on
+// a natural 20 and on rolls it could not save. A roll with no DC cannot be
+// judged, and a mote's die bursts at the throw (authored-mote.ts): both keep
+// the die riding the roll as before.
+export function heldDieWaits(sheet: Pick<CharacterSheet, "conditions" | "conditionMeta">, dc: number | null | undefined): boolean {
+  return typeof dc === "number" && !holdsMoteDie(sheet);
+}
+
+// The roll with what the holder would add to it (heldDieWaits). `natural1`:
+// a natural 1 fails whatever the total (a death save, an attack), so nothing
+// is spent. `attack`: only Bardic Inspiration rides an attack roll; Dark One's
+// Own Luck is for checks and saves.
+export function settleHeldDie(campaignId: string, sheetId: string, outcome: RollResult, dc: number, natural1 = false, attack = false): RollResult {
+  let settled = outcome;
+  for (const held of attack ? [heldBardicDie] : [heldBardicDie, heldOwnLuckDie]) {
+    if (settled.total >= dc || (natural1 && outcome.natural === 1)) {
+      break;
+    }
+    const sheet = getSheetById(sheetId);
+    const die = sheet ? held(sheet) : null;
+    if (!die || settled.total + sidesOf(die.die) < dc) {
+      continue;
+    }
+    settled = withBonusDie(settled, { sides: sidesOf(die.die), value: rollExpression(`1${die.die}`).total, kept: true });
+    spendRollCarriers(campaignId, sheetId, die.condition);
+  }
+  return settled;
+}
+
+// An attack roll's held Bardic Inspiration die (settleHeldDie): added only to
+// a roll that misses `ac` and is no natural 1 or critical, when the die can
+// lift it to a hit. The same object back when nothing was added.
+export function settleAttackDie(campaignId: string, sheet: Pick<CharacterSheet, "id" | "conditions" | "conditionMeta">, outcome: RollResult, ac: number, critRange = 20): RollResult {
+  const natural = outcome.natural ?? 0;
+  if (!heldDieWaits(sheet, ac) || natural === 1 || natural >= critRange) {
+    return outcome;
+  }
+  return settleHeldDie(campaignId, sheet.id, outcome, ac, true, true);
 }
 
 // What a spent carrier is called on the event log.
@@ -271,16 +319,20 @@ export function rollCharacterSave(
   // Diehard: advantage against what would exhaust them.
   const diehard = diehardSaveAdvantage(sheet, resists?.against);
   const claimed = claim ?? (diehard ? { advantage: "advantage" as const, reason: "Diehard: advantage against exhaustion" } : null);
+  const waits = heldDieWaits(sheet, dc);
   const resolved = resolveRollExpression(
     {
       kind: "saving_throw",
       ability,
       dc,
       ...resists,
+      // The creature forcing it, subtype and all, for what answers its
+      // kind (Demon Armor's curse against a demon's spells and abilities).
+      ...(from?.stats?.type ? { sourceType: from.stats.type } : {}),
       ...(claimed ? { advantage: claimed.advantage, advantageReason: claimed.reason } : {}),
     } as RollArgs,
     sheet,
-    rollExtrasFor(campaign, sheet, "saving_throw"),
+    { ...rollExtrasFor(campaign, sheet, "saving_throw"), keepHeldDie: waits },
   );
   if ("error" in resolved) {
     return { success: false, total: null, autoFailed: true, notes: [resolved.error] };
@@ -291,12 +343,33 @@ export function rollCharacterSave(
   const mote = moteOf(sheet, resolved.spendInspiration);
   spendRollCarriers(campaign.id, sheet.id, resolved.spendInspiration);
   const versus = authoredSaveDieVs(sheet, sheet.id, from ? { conditions: from.conditions, meta: from.conditionMeta as Record<string, { source?: string }> } : null);
-  const outcome = rollExpression(
-    `${resolved.expression}${versus ? `+${versus.die}` : ""}${shieldSave ? `+${shieldSave}` : ""}${covered ? `+${covered}` : ""}${extra?.die ? `+${extra.die}` : ""}`,
-  );
+  const purpose = { roller: "hero" as const, kind: "save" as const, who: sheet.name };
+  const expression = `${resolved.expression}${versus ? `+${versus.die}` : ""}${shieldSave ? `+${shieldSave}` : ""}${covered ? `+${covered}` : ""}${extra?.die ? `+${extra.die}` : ""}`;
   // A floor under the d20 (Starry Form's dragon: a 9 or lower counts as 10).
-  if (extra?.floor && outcome.natural !== undefined && outcome.natural < extra.floor) {
-    outcome.total = outcome.total - outcome.natural + extra.floor;
+  const floored = (thrown: RollResult): RollResult =>
+    extra?.floor && thrown.natural !== undefined && thrown.natural < extra.floor ? { ...thrown, total: thrown.total - thrown.natural + extra.floor } : thrown;
+  // A held die is spent only where it carries the roll, so it is still
+  // held for the second roll when it could not save the first.
+  const settled = (thrown: RollResult) => (waits ? settleHeldDie(campaign.id, sheet.id, thrown, dc) : thrown);
+  const throwSave = () => floored(rollExpression(expression, undefined, { purpose }));
+  // The player's own save, though the engine forces it (WAVE1 R5: "A seat
+  // on physical dice rolls its own saves, including saves the engine
+  // forces"): on physical dice they roll it, a wizard holding a foretold
+  // number may use it, and a failure waits on what they hold (Lucky, Bardic
+  // Inspiration), all before the damage or the condition lands
+  // (src/lib/dm/character-roll.ts).
+  let outcome = rollCharacterD20(campaign, sheet, { kind: "saving_throw", tag: purpose, expression, detail: detail.slice(0, 200), dc, throwIt: throwSave, adjust: floored, settle: settled });
+  // A Chronal Shift a watching wizard set on this save (chronal-shift.ts).
+  const shiftedBy = takeShift(campaign.id, purpose, outcome.total >= dc);
+  const shiftLine = shiftedBy ? `${shiftedBy}'s Chronal Shift: rolled again (${outcome.total} became ` : null;
+  if (shiftedBy) {
+    outcome = settled(throwSave());
+    noteShift(campaign.id, `${shiftedBy} used Chronal Shift: ${sheet.name} rolled the save again, ${outcome.total} against DC ${dc}, and the new roll stands.`);
+  }
+  // Flash of Genius or Favored by the Gods set on this save at the stop.
+  const helped = takeSaveHelp(campaign.id, purpose, sheet.name, outcome, dc);
+  if (helped) {
+    outcome = helped.outcome;
   }
   const roll = insertRoll({
     campaignId: campaign.id,
@@ -313,6 +386,12 @@ export function rollCharacterSave(
     source: "digital",
   });
   const moteLine = moteAfterRoll(campaign, sheet, mote, "saving_throw", outcome);
+  // A save forced by a creature is kept, made or failed, for what answers it
+  // (Vigilant Rebuke a success, Slayer's Counter the forcing, Hellish Rebuke
+  // the damage through it: src/lib/dm/last-save.ts).
+  if (from) {
+    recordSave(campaign.id, sheet.id, ability, { id: from.id, name: from.displayName }, outcome.total >= dc, resists?.against);
+  }
   return {
     success: outcome.total >= dc,
     total: outcome.total,
@@ -324,6 +403,8 @@ export function rollCharacterSave(
       ...(shieldSave ? [`Shield Master: +${shieldSave} (the shield) on a Dexterity save against an effect that targets only them`] : []),
       ...coverNote(covered),
       ...(moteLine ? [moteLine] : []),
+      ...(shiftLine ? [`${shiftLine}${outcome.total})`] : []),
+      ...(helped ? [helped.line] : []),
     ],
   };
 }
@@ -441,9 +522,18 @@ export function rollEnemySave(
     ...riders.advantageSources,
     ...authored.sources,
   ]);
-  const outcome = rollExpression(
-    `${d20Expression(saveModFor(enemy.stats, ability) + effect.bonus + covered, advantage)}${riders.diceSuffix}`,
-  );
+  const purpose = { roller: "enemy" as const, kind: "save" as const, who: enemy.displayName };
+  const expression = `${d20Expression(saveModFor(enemy.stats, ability) + effect.bonus + covered, advantage)}${riders.diceSuffix}`;
+  let outcome = rollExpression(expression, undefined, { purpose });
+  // A Chronal Shift a watching wizard set on this save (chronal-shift.ts):
+  // a success is rolled again, and the second roll stands. Legendary
+  // Resistance may still answer the failure that follows.
+  const shiftedBy = takeShift(campaignId, purpose, outcome.total >= dc);
+  const firstTotal = outcome.total;
+  if (shiftedBy) {
+    outcome = rollExpression(expression, undefined, { purpose });
+    noteShift(campaignId, `${shiftedBy} used Chronal Shift: ${enemy.displayName} rolled the save again, ${outcome.total} against DC ${dc}, and the new roll stands.`);
+  }
   if (options.record) {
     const roll = insertRoll({
       campaignId,
@@ -478,6 +568,7 @@ export function rollEnemySave(
       ...coverNote(covered),
       ...riders.notes,
       ...authored.notes,
+      ...(shiftedBy ? [`${shiftedBy}'s Chronal Shift: rolled again (${firstTotal} became ${outcome.total})`] : []),
     ],
   };
 }

@@ -32,6 +32,7 @@
 //     through the engine.
 import assert from "node:assert/strict";
 import { openWorld } from "./lib/enforce-world.mjs";
+import { call } from "./lib/enforce-campaign.mjs";
 import { suite } from "./lib/enforce-harness.mjs";
 import { kit as conditionsKit, FIGHTER } from "./lib/enforce-conditions.mjs";
 
@@ -519,7 +520,11 @@ await test("a stable creature regains 1 hit point when its 1d4 hours have passed
   await world.invoke("pass_time", { amount: 1, unit: "minutes" });
   assert.equal(hp(), 1);
   assert.equal(track(), null);
+  // Woken on the stretch's last round, it has had no time to get up; a
+  // minute more and it is on its feet (condition-tick.ts tickClockConditions).
   assert.deepEqual(world.sheet(hero.id).conditions, ["prone"]);
+  await world.invoke("pass_time", { amount: 1, unit: "minutes" });
+  assert.deepEqual(world.sheet(hero.id).conditions, []);
 });
 
 await test("a stable creature with no wait of its own wakes once four hours pass in one stretch", async () => {
@@ -742,9 +747,23 @@ await test("a death save that spends an inspiration die and stabilises leaves th
   // the stable wait.
   dying({ ...FRESH, successes: 2 });
   world.patch(hero.id, { conditions: ["bardic inspiration (d6)"] });
-  const out = await kit.withDice([9, 3, 2], "pass_time", { amount: 1, unit: "minutes" });
-  assert.equal(out.outcome.ok, true, out.outcome.error);
-  assert.equal(track()?.stable, true, JSON.stringify(out.dice));
+  // The 9 falls short and waits on the hero's player, who adds the held die
+  // ("After-the-roll holders ... are asked on initiative and death saves
+  // too": the maintainer's decision R4 of the 2026-11-09 gap sweep; it was
+  // added for them before).
+  world.clearDice();
+  world.dice(9);
+  const out = await world.invoke("pass_time", { amount: 1, unit: "minutes" });
+  assert.equal(out.ok, true, out.error);
+  const { listOpenPendingRolls } = await import("../src/lib/db/dm-turns.ts");
+  const card = listOpenPendingRolls(world.campaignId).find((pending) => pending.thrown?.options.some((option) => option.id === "bardic"));
+  assert.ok(card, "the death save waits on the held die");
+  world.dice(3, 2);
+  world.signIn({ id: hero.userId });
+  const added = await call(await world.route("campaigns/[campaignId]/pending-rolls/[pendingRollId]/after-roll"), "POST", { use: "bardic" }, { campaignId: world.campaignId, pendingRollId: card.id });
+  world.clearDice();
+  assert.equal(added.status, 200, JSON.stringify(added.json));
+  assert.equal(track()?.stable, true, JSON.stringify(track()));
   assert.ok(
     !world.sheet(hero.id).conditions.includes("bardic inspiration (d6)"),
     `the spent die came back with the stable conditions: ${world.sheet(hero.id).conditions.join(", ")}`,
@@ -1082,17 +1101,54 @@ await test("A hero who dies in the death saves Prayer of Healing's ten minutes r
 // among the marchers, holding up.
 await test("A hero who dies in the death saves a long road rolls is left out of its forced march saves.", async () => {
   // The table's seats are taken by now: the owner plays both.
-  const walker = world.addHero({ name: "Walker", class: "fighter", level: 4, maxHp: 40, user: world.owner });
+  // The sky a leg of four hours rolls comes from Math.random, which the dice
+  // queue does not hold (src/lib/srd/weather.ts rollWeather). A bitterly cold
+  // draw (about one run in forty) made the cold a hazard: its hourly saves ran
+  // before the march's, took the queued 19s, and the walker, failing on
+  // unqueued dice, died of exhaustion and left the march with her. The worst
+  // sky is held here on every run, and the walker is dressed for it.
+  const { getClock, setClock } = await import("../src/lib/db/clock.ts");
+  const walker = world.addHero({ name: "Walker", class: "fighter", level: 4, maxHp: 40, user: world.owner, equipment: [{ name: "Cold weather clothes", qty: 1, tags: ["cold_weather_gear"] }] });
   const carried = world.addHero({ name: "Carried", class: "fighter", level: 4, maxHp: 30, user: world.owner });
   world.patch(carried.id, { currentHp: 0, deathSaves: { successes: 0, failures: 2, stable: false, dead: false } });
+  setClock(world.campaignId, { ...getClock(world.campaignId), weather: { sky: "snow", temperature: "frigid", wind: "calm", precipitation: 2 } });
+  const random = Math.random;
+  Math.random = () => 0.02;
   // Her first save on the road fails; the walker's two Constitution saves pass.
   world.dice(5, 19, 19);
-  const marched = await world.invoke("travel", { hours: 10, characterIds: [walker.id, carried.id] });
+  const marched = await world.invoke("travel", { hours: 10, characterIds: [walker.id, carried.id] }).finally(() => {
+    Math.random = random;
+  });
   world.clearDice();
+  assert.match(marched.result.weather ?? "", /bitterly cold/, "the worst sky, held");
   assert.equal(marched.ok, true, marched.error);
   assert.equal(world.sheet(carried.id).deathSaves?.dead, true, "the road's hours rolled her death save");
   const names = (marched.result.results ?? []).map((entry) => entry.name);
-  assert.deepEqual(names, ["Walker"], `the dead are among the marchers: ${JSON.stringify(marched.result.results)}`);
+  assert.deepEqual(names, ["Walker"], `the dead are among the marchers: ${JSON.stringify(marched.result)}`);
+});
+
+await test("A held Bardic Inspiration die is added to a death save only when it turns a failure into a success.", async () => {
+  const { rollDeathSave } = await import("../src/lib/dm/death.ts");
+  const dying = world.addHero({ ...FIGHTER, name: "Inspired" });
+  const fall = (conditions) => world.patch(dying.id, { currentHp: 0, conditions, conditionMeta: {}, deathSaves: { successes: 0, failures: 0, stable: false, dead: false } });
+  fall(["unconscious", "bardic inspiration (d4)"]);
+  world.dice(15);
+  rollDeathSave(world.campaign(), dying.id);
+  world.clearDice();
+  assert.equal(world.sheet(dying.id).deathSaves.successes, 1);
+  assert.ok(world.sheet(dying.id).conditions.includes("bardic inspiration (d4)"), "a save that succeeds keeps the die: it rode every death save before");
+  fall(["unconscious", "bardic inspiration (d4)"]);
+  world.dice(8, 3);
+  rollDeathSave(world.campaign(), dying.id);
+  world.clearDice();
+  assert.equal(world.sheet(dying.id).deathSaves.successes, 1, "8 and the d4's 3 make 11, a success");
+  assert.ok(!world.sheet(dying.id).conditions.includes("bardic inspiration (d4)"), "spent where it carried the save");
+  fall(["unconscious", "bardic inspiration (d4)"]);
+  world.dice(1);
+  rollDeathSave(world.campaign(), dying.id);
+  world.clearDice();
+  assert.equal(world.sheet(dying.id).deathSaves.failures, 2, "a natural 1 is two failures whatever is added");
+  assert.ok(world.sheet(dying.id).conditions.includes("bardic inspiration (d4)"), "so nothing is spent on it");
 });
 
 world.close();

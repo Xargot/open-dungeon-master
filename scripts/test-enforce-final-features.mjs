@@ -17,8 +17,9 @@
 //     necrotic on a success.
 //   Tranquility (Open Hand 11): after a long rest, Sanctuary until the next
 //     one (DC 8 + WIS + proficiency).
-//   Draconic Presence (Draconic 18): 5 sorcery points, the action: creatures
-//     within 60 feet save (WIS) or are charmed or frightened for a minute.
+//   Draconic Presence (Draconic 18): 5 sorcery points, the action: an aura
+//     of 60 feet for a minute; each hostile creature that starts its turn in
+//     it saves (WIS) or is charmed or frightened until it ends (issue #833).
 //   Hide in Plain Sight (ranger 10): camouflaged, +10 to Stealth checks.
 //   Supreme Sneak (Thief 9): advantage on Stealth after moving no more than
 //     half their speed that turn.
@@ -28,7 +29,8 @@
 //     Artificer's Lore (rock gnome), Stone Camouflage (deep gnome): the check
 //     riders keyed to what the check is about.
 //   Primeval Awareness (ranger 3): a spell slot spent.
-//   Dragon Wings (Draconic 14): a flying speed equal to the walking speed.
+//   Dragon Wings (Draconic 14): a bonus action brings the wings out, a
+//     flying speed equal to the walking speed until dismissed (issue #833).
 import assert from "node:assert/strict";
 import { openWorld } from "./lib/enforce-world.mjs";
 import { suite, proficiencyBonus } from "./lib/enforce-harness.mjs";
@@ -38,6 +40,9 @@ const { test, finish } = suite("test-enforce-final-features");
 const world = await openWorld({ campaign: { maxPlayers: 40 } });
 const kit = await combatKit(world);
 const { flyingSpeedOf } = await import("../src/lib/battlemap/types.ts");
+const { draconicPresenceTurnStart } = await import("../src/lib/dm/draconic-spends.ts");
+const { getActiveEncounter } = await import("../src/lib/db/encounters.ts");
+const { breakConcentration } = await import("../src/lib/dm/concentration.ts");
 
 const hero = (overrides) =>
   world.addHero({ maxHp: 60, proficiencies: TRAINED, portrait: { url: "/uploads/test.png" }, ...overrides });
@@ -193,19 +198,71 @@ await test("Tranquility: after a long rest the Open Hand monk is under Sanctuary
 
 const dragon = hero({ class: "sorcerer", subclass: "Draconic Bloodline", level: 18, abilities: { cha: 18 } });
 
-await test("Draconic Presence: 5 sorcery points and the action: each creature of the sorcerer's choice within 60 feet makes a WIS save or is frightened (or charmed) for a minute.", async () => {
-  const [enemy] = await stage(dragon);
+await test("Draconic Presence: 5 sorcery points and the action raise a 60-foot aura; a hostile creature that starts its turn in it saves (WIS) or is frightened until it ends, and one that succeeds is immune for 24 hours.", async () => {
+  const [near, other, far] = await stage(dragon, { enemies: 3 });
+  kit.place(other.id, 6, 6);
+  kit.place(far.id, 30, 30);
   const points = world.sheet(dragon.id).resources.sorcery_points.used;
-  world.dice(1);
-  const out = await spend(dragon, "Draconic Presence", { variant: "fear", targetEnemyId: enemy.id });
-  world.clearDice();
+  const out = await spend(dragon, "Draconic Presence", { variant: "fear" });
   assert.equal(out.ok, true, out.error);
   assert.equal(world.sheet(dragon.id).resources.sorcery_points.used, points + 5);
-  assert.ok(kit.enemy(enemy.id).conditions.includes("frightened"));
+  assert.equal(world.sheet(dragon.id).concentratingOn, "Draconic Presence");
+  assert.ok(!kit.enemy(near.id).conditions.includes("frightened"), "no save until a turn starts in the aura");
+  const encounter = () => getActiveEncounter(world.campaignId);
+  world.dice(1);
+  draconicPresenceTurnStart(world.campaign(), encounter(), [near.id, far.id]);
+  world.clearDice();
+  assert.ok(kit.enemy(near.id).conditions.includes("frightened"), "a failed save");
+  assert.ok(!kit.enemy(far.id).conditions.includes("frightened"), "150 feet away is out of the aura");
+  world.dice(20);
+  draconicPresenceTurnStart(world.campaign(), encounter(), [other.id]);
+  world.clearDice();
+  assert.ok(!kit.enemy(other.id).conditions.includes("frightened"));
+  const mark = `withstood draconic presence (${dragon.name})`;
+  assert.ok(kit.enemy(other.id).conditions.includes(mark));
+  world.dice(1);
+  draconicPresenceTurnStart(world.campaign(), encounter(), [other.id]);
+  world.clearDice();
+  assert.ok(!kit.enemy(other.id).conditions.includes("frightened"), "immune for 24 hours after a success");
+  // The immunity is to that sorcerer's presence: "immune to this sorcerer's
+  // Draconic Presence". A second Draconic sorcerer's aura still reaches it,
+  // and withstanding that one leaves the first immunity standing.
+  const second = hero({ class: "sorcerer", subclass: "Draconic Bloodline", level: 18, abilities: { cha: 18 } });
+  world.patch(second.id, { conditions: ["draconic presence"], conditionMeta: { "draconic presence": { aura: "fear", rounds: 10 } }, concentratingOn: "Draconic Presence" });
+  world.dice(20);
+  draconicPresenceTurnStart(world.campaign(), encounter(), [other.id]);
+  world.clearDice();
+  const both = kit.enemy(other.id).conditions;
+  assert.ok(both.includes(`withstood draconic presence (${second.name})`), `the second presence was not rolled against: ${both.join(", ")}`);
+  assert.ok(both.includes(mark), "the first immunity was overwritten");
+  world.patch(second.id, { conditions: [], conditionMeta: {}, concentratingOn: null });
+  breakConcentration(world.campaign(), null, dragon.id, "the test ends it");
+  assert.ok(!kit.enemy(near.id).conditions.includes("frightened"), "the fear ends with the aura");
 });
 
-await test("Dragon Wings: a Draconic sorcerer's wings give a flying speed equal to the walking speed.", () => {
-  assert.equal(flyingSpeedOf({ features: [{ name: "Dragon Wings" }], walkingFeet: 30 }), 30);
+await test("Dragon Wings: a bonus action brings the wings out (a flying speed equal to the walking speed) and another puts them away; none come through armor, and the feature alone flies no more.", async () => {
+  assert.equal(flyingSpeedOf({ features: [{ name: "Dragon Wings" }], walkingFeet: 30 }), null, "the feature alone");
+  assert.equal(flyingSpeedOf({ features: [{ name: "Bat Wings" }], walkingFeet: 30 }), 30, "a trait named for wings still flies");
+  await kit.endFight();
+  world.patch(dragon.id, { equipment: [] });
+  const out = await spend(dragon, "Dragon Wings");
+  assert.equal(out.ok, true, out.error);
+  const aloft = world.sheet(dragon.id);
+  assert.ok(aloft.conditions.includes("dragon wings"));
+  assert.equal(flyingSpeedOf({ conditions: aloft.conditions, features: aloft.features, walkingFeet: 30 }), 30);
+  assert.equal(flyingSpeedOf({ conditions: aloft.conditions, features: aloft.features, walkingFeet: 30, armored: true }), null, "armor keeps them in");
+  // The authored effect behind the sheet's speeds reads the armor the same way.
+  const { authoredSpeeds } = await import("../src/lib/srd/authored-effects.ts");
+  assert.equal(authoredSpeeds(aloft, 30).fly, 30, "the sheet's flying speed with the wings out");
+  assert.equal(authoredSpeeds({ ...aloft, equipment: [{ name: "Chain Mail", qty: 1, equipped: true }] }, 30).fly, undefined, "none through chain mail");
+  const away = await spend(dragon, "dragon_wings");
+  assert.equal(away.ok, true, away.error);
+  assert.ok(!world.sheet(dragon.id).conditions.includes("dragon wings"), "the Hand card's id folds them away");
+  world.patch(dragon.id, { equipment: [{ name: "Chain Mail", qty: 1, equipped: true }] });
+  const armored = await spend(dragon, "Dragon Wings");
+  assert.equal(armored.ok, false);
+  assert.match(armored.error, /armor/);
+  world.patch(dragon.id, { equipment: [] });
 });
 
 // ---- the ranger's and the rogue's stealth ----
@@ -354,20 +411,20 @@ await test("The prompt and the tool schemas teach the recount's features: the Mu
     { campaign: world.campaign(), members: listMembers(world.campaignId), sheets: world.sheets(), encounter, recentRolls: [], storySummary: "" },
     [],
   )[0].content;
-  assert.match(text, /whirlwind or volley is a Hunter's Multiattack, one pc_attack per creature/);
+  assert.match(text, /feature "Whirlwind Attack" or "Volley" is a Hunter's Multiattack, one entry per creature/);
   assert.match(text, /Retaliation \(a Berserker just damaged by a creature within 5 feet\) and Stand Against the Tide/);
   assert.match(text, /Peerless Skill, Quivering Palm \(targetEnemyId; once to set the vibrations after an unarmed hit, again to end them\), Draconic Presence/);
   assert.match(text, /A check names what it is about in about, creature and terrain/);
-  assert.match(text, /the server applies Favored Enemy, Natural Explorer, Stonecunning, Artificer's Lore, Stone Camouflage and Supreme Sneak from them/);
+  assert.match(text, /the server applies Favored Enemy, Natural Explorer, Dragon Ancestor, Stonecunning, Artificer's Lore, Stone Camouflage and Supreme Sneak from them/);
   assert.ok(requestRollTool.function.parameters.properties.about.enum.includes("tracking"));
   const tools = dmTurnToolCatalogue(world.campaign(), true, false);
   const tool = (name) => tools.find((entry) => entry.function.name === name)?.function;
-  const attack = tool("pc_attack").parameters.properties;
-  assert.ok(attack.whirlwind && attack.volley, "pc_attack takes no whirlwind or volley");
+  const feature = tool("pc_attack").parameters.properties.attacks.items.properties.feature;
+  assert.match(feature.description, /'Whirlwind Attack' or 'Volley': a Hunter's action, one entry per creature/, "pc_attack takes no Whirlwind Attack or Volley");
   const reaction = JSON.stringify(tool("use_reaction"));
   assert.ok(reaction.includes("Retaliation") && reaction.includes("Stand Against the Tide"));
   const resource = JSON.stringify(tool("use_resource"));
-  for (const name of ["Peerless Skill", "Quivering Palm", "Draconic Presence", "Hide in Plain Sight", "Primeval Awareness"]) {
+  for (const name of ["Peerless Skill", "Quivering Palm", "Draconic Presence", "Dragon Wings", "Elemental Affinity", "Hide in Plain Sight", "Primeval Awareness"]) {
     assert.ok(resource.includes(name), `use_resource never names ${name}`);
   }
 });
@@ -388,6 +445,34 @@ await test("Every tool description reaches an agent program whole: none is longe
   for (const tool of tools) {
     assert.ok(tool.function.description.length <= 2048, `${tool.function.name}: ${tool.function.description.length} characters`);
   }
+});
+
+await test("Every array in every tool schema says what it holds: llama.cpp's gpt-oss template fails the whole call on an array without items.", () => {
+  // heal's targets shipped without items in 0.32.0: llama-server answered every call that offered the
+  // tools with a 500 from the template, and the turn fell back to narrating with no tools at all.
+  const campaign = world.campaign();
+  const everything = {
+    ...campaign,
+    storyArc: campaign.storyArc ?? { beats: [] },
+    gameSettings: { ...campaign.gameSettings, worldSimulation: true, ambienceEnabled: true, relationships: "on", romance: "on", companions: "full" },
+  };
+  const bare = [];
+  const walk = (schema, at) => {
+    if (!schema || typeof schema !== "object") {
+      return;
+    }
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    if (types.includes("array") && !(schema.items && typeof schema.items === "object")) {
+      bare.push(at);
+    }
+    for (const [key, value] of Object.entries(schema)) {
+      walk(value, `${at}.${key}`);
+    }
+  };
+  for (const tool of [...dmTurnToolCatalogue(everything, true, false), runPreparedEncounterTool]) {
+    walk(tool.function.parameters, tool.function.name);
+  }
+  assert.deepEqual(bare, [], "arrays with no items");
 });
 
 finish();

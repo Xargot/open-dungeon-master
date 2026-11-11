@@ -9,6 +9,7 @@ import { conditionIncomingAttackState, conditionSpeed } from "@/lib/srd/conditio
 import { conditionSeesInvisible } from "@/lib/srd/condition-effect-queries";
 import { itemAbilityScore, type Wearer } from "@/lib/srd/magic-items";
 import { textKey } from "@/lib/language/text-logic";
+import { isConditionNamed } from "@/lib/srd/feature-names";
 import { CALTROPS_WOUND } from "@/lib/battlemap/zones-gear";
 
 export {
@@ -37,7 +38,11 @@ export type ConditionMeta = {
   untilTurnEndOf?: string;
   turnBegun?: boolean;
   // Re-save at each round wrap; success ends the condition.
-  saveEnds?: { ability: SaveAbilityId; dc: number };
+  // `or`: a second ability the creature may roll instead, choosing again at
+  // each save (Nature's Wrath: Strength or Dexterity; see likelierSave).
+  // `beyondFeet`: the save comes only at the end of a turn the holder ends
+  // farther than this from the source (Dreadful Aspect: 30 feet).
+  saveEnds?: { ability: SaveAbilityId; dc: number; or?: SaveAbilityId; beyondFeet?: number };
   // Who or what put the condition there: the characterId or enemyId of the
   // charmer, the grappler or the source of the fear, or an engine word
   // ("stable" on the unconscious of a stabilized creature). Optional, and
@@ -57,7 +62,15 @@ export type ConditionMeta = {
   // A casting of a minute or more held across turns is a ritual: it spends
   // no slot when it completes (src/lib/dm/long-casting-logic.ts).
   ritual?: boolean;
+  // A casting going into a Ring of Spell Storing, or coming out of one
+  // (src/lib/dm/spell-storing.ts).
+  storeIn?: string;
+  storeInHolder?: string;
+  fromRing?: string;
   endsOnDamage?: boolean;
+  // Held while its source stands within this many feet: ends when the source
+  // is down, dead or incapacitated, or farther (src/lib/dm/condition-leash.ts).
+  leashFeet?: number;
   saveOnDamage?: { ability: SaveAbilityId; dc: number; advantage?: boolean };
   // Hunter's Mark and Hex: the enemyId of the marked creature, the only one
   // the extra die rides against.
@@ -75,6 +88,9 @@ export type ConditionMeta = {
   // Ends when the creature finishes a long rest (a succubus's Draining Kiss,
   // a wight's Life Drain): src/lib/dm/rest-logic.ts.
   untilLongRest?: boolean;
+  // Each character a creature has withstood, where one mark answers several
+  // (Instinctive Charm).
+  sources?: string[];
   // A knocked-out creature's 1d4 hours to coming to with 1 hit point (SRD
   // 5.1, Knocking a Creature Out), on its unconscious: counted against the
   // world clock between fights (foe-carry-logic.ts, issue #667). Not a count
@@ -89,6 +105,12 @@ export type ConditionMeta = {
   // Confusion's lash-out: the creature its d10 picked for this round's melee
   // attack (src/lib/dm/confusion.ts).
   lashOut?: { target: string; round: number };
+  // Swallowed whole (src/lib/dm/swallow.ts): the damage dealt the swallower
+  // from inside, by the creature whose turn it landed in (the swallower's
+  // own, the character's the pointer rests on, another creature's), each
+  // read at its turn's end for a regurgitation; and the feet of movement out
+  // of its corpse.
+  swallow?: { turns?: Record<string, number>; escapeFeet?: number };
   // Further sources of the same condition. SRD 5.1: the effects of the same
   // spell (or the same condition) don't combine, but each keeps its own
   // source and lifetime, so ending one leaves the others holding. Each entry
@@ -308,6 +330,8 @@ const TARGET_GRANTS_ADVANTAGE = [
 const AUTO_CRIT_TARGETS = ["paralyzed", "unconscious"];
 // The attacker's own attack rolls suffer disadvantage.
 const ATTACKER_DISADVANTAGE = ["prone", "restrained", "poisoned", "blinded", "frightened"];
+// The condition blindsight sees past.
+const BLIND = ["blinded"];
 // The Dodge action's condition: attacks against them roll at disadvantage
 // and they get advantage on DEX saves. Applied by take_action
 // (src/lib/dm/action-tools.ts); named here because the mechanics are here.
@@ -315,9 +339,68 @@ export const DODGING = "dodging";
 // Ability checks suffer disadvantage.
 const CHECK_DISADVANTAGE = ["poisoned", "frightened"];
 
+// A condition held under any spelling a sheet writes it, a bracket note
+// included ("invisible (potion)"): the one reading enemy-reactions.ts
+// attackerUnseen makes too, so the attack's advantage and a creature's Parry
+// agree on who is unseen (finding L822-invisible-in-brackets).
 function has(conditions: string[], names: string[]): string | null {
-  const lowered = conditions.map((entry) => entry.toLowerCase());
-  return names.find((name) => lowered.includes(name)) ?? null;
+  return names.find((name) => conditions.some((entry) => isConditionNamed(entry, name))) ?? null;
+}
+
+// What a viewer's senses reach of another creature past what eyes need
+// (attack-light.ts sensesReaching measures it on the board): blindsight
+// perceives without eyes, so neither blindness nor invisibility stops it;
+// truesight sees the invisible.
+export type PastSight = { blindsight?: boolean; truesight?: boolean };
+
+// Whether a viewer sees an invisible creature: See Invisibility or True
+// Seeing among its conditions, or blindsight or truesight that reaches it.
+// The one rule an attack roll, a Dodge, "a creature you can see" and an
+// opportunity attack all read.
+export function seesInvisible(viewerConditions: string[], senses: PastSight = {}): boolean {
+  return Boolean(senses.blindsight || senses.truesight || conditionSeesInvisible(viewerConditions));
+}
+
+// Why the conditions keep one creature from seeing another, or null: it is
+// blinded, or the other is hidden, or invisible to a viewer that cannot see
+// the invisible (seesInvisible). Walls, fog and darkness are the board's part
+// (authored-saves.ts seesOnBoard). A feature for "a creature you can see"
+// read the board alone, so Nature's Wrath took an invisible goblin and spent
+// the Channel Divinity on it. `hidden: false` when hiding does not count: an
+// attacker its own attack gave away, or an ally hidden from the foes and not
+// from its friends.
+export function sightBlockedBy(
+  viewerConditions: string[],
+  seenConditions: string[],
+  options: PastSight & { hidden?: boolean } = {},
+): "blinded" | "invisible" | "hidden" | null {
+  if (has(viewerConditions, ["blinded"]) && !options.blindsight) {
+    return "blinded";
+  }
+  if (has(seenConditions, ["invisible"]) && !seesInvisible(viewerConditions, options)) {
+    return "invisible";
+  }
+  return options.hidden !== false && has(seenConditions, ["hidden"]) ? "hidden" : null;
+}
+
+// Whether a hit within 5 ft is critical only because the target is
+// unconscious (paralysis would make it critical all the same): the blow a
+// reaction later finds landing on a target standing is an ordinary hit
+// (issue 685, src/lib/dm/reaction-refund.ts).
+export function critOnlyWhileUnconscious(targetConditions: string[]): boolean {
+  return has(targetConditions, ["unconscious"]) !== null && has(targetConditions, ["paralyzed"]) === null;
+}
+
+// Unconscious laid by name on a creature that still has hit points is sleep,
+// and the sleep the table usually means (Sleep, Eyebite's Asleep, Symbol's
+// Sleep, a drow's poison) ends when the sleeper takes damage. Laid by
+// set_condition with a duration or a save and nothing else, a sleeper slept
+// on through every blow (issue 761). Not every sleep in SRD 5.1 ends so: long-
+// term madness's "No amount of jostling or damage can wake the character" is
+// one, so an effect that lays its own carries its own word (set-condition.ts).
+// At 0 hit points it is the dying's, which damage does not end.
+export function wakesOnDamage(condition: string, currentHp: number): boolean {
+  return condition === "unconscious" && currentHp > 0;
 }
 
 export function isIncapacitated(conditions: string[]): boolean {
@@ -360,6 +443,12 @@ export function attackContext(input: {
   // False when the board's light keeps the target from seeing the attacker
   // (src/lib/dm/attack-light.ts attackSight): a Dodge then does nothing.
   targetSeesAttacker?: boolean;
+  // What each side's blindsight or truesight reaches of the other
+  // (attack-light.ts attackSenses). Without them a blindsight monster still
+  // swung at an invisible character at disadvantage, and a blinded one with
+  // blindsight swung blind.
+  attackerSenses?: PastSight;
+  targetSenses?: PastSight;
 }): { advantage: AdvantageState; sources: AdvantageState[]; autoCrit: boolean; notes: string[] } {
   // Every source is kept for the caller to merge with its own: advantage
   // and disadvantage cancel once, over all of them (SRD 5.1), so a
@@ -367,13 +456,17 @@ export function attackContext(input: {
   const sources: AdvantageState[] = [input.requested];
   const notes: string[] = [];
 
-  const attackerDown = has(input.attackerConditions, ATTACKER_DISADVANTAGE);
+  // Blindsight that reaches the target perceives it without eyes: a blinded
+  // attacker with it does not swing blind.
+  const attackerSees = { ...input.attackerSenses };
+  const targetSees = { ...input.targetSenses };
+  const attackerDown = has(input.attackerConditions, attackerSees.blindsight ? ATTACKER_DISADVANTAGE.filter((name) => !BLIND.includes(name)) : ATTACKER_DISADVANTAGE);
   if (attackerDown) {
     sources.push("disadvantage");
     notes.push(`attacker is ${attackerDown}: disadvantage`);
   }
   // See Invisibility and True Seeing see the invisible (condition-effects-last.ts).
-  if (has(input.attackerConditions, ["invisible"]) && !conditionSeesInvisible(input.targetConditions)) {
+  if (has(input.attackerConditions, ["invisible"]) && !seesInvisible(input.targetConditions, targetSees)) {
     sources.push("advantage");
     notes.push("attacker is invisible: advantage");
   }
@@ -392,12 +485,12 @@ export function attackContext(input: {
       input.adjacent ? "target is prone: advantage up close" : "target is prone: disadvantage at range",
     );
   }
-  const targetOpen = has(input.targetConditions, TARGET_GRANTS_ADVANTAGE);
+  const targetOpen = has(input.targetConditions, targetSees.blindsight ? TARGET_GRANTS_ADVANTAGE.filter((name) => !BLIND.includes(name)) : TARGET_GRANTS_ADVANTAGE);
   if (targetOpen) {
     sources.push("advantage");
     notes.push(`target is ${targetOpen}: advantage`);
   }
-  if (has(input.targetConditions, ["invisible"]) && !conditionSeesInvisible(input.attackerConditions)) {
+  if (has(input.targetConditions, ["invisible"]) && !seesInvisible(input.attackerConditions, attackerSees)) {
     sources.push("disadvantage");
     notes.push("target is invisible: disadvantage");
   }
@@ -412,11 +505,7 @@ export function attackContext(input: {
   // made against you has disadvantage if you can see the attacker" (SRD
   // 5.1, Dodge): not while blinded, nor against an invisible attacker it
   // cannot see through or a hidden one, nor one the dark hides.
-  const dodgerSees =
-    !has(input.targetConditions, ["blinded"]) &&
-    !(has(input.attackerConditions, ["invisible"]) && !conditionSeesInvisible(input.targetConditions)) &&
-    !has(input.attackerConditions, ["hidden"]) &&
-    input.targetSeesAttacker !== false;
+  const dodgerSees = !sightBlockedBy(input.targetConditions, input.attackerConditions, targetSees) && input.targetSeesAttacker !== false;
   if (has(input.targetConditions, [DODGING]) && !isIncapacitated(input.targetConditions) && dodgerSees) {
     sources.push("disadvantage");
     notes.push("target is dodging: disadvantage");
@@ -572,7 +661,27 @@ export type TickOptions = {
   saves?: boolean;
 };
 
-export type SaveDue = { name: string; ability: SaveAbilityId; dc: number; key: string };
+export type SaveDue = { name: string; ability: SaveAbilityId; dc: number; key: string; or?: SaveAbilityId };
+
+// Of two saves a creature may choose between, the one it is likelier to pass:
+// its modifier against the DC, with what its conditions do to each. A save
+// they fail outright counts as lost, and one rolled at disadvantage (a
+// restrained creature's Dexterity) is weighed as two dice taking the lower.
+// Without this a creature caught by Nature's Wrath on its Dexterity rolled
+// every save to break free on Dexterity, at disadvantage, though Strength was
+// open to it.
+export function likelierSave(conditions: string[], first: SaveAbilityId, second: SaveAbilityId, dc: number, modOf: (ability: SaveAbilityId) => number): SaveAbilityId {
+  const chance = (ability: SaveAbilityId) => {
+    const derivation = rollDerivation(conditions, "saving_throw", ability);
+    if (derivation.autoFail) {
+      return 0;
+    }
+    const one = Math.min(0.95, Math.max(0.05, (21 + modOf(ability) - dc) / 20));
+    const lean = mergeAdvantage(derivation.sources);
+    return lean === "disadvantage" ? one * one : lean === "advantage" ? 1 - (1 - one) * (1 - one) : one;
+  };
+  return chance(second) > chance(first) ? second : first;
+}
 
 export function tickConditions(
   conditions: string[],
@@ -612,7 +721,7 @@ export function tickConditions(
         kept.push(instance);
       }
       if (instance.saveEnds && options?.saves !== false) {
-        savesDue.push({ name, ability: instance.saveEnds.ability, dc: instance.saveEnds.dc, key: instanceIdentity(instance) });
+        savesDue.push({ name, ability: instance.saveEnds.ability, dc: instance.saveEnds.dc, key: instanceIdentity(instance), ...(instance.saveEnds.or ? { or: instance.saveEnds.or } : {}) });
       }
     }
     if (!kept.length) {

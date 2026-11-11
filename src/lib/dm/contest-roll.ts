@@ -13,9 +13,12 @@ import { insertRoll } from "@/lib/db/rolls";
 import { getSheetById } from "@/lib/db/sheets";
 import { d20Expression, rollExpression } from "@/lib/dice";
 import { publishWithSeq } from "@/lib/events";
-import { rollExtrasFor, spendRollCarriers } from "@/lib/dm/forced-save";
+import { heldDieWaits, rollExtrasFor, spendRollCarriers } from "@/lib/dm/forced-save";
+import { rollCharacterD20 } from "@/lib/dm/character-roll";
 import { resolveRollExpression, type RollArgs } from "@/lib/dm/rolls";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
+import { noteShift, takeShift } from "@/lib/dm/chronal-shift";
+import type { RollTag } from "@/lib/dice-script-logic";
 
 type Ability = "str" | "dex" | "con" | "int" | "wis" | "cha";
 
@@ -29,15 +32,14 @@ export type CharacterCheck = {
   autoFailed?: boolean;
 };
 
-export function rollCharacterCheck(
-  campaign: Campaign,
-  stale: CharacterSheet,
-  // `charmedTarget`: the creature the check is aimed at, when this
-  // character charmed it (rolls.ts: advantage on a Charisma check with it).
-  check: { skill?: string; ability?: Ability; advantage?: "advantage" | "disadvantage"; dc?: number; charmedTarget?: string },
-  detail: string,
-): CharacterCheck {
-  const sheet = getSheetById(stale.id) ?? stale;
+// `charmedTarget`: the creature the check is aimed at, when this character
+// charmed it (rolls.ts: advantage on a Charisma check with it).
+type CheckAsked = { skill?: string; ability?: Ability; advantage?: "advantage" | "disadvantage"; dc?: number; charmedTarget?: string };
+
+// The check as the resolver builds it, before any die is rolled.
+// `keepHeldDie`: a held die is settled after the d20 (forced-save.ts
+// heldDieWaits) rather than baked in.
+function resolveCheck(campaign: Campaign, sheet: CharacterSheet, check: CheckAsked, keepHeldDie = false) {
   const args = (
     check.skill
       ? { kind: "skill_check", skill: check.skill }
@@ -46,8 +48,32 @@ export function rollCharacterCheck(
   const resolved = resolveRollExpression(
     { ...args, ...(check.advantage ? { advantage: check.advantage } : {}) },
     sheet,
-    { ...rollExtrasFor(campaign, sheet, args.kind), ...(check.charmedTarget ? { charmedTarget: check.charmedTarget } : {}) },
+    { ...rollExtrasFor(campaign, sheet, args.kind), ...(check.charmedTarget ? { charmedTarget: check.charmedTarget } : {}), keepHeldDie },
   );
+  return resolved;
+}
+
+// The most the check can total, every die at its highest. Nothing is
+// rolled or spent: an improvised attempt whose DC is past it is impossible
+// for the character (src/lib/dm/improvise.ts). The skill is a validated id,
+// and with no sense named (`by`) no condition fails a check unrolled.
+export function checkCeiling(campaign: Campaign, stale: CharacterSheet, check: CheckAsked): number {
+  const resolved = resolveCheck(campaign, getSheetById(stale.id) ?? stale, check);
+  if ("error" in resolved || "autoFail" in resolved) {
+    throw new Error(`checkCeiling: ${"error" in resolved ? resolved.error : resolved.notes.join("; ")}`);
+  }
+  return rollExpression(resolved.expression, (sides) => sides).total;
+}
+
+export function rollCharacterCheck(
+  campaign: Campaign,
+  stale: CharacterSheet,
+  check: CheckAsked,
+  detail: string,
+): CharacterCheck {
+  const sheet = getSheetById(stale.id) ?? stale;
+  const waits = heldDieWaits(sheet, check.dc);
+  const resolved = resolveCheck(campaign, sheet, check, waits);
   if ("error" in resolved) {
     // An unknown skill: fall back to the plain ability, never to nothing.
     const outcome = rollCard(campaign, null, sheet.id, check.skill ? "skill_check" : "ability_check", `${detail}: ${check.skill ?? check.ability ?? "check"}`, d20Expression(0, check.advantage ?? "none"), null);
@@ -57,12 +83,22 @@ export function rollCharacterCheck(
     return { total: 1, expression: "", notes: resolved.notes, rollId: null, autoFailed: true };
   }
   spendRollCarriers(campaign.id, sheet.id, resolved.spendInspiration);
-  const outcome = rollExpression(resolved.expression);
+  const kind = check.skill ? "skill_check" : "ability_check";
+  // The player's own d20 (src/lib/dm/character-roll.ts): on physical dice
+  // they roll it, and a roll that falls short waits on what they hold.
+  const outcome = rollCharacterD20(campaign, sheet, {
+    kind,
+    expression: resolved.expression,
+    detail: `${detail}: ${resolved.detail}`.slice(0, 120),
+    dc: check.dc ?? null,
+    ...(check.advantage ? { advantage: check.advantage } : {}),
+    settleHeldDie: waits,
+  });
   const roll = insertRoll({
     campaignId: campaign.id,
     characterId: sheet.id,
     requestedBy: "dm",
-    kind: check.skill ? "skill_check" : "ability_check",
+    kind,
     detail: `${detail}: ${resolved.detail}`.slice(0, 120),
     ...(check.dc ? { dc: check.dc } : {}),
     result: outcome,
@@ -77,6 +113,24 @@ export function rollCharacterCheck(
     notes: resolved.conditionNotes ?? [],
     rollId: roll.id,
   };
+}
+
+// A contest once both sides have landed (SRD 5.1, Contests): a Chronal Shift
+// a watch stop armed for one side is asked now, when whether that side won is
+// known ("you make this decision after you see whether the roll succeeds or
+// fails"), and that side is rolled again; the new roll stands. A side has no
+// DC of its own to be judged by as it lands (character-roll.ts).
+type ContestSide = { tag: RollTag; total: number; again: () => number };
+export function contestShift(campaignId: string, mine: ContestSide, theirs: ContestSide, mineWins: (mine: number, theirs: number) => boolean): { mine: number; theirs: number } {
+  const won = mineWins(mine.total, theirs.total);
+  const side = takeShift(campaignId, mine.tag, won) ? "mine" : takeShift(campaignId, theirs.tag, !won) ? "theirs" : null;
+  if (!side) {
+    return { mine: mine.total, theirs: theirs.total };
+  }
+  const rolled = side === "mine" ? mine : theirs;
+  const total = rolled.again();
+  noteShift(campaignId, `Chronal Shift: ${[rolled.tag.who ?? []].flat()[0] ?? "the creature"} rolled its side of the contest again, ${rolled.total} became ${total}, and the new roll stands.`);
+  return side === "mine" ? { mine: total, theirs: theirs.total } : { mine: mine.total, theirs: total };
 }
 
 // A saving throw a feature makes the character roll outside any tool that
@@ -97,7 +151,8 @@ export function rollFeatureSave(
     dc,
     ...(against ? { against } : {}),
   } as RollArgs;
-  const resolved = resolveRollExpression(args, sheet, rollExtrasFor(campaign, sheet, "saving_throw"));
+  const waits = heldDieWaits(sheet, dc);
+  const resolved = resolveRollExpression(args, sheet, { ...rollExtrasFor(campaign, sheet, "saving_throw"), keepHeldDie: waits });
   if ("error" in resolved) {
     return { success: false, total: null, notes: [resolved.error] };
   }
@@ -105,13 +160,14 @@ export function rollFeatureSave(
     return { success: false, total: null, notes: resolved.notes };
   }
   spendRollCarriers(campaign.id, sheet.id, resolved.spendInspiration);
-  const outcome = rollExpression(resolved.expression);
+  const said = `${sheet.name}: ${ability.toUpperCase()} save, ${detail}`.slice(0, 120);
+  const outcome = rollCharacterD20(campaign, sheet, { kind: "saving_throw", expression: resolved.expression, detail: said, dc, settleHeldDie: waits });
   const roll = insertRoll({
     campaignId: campaign.id,
     characterId: sheet.id,
     requestedBy: "dm",
     kind: "saving_throw",
-    detail: `${sheet.name}: ${ability.toUpperCase()} save, ${detail}`.slice(0, 120),
+    detail: said,
     dc,
     result: outcome,
   });

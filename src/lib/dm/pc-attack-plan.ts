@@ -37,12 +37,13 @@ import { tilesBetween } from "@/lib/dm/attack-spatial";
 import { buildAttackProfile, type BuiltAttack } from "@/lib/dm/pc-attack-profile";
 import { pickManeuver, type OnHitSpends } from "@/lib/dm/pc-attack-riders";
 import type { ManeuverUse } from "@/lib/dm/maneuver-rules";
+import type { Sight } from "@/lib/dm/attack-light";
 import { attackGeometry, attackSituation } from "@/lib/dm/pc-attack-situation";
 import { missileDeflection, reachThroughProblem } from "@/lib/dm/zone-rules";
 import { planConjuredStrike, type ConjuredStrike } from "@/lib/dm/conjured-strike";
 import { sheetCreatureType } from "@/lib/dm/summon-rules";
 import { spellWardOn } from "@/lib/dm/cast-reach";
-import { spellFactsFor } from "@/lib/content";
+import { spellDamageFor, spellFactsFor } from "@/lib/content";
 import { spellAuthorsFor } from "@/lib/dm/spell-authors";
 import { checkAttackSpell } from "@/lib/dm/pc-attack-spell";
 import { attacksAllowedFor, budgetFor } from "@/lib/dm/turn-budget";
@@ -108,6 +109,8 @@ export type AttackPlan = {
   context: { advantage: Advantage; autoCrit: boolean; notes: string[] };
   helped: string | null;
   attackRiders: ConditionRollRiders;
+  // Who the light lets see whom (attack-light.ts): null off the board.
+  sight: Sight | null;
   maneuver: ManeuverPick | null;
   smite: OnHitSpends["smite"];
   // The feature options the attack carries (src/lib/dm/pc-attack-options.ts).
@@ -122,6 +125,9 @@ export type AttackPlan = {
   budget: TurnBudget | null;
   // Elemental Adept covers this attack spell's damage type (feat-combat.ts).
   elementalAdept: boolean;
+  // A two-type spell's other type the feat covers (Ice Storm's cold for a cold
+  // adept): that part's resistance is set aside, the first type's is not.
+  adeptOthers: string[];
   // A Mage Slayer's melee weapon hit from within 5 feet: the target's
   // concentration save is at disadvantage (feat-combat.ts).
   mageSlayer: boolean;
@@ -155,6 +161,10 @@ export type AttackExtras = {
   tempHp?: { amount: number; feature: string };
   // The reaction attack is Giant Killer's.
   giantKiller: boolean;
+  // A reaction feature's attack (pc-attack.ts): no readied action spends with it.
+  reactionAttack: boolean;
+  // The holder's own turn, kept for its once-a-turn riders alone.
+  turnRiders: TurnBudget | null;
 };
 
 export function planPcAttack(input: {
@@ -170,6 +180,7 @@ export function planPcAttack(input: {
   skipReach?: boolean;
   // A target the rules chose, on either side (pc-attack-gate.ts).
   anySide?: boolean;
+  reactionAttack?: boolean;
 }): AttackPlan | { refused: ToolError } {
   const { campaign, turn, encounter, sheet, sheets, sheetsById } = input;
   // A Flurry of Blows strike is a bonus-action unarmed strike the ki already
@@ -186,7 +197,7 @@ export function planPcAttack(input: {
 
   // Whether the attacker may attack now and the target can be attacked at
   // all (src/lib/dm/pc-attack-gate.ts).
-  const gate = gatePcAttack({ campaign, encounter, sheet, args, anySide: input.anySide });
+  const gate = gatePcAttack({ campaign, encounter, sheet, args, anySide: input.anySide, reactionAttack: input.reactionAttack });
   if ("refused" in gate) {
     return gate;
   }
@@ -219,6 +230,14 @@ export function planPcAttack(input: {
   }
   let profile = spell.profile;
   const weaponAttack = kind === "weapon" || kind === "natural";
+  // Cast from a higher slot, or out of a ring at the level it was stored, the
+  // spell rolls that level's dice (cast-reach.ts spellAttackReach), and the line
+  // naming its dice says so: it said "4d6 at its base level" over a 5d6 Guiding
+  // Bolt, and the narrator read it.
+  const upcastNote =
+    kind === "spell" && args.spell && built.scalingNote && spell.spellSlotLevel
+      ? spellDamageFor({ spell: args.spell, userIds: spellAuthorsFor(campaign), casterLevel: sheet.level, slotLevel: spell.spellSlotLevel })?.note ?? null
+      : null;
 
   // Ammunition, when the table asked for it: an empty quiver is a refused
   // attack, not a missed one. Only looked at here; the round leaves the
@@ -288,7 +307,7 @@ export function planPcAttack(input: {
     featNotes.push("Sharpshooter: no disadvantage at long range");
     geometry = { ...geometry, spatials: { ...geometry.spatials, longRange: false } };
   }
-  let budget = budgetFor(
+  let budget = input.reactionAttack ? null : budgetFor(
     encounter,
     sheet.id,
     attacksAllowedFor(sheet),
@@ -321,14 +340,18 @@ export function planPcAttack(input: {
     featNotes.push(power.note);
   }
   // Elemental Adept on an attack-roll spell of its type: every 1 on the
-  // damage dice counts as 2, and the target's resistance is ignored.
+  // damage dice counts as 2, and the target's resistance to that type is
+  // ignored. A spell of two types counts for either (the feat's text: "Your
+  // spells of that damage type ... their damage dice"): all its dice floor,
+  // and only the chosen type's resistance is set aside.
+  const adeptOthers = kind === "spell" ? (profile.gearTyped ?? []).map((rider) => rider.type).filter((type, index, all) => all.indexOf(type) === index && type !== profile.damageType && elementalAdeptApplies(sheet, type)) : [];
   const elementalAdept = kind === "spell" && elementalAdeptApplies(sheet, profile.damageType);
   // Mage Slayer's melee hit, or any damage from a Spellbreaker, shakes the
   // target's concentration (enemy-damage.ts).
   const mageSlayer = damageShakesConcentration(sheet, { weaponAttack, melee: !atRange, withinFiveFeet: geometry.withinFiveFeet }) !== null;
-  if (elementalAdept) {
+  if (elementalAdept || adeptOthers.length) {
     profile = { ...profile, damageExpression: floorDamageDice(profile.damageExpression) };
-    featNotes.push(`Elemental Adept: ${profile.damageType} ignores resistance and every 1 on the dice is a 2`);
+    featNotes.push(`Elemental Adept: ${[...(elementalAdept ? [profile.damageType] : []), ...adeptOthers].join(" and ")} ignores resistance and every 1 on the dice is a 2`);
   }
 
   // A Battle Master maneuver riding this swing. The pick and the pool are
@@ -566,7 +589,7 @@ export function planPcAttack(input: {
     profile,
     kind,
     special: built.special,
-    scalingNote: built.scalingNote,
+    scalingNote: upcastNote ?? built.scalingNote,
     riders,
     rageBonus: folded.rageBonus,
     attackEffect: folded.attackEffect,
@@ -629,9 +652,13 @@ export function planPcAttack(input: {
   context.notes.push(...marks.notes);
   let droppedRiders: string[] = [];
   let hitClaims: string[] = [];
-  if (budget) {
+  // A reaction attack on the holder's own turn spends none of the turn, and a
+  // once-a-turn rider is still once a turn: Sneak Attack landed twice without this.
+  const turnRiders = input.reactionAttack ? budgetFor(encounter, sheet.id, attacksAllowedFor(sheet), conditionTurnShape(sheet.conditions)) : null;
+  const riderBudget = budget ?? turnRiders;
+  if (riderBudget) {
     const claimed = claimOncePerTurnRiders({
-      budget,
+      budget: riderBudget,
       profile,
       notes: context.notes,
       sneak: sneak.sneak,
@@ -655,6 +682,7 @@ export function planPcAttack(input: {
     args,
     enemy,
     elementalAdept,
+    adeptOthers,
     mageSlayer,
     derived: built.derived,
     riders,
@@ -676,6 +704,7 @@ export function planPcAttack(input: {
     context,
     helped: situation.helped,
     attackRiders: situation.attackRiders,
+    sight: situation.sight,
     marks,
     // Skulker: a ranged attack from hiding gives them away only when it
     // hits (pc-attack.ts leaves the hiding in place for the roll).
@@ -704,6 +733,8 @@ export function planPcAttack(input: {
       luck: args.luck === true && luckPointsLeft(sheet.resources) > 0,
       poison: carriesPoison(sheet, weaponAttack, profile.damageType),
       giantKiller,
+      reactionAttack: Boolean(input.reactionAttack),
+      turnRiders,
       ...(options.featureBonus?.tempHpOnHit ? { tempHp: { amount: options.featureBonus.tempHpOnHit, feature: options.featureBonus.feature } } : {}),
     },
   };

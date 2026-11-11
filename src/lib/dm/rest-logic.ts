@@ -1,4 +1,5 @@
 import { easeOrdeal } from "@/lib/dm/ordeal";
+import { PORTENT, rollForetold } from "@/lib/dm/foretold-logic";
 import { effectiveMaxHp, pruneMeta, removeConditionInstances, removeConditions } from "@/lib/dm/condition-logic";
 import type { RollResult } from "@/lib/dice";
 import { RAGING, recoveringPrefix, resourceDef } from "@/lib/srd/class-resources";
@@ -30,7 +31,7 @@ function recoverPools(pools: HitDicePool[], count: number): HitDicePool[] {
   return next;
 }
 
-// Long rest: full HP, temp HP gone, dying/concentration cleared, all spell
+// Long rest: full HP, temp HP gone, dying cleared, all spell
 // slots back to the class table, spells chosen for preparation now prepared,
 // half the total hit dice (minimum 1) recovered, and one level of exhaustion
 // removed. Who may take one (alive, at least 1 hit point, none in the last
@@ -57,11 +58,17 @@ export function longRestPatch(
     currentHp: effectiveMaxHp({ ...sheet, exhaustion: exhaustionAfter }),
     tempHp: 0,
     deathSaves: null,
-    concentratingOn: null,
+    // Concentration is not cleared here: sleep ends it, and the spell with
+    // it, through concentration.ts breakConcentration before this patch
+    // (rest-tools.ts). Set to null here alone, the spell's effects ran on
+    // with nobody holding them (LC-CONC-02).
     // Nobody sleeps through a night still shaped or still raging.
     wildShape: null,
     // Every limited-use class resource refills on a long rest.
     resources: refillResources(sheet.resources, "long", sheet),
+    // Portent: "When you finish a long rest, roll two d20s", and last night's
+    // numbers are gone.
+    ...(sheet.resources?.[PORTENT] ? { foretold: rollForetold(Math.min(3, sheet.resources[PORTENT].max)) } : {}),
   };
   // Multiclass sheets recover into their per-class pools (patchSheet keeps
   // the summed hitDice mirror in sync); single-class sheets patch the

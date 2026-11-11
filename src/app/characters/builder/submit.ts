@@ -25,6 +25,7 @@ import type { BackgroundOption, ClassOption, RaceOption } from "./useBuilderOpti
 import type { BuilderDerived } from "./useBuilderDerived";
 import type { BuilderState, EquipmentItem } from "./useBuilderState";
 import { textKey } from "@/lib/language/text-logic";
+import { subclassPickFeatures } from "@/lib/srd/subclass-choice-picks";
 import { featChoice } from "@/lib/schemas/sheet";
 import { normalizeAttraction } from "@/lib/attraction";
 
@@ -291,7 +292,9 @@ export function callingBlocks(
   owed.push(...multiclassBlocks(state, derived));
   // What the subclass's training leaves to the player: a Lore bard's three
   // skills, a Knowledge cleric's languages and skills (issue 251).
-  for (const grant of derived.subclassTraining ?? []) {
+  // A pick that may wait (a ranger's Favored Enemy language) is asked on the
+  // class step and owed when left, never a block (subclass-training.ts).
+  for (const grant of (derived.subclassTraining ?? []).filter((entry) => !entry.optional)) {
     const left = featOwed(grant.name, grant.spec, featChoice(state.featChoices, grant.name));
     if (left) {
       owed.push(block("subclass", left));
@@ -309,13 +312,18 @@ export function callingBlocks(
   // panel draws: a pick in a dropped skill is not a pick.
   const expertiseLeft =
     expertiseSlots -
-    state.expertisePicks.filter((skillId) => expertiseAllowed(skillId, derived.proficientSkills, classIds)).length;
+    state.expertisePicks.filter((skillId) => expertiseAllowed(skillId, derived.expertiseSkills ?? derived.proficientSkills, classIds)).length;
   if (expertiseLeft > 0) {
     owed.push(block("expertise", `Pick ${expertiseLeft} more ${expertiseLeft === 1 ? "skill" : "skills"} you are especially good at (expertise).`));
   }
   const slot = derived.optionSlots.find((entry) => entry.remaining > 0);
   if (slot) {
     owed.push(block("options", `Pick ${slot.remaining} more ${slot.label.toLowerCase()}.`));
+  }
+  // A workshop subclass's own choice, as a pick-list's (issue #833).
+  const choice = (derived.subclassChoiceSlots ?? []).find((entry) => !entry.chosen);
+  if (choice) {
+    owed.push(block("options", `Pick your ${choice.label} (${choice.subclass}).`));
   }
   return owed;
 }
@@ -600,6 +608,7 @@ function reconcileContextOf(input: SubmitInput, race: RaceOption | undefined): R
     background: input.background,
     level: input.derived.effectiveLevel,
     extras: input.derived.extras ?? [],
+    pickIds: input.state.pickIds,
   };
 }
 
@@ -679,8 +688,10 @@ export function buildBuilderResult(input: SubmitInput): BuilderResult {
   const proficiencies = {
     ...preview.proficiencies,
     skills,
+    // A subclass's or feat's skill may take the class's expertise too; the
+    // server adds those skills back with their grants.
     expertise: picks.expertisePicks.filter((skill) =>
-      expertiseAllowed(skill, skills, multiclass ? classes.map((entry) => entry.id) : [klass.id]),
+      expertiseAllowed(skill, [...skills, ...(derived.expertiseSkills ?? [])], multiclass ? classes.map((entry) => entry.id) : [klass.id]),
     ),
     languages: [
       ...new Set([
@@ -704,7 +715,14 @@ export function buildBuilderResult(input: SubmitInput): BuilderResult {
   // they ride onto the list on top of whatever the player picked, as does
   // a chain warlock's find familiar (src/lib/srd/class-spell-grants.ts).
   const grantedSpells = (
-    casterKlass ? [...subclassSpellsFor(casterKlass.id, casterSubclass, casterLevel), ...(derived.spellGrants?.learned ?? [])] : []
+    casterKlass
+      ? [
+          // With the picks: a workshop subclass's choice brings its option's
+          // spells (issue #833).
+          ...subclassSpellsFor(casterKlass.id, casterSubclass, casterLevel, undefined, subclassPickFeatures(picks.optionPicks, state.pickIds)),
+          ...(derived.spellGrants?.learned ?? []),
+        ]
+      : []
   ).filter(
     (spell) => !spells.some((entry) => textKey(entry) === textKey(spell)),
   );
@@ -803,7 +821,9 @@ export function buildBuilderResult(input: SubmitInput): BuilderResult {
         // Invocations, maneuvers, metamagic and the rest ride along as
         // "choice" features, the same shape as a fighting style, so the
         // level-up regrant preserves them.
-        ...picks.optionPicks.map((optionName) => ({ name: optionName, source: "choice" as const })),
+        // A workshop subclass choice's pick carries the ids its stored copy
+        // keeps (issue #833 review).
+        ...subclassPickFeatures(picks.optionPicks, state.pickIds).map((pick) => ({ ...pick, source: "choice" as const })),
       ],
       asiChoices: resolvedAsiChoices,
       racialChoices: {

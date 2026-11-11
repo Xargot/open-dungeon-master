@@ -1,6 +1,6 @@
 "use client";
 
-import { gmTurnCompanion, initiativeCharacter, offTurnReactors, selectedCharacter } from "@/lib/player-characters";
+import { companionReactors, gmTurnCompanion, gmTurnDominated, initiativeCharacter, offTurnReactors, selectedCharacter } from "@/lib/player-characters";
 
 import { ChevronDown, CircleHelp, SlidersHorizontal } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -16,7 +16,7 @@ import { HandMoreSheet } from "@/app/campaigns/[campaignId]/HandMoreSheet";
 import { HandGroupFace, HandGroupView, fanStep } from "@/app/campaigns/[campaignId]/HandGroups";
 import { useHandLayout } from "@/app/campaigns/[campaignId]/useHandLayout";
 import { HAND_TUTORIAL_ID, HandTutorial } from "@/app/campaigns/[campaignId]/HandTutorial";
-import { useHandSpells } from "@/app/campaigns/[campaignId]/HandSpells";
+import { useHandSpells, useHandSummons } from "@/app/campaigns/[campaignId]/HandSpells";
 import { HandReactPrompt } from "@/app/campaigns/[campaignId]/HandReactPrompt";
 import { HandPips } from "@/app/campaigns/[campaignId]/HandPips";
 import { handTargets } from "@/app/campaigns/[campaignId]/handTargets";
@@ -33,6 +33,7 @@ import {
   HAND_BOARD_CONTROL_EVENT,
   HAND_BOARD_SURFACE_EVENT,
   handReady,
+  seenChips,
   type HandBoardActionDetail,
   type HandBoardControlDetail,
   composeSentence,
@@ -46,7 +47,9 @@ import {
 import type { HandShare } from "@/lib/battlemap/hand-intent";
 import { offeredBoardControl, type BoardControl, type BoardPanel } from "@/lib/addons/board-bridge";
 import { describePick, hasPick, pickHint } from "@/lib/battlemap/hand-area";
-import { reactionAim, reactionCards, withReactions, offTurnReactionCards } from "@/lib/battlemap/hand-react";
+import { holdSentReactions, reactionAim, reactionCards, reactionPicks, reactionStrips, withReactions, offTurnReactionCards } from "@/lib/battlemap/hand-react";
+import { readSummonControl, summonBoardControls } from "@/lib/battlemap/hand-summon";
+import { aimedCard } from "@/lib/battlemap/hand-odds";
 import { liveNotice, turnCharacterId, turnFromEncounter, turnPips, turnSignature, type HandNotice } from "@/lib/battlemap/hand-table";
 
 import type { TargetEdge } from "@/lib/battlemap/view-tactics";
@@ -55,6 +58,7 @@ import { finishTour, useTourFinished } from "@/lib/tours/tour-store";
 import type { InputKind } from "@/lib/campaign-types";
 import type { Floor } from "@/lib/db/campaigns";
 import type { PublicEncounter } from "@/lib/db/encounter-view";
+import { turnHeldLine, useTurnHeld } from "@/app/campaigns/[campaignId]/TurnHoldNote";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 
 // The Hand: on your turn in a fight, your options as cards above the message
@@ -118,6 +122,10 @@ function shareControl(card: HandCard, aim: HandAim, offered: HandTargetChip[], s
   return { id: "hand-share", label: rule.stack ? `Share out the ${rule.unit}s` : `Who else it takes (up to ${rule.count})`, disabled: null, options };
 }
 
+// No reaction waits on the GM: the same empty list each render, so the memos
+// that read it keep their cards.
+const NO_REACTIONS_SENT: readonly string[] = [];
+
 function HandInner({
   campaignId,
   sheets,
@@ -134,12 +142,20 @@ function HandInner({
   trackAmmo,
   leaving,
   edges,
+  feet,
+  unseen,
   drops,
   mounts,
+  board,
+  sight,
   genre,
   multiCharacter,
   runsTable = false,
+  runsDominated = false,
   reactionsOnly = false,
+  onComposeAs,
+  reactionsSent = NO_REACTIONS_SENT,
+  onReactionSent,
 }: {
   campaignId: string;
   sheets: CharacterSheet[];
@@ -160,10 +176,21 @@ function HandInner({
   // The board's verdict from this character to each enemy (cover, flanking),
   // keyed by enemy id; absent off the map.
   edges?: Record<string, TargetEdge>;
+  // How far each creature on the board stands from this character, in feet
+  // (PlayerMapView.feet): a reaction whose reach a hit lies beyond is not dealt.
+  feet?: Record<string, number>;
+  // Who on the board this character has no line of sight to
+  // (PlayerMapView.unseen): a reaction that needs its creature seen is not dealt.
+  unseen?: string[];
   // What lies on the board, and who rides what (issue #424): the gear cards'
   // Pick up and Dismount.
   drops?: PlayerMapView["drops"];
   mounts?: PlayerMapView["mounts"];
+  // The engine's verdicts on this character's own square (PlayerMapView.self):
+  // a Hide refused there, the Silence it stands in.
+  board?: PlayerMapView["self"];
+  // Sight as this character's attack roll reads it (PlayerMapView.sight).
+  sight?: PlayerMapView["sight"];
   genre?: string | null;
   // The table's fielding rule: with all of a player's characters fielded,
   // any of them may answer a hit with a reaction, not only the one acting.
@@ -171,18 +198,38 @@ function HandInner({
   // A person running the table: on the turn of a companion nobody commands,
   // the Hand is that companion's (player-characters.ts gmTurnCompanion).
   runsTable?: boolean;
+  // And on the turn of a hero the other side dominates, that hero's
+  // (player-characters.ts gmTurnDominated), on a host that takes its cards.
+  runsDominated?: boolean;
   // Only the reactions the person's characters may take now: the GM seat
   // on a turn that is not one of theirs, under the monsters' hand. Nothing
   // shows while none is offered.
   reactionsOnly?: boolean;
+  // A card's sentence handed to the message box ("Edit in chat"), with the
+  // hero it speaks for: another hero's reaction card hands that hero, so the
+  // words are sent as theirs (the composer's Speaking as), not as the hero
+  // whose turn it is (issue 685).
+  onComposeAs?: (characterId: string | null) => void;
+  // The heroes a reaction was sent for that the GM has not resolved yet, and
+  // the call that adds one (SessionView.tsx): their reaction cards wait.
+  reactionsSent?: readonly string[];
+  onReactionSent?: (characterId: string) => void;
 }) {
   const turnId = turnCharacterId(encounter);
+  const capabilities = useCapabilities();
+  // A companion's reactions, for its commander or the GM seat that plays it
+  // (issue 685), on a host that takes their cards.
+  const companionsReact = hostOffers(capabilities, "companionReactions");
   const sheet = useMemo(
     () =>
       initiativeCharacter(sheets, meUserId, turnId) ??
       (runsTable && !reactionsOnly ? gmTurnCompanion(sheets, turnId) : null) ??
-      selectedCharacter(sheets, meUserId, activeSheetId),
-    [sheets, meUserId, activeSheetId, turnId, runsTable, reactionsOnly],
+      (runsDominated && !reactionsOnly ? gmTurnDominated(sheets, turnId, encounter.sides) : null) ??
+      selectedCharacter(sheets, meUserId, activeSheetId) ??
+      // The GM seat holding no hero of its own answers for the companions it
+      // plays: the first of them heads its reactions.
+      (reactionsOnly && companionsReact ? (companionReactors(sheets, meUserId, undefined, runsTable)[0] ?? null) : null),
+    [sheets, meUserId, activeSheetId, turnId, runsTable, runsDominated, reactionsOnly, encounter.sides, companionsReact],
   );
   const floorTurn = floor.mode === "initiative" ? floor.userIds.includes(meUserId) : !inputBlocked;
   const floorName = floor.mode === "initiative" ? floor.currentName : undefined;
@@ -201,27 +248,50 @@ function HandInner({
   // A card sent and not yet resolved holds the cards of its cost (useHandChoices.ts).
   const { waiting, setPending } = useHandPending(signature);
 
-  const hits = encounter.lastHits;
+  // Each open hit's id rides on its cards as the hit they answer (issue 685);
+  // a host that does not take one is sent none.
+  const aimsHits = hostOffers(capabilities, "reactionHits");
+  const hits = useMemo(
+    () => (aimsHits ? encounter.lastHits : encounter.lastHits?.map((hit) => ({ ...hit, id: undefined }))),
+    [encounter.lastHits, aimsHits],
+  );
+  // The board measures from the viewer's own acting character, so its distances
+  // say nothing of a companion or dominated hero the GM seat plays.
+  const ownFeet = sheet?.userId === meUserId ? feet : undefined;
+  // Everyone a redirect may turn a blow onto, friend or foe (Misdirection).
+  const creatures = useMemo(
+    () => handTargets(encounter.enemies, sheets, sheet?.id, undefined, encounter.sides),
+    [encounter.enemies, sheets, sheet?.id, encounter.sides],
+  );
   const reactions = useMemo(
     // Under the monsters' hand the hero hit is named, as the others are.
-    () => (sheet && turn ? reactionCards(sheet, turn, hits ?? [], sheets, reactionsOnly ? sheet.name : "you") : []),
-    [sheet, turn, hits, sheets, reactionsOnly],
+    () => (sheet && turn ? holdSentReactions(reactionCards(sheet, turn, hits ?? [], sheets, reactionsOnly ? sheet.name : "you", feet, encounter.lastSaves, ownFeet ? creatures : undefined, ownFeet && unseen ? new Set(unseen) : undefined), reactionsSent, sheet.id) : []),
+    [sheet, turn, hits, sheets, reactionsOnly, reactionsSent, feet, encounter.lastSaves, ownFeet, creatures, unseen],
   );
   // A player's other characters hit while this one acts (a person playing
-  // several heroes): their reactions too, each card naming its hero.
+  // several heroes), and the companions they play: their reactions too, each
+  // card naming its hero.
   const othersReactions = useMemo(
     () =>
-      sheet && hits?.length
-        ? offTurnReactionCards(
-            offTurnReactors(sheets, meUserId, sheet.id, multiCharacter).map((other) => ({
-              sheet: other,
-              turn: turnFromEncounter(encounter, other, { myTurn: false, currentName: floorName }),
-            })),
-            hits,
-            sheets,
+      sheet && (hits?.length || encounter.lastSaves?.length)
+        ? holdSentReactions(
+            offTurnReactionCards(
+              [
+                ...offTurnReactors(sheets, meUserId, sheet.id, multiCharacter),
+                ...(companionsReact ? companionReactors(sheets, meUserId, sheet.id, runsTable) : []),
+              ].map((other) => ({
+                sheet: other,
+                turn: turnFromEncounter(encounter, other, { myTurn: false, currentName: floorName }),
+              })),
+              hits ?? [],
+              sheets,
+              encounter.lastSaves,
+            ),
+            reactionsSent,
+            sheet.id,
           )
         : [],
-    [sheet, hits, sheets, meUserId, multiCharacter, encounter, floorName],
+    [sheet, hits, sheets, meUserId, multiCharacter, encounter, floorName, companionsReact, runsTable, reactionsSent],
   );
   const gear = useMemo<HandGearContext | undefined>(
     () =>
@@ -239,16 +309,30 @@ function HandInner({
   );
   // A host too old to catch the creatures in a laid blast keeps its blasts
   // aimed at one enemy (src/lib/capabilities.ts handBlasts).
-  const capabilities = useCapabilities();
   const blasts = hostOffers(capabilities, "handBlasts");
   // Sharing a casting out among creatures (issue 570): a host that does not
   // read the shares takes the aimed creature alone, so the split stays shut.
   const splits = hostOffers(capabilities, "handShares");
+  // The creature a summoning spell calls (issue 685): a host without the
+  // picker leaves its summon cards to the GM, as before.
+  const summons = useHandSummons(sheet, hostOffers(capabilities, "summonPicker"));
+  // A wand's, a staff's or a scroll's spell as a card: a host that cannot
+  // resolve one leaves them typed.
+  const items = hostOffers(capabilities, "handItemCasts");
+  const turnHeld = useTurnHeld(encounter);
   const cards = useMemo(() => {
     if (!sheet || !turn) return [];
     if (reactionsOnly) return [...reactions, ...othersReactions];
-    return [...othersReactions, ...holdPendingCards(withReactions(reactions, deriveHand(sheet, turn, { spells, trackAmmo, gear, blasts })), waiting)];
-  }, [sheet, turn, reactions, othersReactions, reactionsOnly, spells, trackAmmo, gear, blasts, waiting]);
+    // The board reads the viewer's own token, so it says nothing of a
+    // companion or a dominated hero the GM seat plays.
+    const ownBoard = sheet.userId === meUserId ? board : undefined;
+    const dealt = [...othersReactions, ...holdPendingCards(withReactions(reactions, deriveHand(sheet, turn, { spells, trackAmmo, gear, blasts, summons, items, board: ownBoard })), waiting)];
+    // Their End Turn is in and the move waits on a watcher's stop
+    // (turn-hold.ts): the turn takes nothing more but a reaction, and every
+    // other card says why, End turn's own included.
+    const ending = turnHeld?.characterId === sheet.id ? turnHeldLine(turnHeld, true) : null;
+    return ending ? dealt.map((card) => (card.cost === "reaction" ? card : { ...card, disabled: ending })) : dealt;
+  }, [sheet, turn, reactions, othersReactions, reactionsOnly, spells, trackAmmo, gear, blasts, summons, items, waiting, board, meUserId, turnHeld]);
 
   // Cards that spend one thing (spell slots, ki, superiority dice, gear, the
   // basic actions) gather under one card each (issue 528, hand-groups.ts).
@@ -304,16 +388,20 @@ function HandInner({
   );
 
   const targets = useMemo<HandTargetChip[]>(
-    () => handTargets(encounter.enemies, sheets, sheet?.id, edges),
-    [encounter.enemies, sheets, sheet?.id, edges],
+    () => handTargets(encounter.enemies, sheets, sheet?.id, edges, encounter.sides, { round: encounter.round, orderReady: encounter.orderReady, order: encounter.order }, sheet?.userId === meUserId ? sight : undefined),
+    [encounter.enemies, sheets, sheet?.id, edges, encounter.sides, encounter.round, encounter.orderReady, encounter.order, sight, sheet?.userId, meUserId],
   );
   const enemyTargets = useMemo(() => targets.filter((target) => target.kind === "enemy"), [targets]);
   const partyTargets = useMemo(() => targets.filter((target) => target.kind !== "enemy"), [targets]);
+  // A redirect's creature may be friend or foe, the acting hero too when the
+  // card is another hero's (reactionPicks leaves out the holder and the attacker).
+  const redirects = picked?.pickWithin !== undefined;
+  const pickable = useMemo(() => (redirects ? [...enemyTargets, ...partyTargets] : enemyTargets), [redirects, enemyTargets, partyTargets]);
 
   // A tap on the board while a card is raised arrives as the HUD's own
   // sentence in the message box; it is read here rather than stored, so the
   // board needs to know nothing about the Hand.
-  const boardName = !boardNative && picked?.target === "enemy" ? targetFromComposedText(input, enemyTargets.map((target) => target.name)) : null;
+  const boardName = !boardNative && picked?.target === "enemy" ? targetFromComposedText(input, pickable.map((target) => target.name)) : null;
   // A reaction answers one recorded attack: its target is fixed by it (the
   // attacker for Hellish Rebuke, the ally for Cutting Words), not picked.
   const fixed = picked?.intent.card === "reaction" && sheet ? reactionAim(picked, hits ?? [], picked.actor?.id ?? sheet.id, sheets) : null;
@@ -321,10 +409,12 @@ function HandInner({
   const offered = useMemo(() => fixedChip
     ? [fixedChip]
     : picked?.target === "enemy"
-      ? enemyTargets
+      // A card that takes a creature its holder can see leaves out the ones
+      // the board says they cannot (hand-play.ts aimUnseen, the engine's gate).
+      ? seenChips(picked, reactionPicks(picked, pickable, picked.actor ? undefined : ownFeet))
       : picked?.target === "ally"
-        ? partyTargets
-        : [], [fixedChip, picked?.target, enemyTargets, partyTargets]);
+        ? picked.othersOnly ? partyTargets.filter((target) => target.kind !== "self") : partyTargets
+        : [], [fixedChip, picked, pickable, partyTargets, ownFeet]);
   const self = partyTargets.find((target) => target.kind === "self") ?? null;
   const aim =
     picked?.target === "self"
@@ -336,11 +426,17 @@ function HandInner({
   // What the hover previews are worked against until something is aimed at.
   const defaultAim = aim?.kind === "enemy" ? aim : enemyTargets[0] ?? null;
   const conditions = sheet?.conditions ?? EMPTY;
+  // The card as aimed: an option that hangs on the aim (Rapid Strike needs
+  // advantage to trade) is judged against it (hand-odds.ts aimedCard).
+  const raised = useMemo(
+    () => (picked ? aimedCard(picked, aim ?? (picked.target === "enemy" ? defaultAim : null), conditions) : null),
+    [picked, aim, defaultAim, conditions],
+  );
 
   const attachedRiders = picked?.intent.card === "attack" && !picked.intent.offHand ? riders : EMPTY_CARDS;
   // The options, trigger, choice and area the card carries; the board hears
   // of the raised card from here too (useHandChoices.ts).
-  const { choices, resetChoices, barProps } = useHandChoices(picked, aim);
+  const { choices, resetChoices, barProps } = useHandChoices(raised, aim);
   const sentence = picked ? composeSentence(picked, aim, attachedRiders, choices) : "";
   const rows = useMemo(
     () => (picked ? previewRows(picked, aim ?? (picked.target === "enemy" ? defaultAim : null), conditions, choices) : []),
@@ -382,6 +478,22 @@ function HandInner({
       card?.focus({ preventScroll: true });
     });
   }, [pickedId, clearAim]);
+
+  // Escape lets an aimed card go even when the keyboard is in no element: the
+  // pressed card can be redrawn under the pointer (a search's fan) after the
+  // effect above has run, leaving the focus on the page, where the hand's own
+  // Escape never hears it. Only then: a dialog or a field keeps its Escape.
+  useEffect(() => {
+    if (!pickedId) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement) return;
+      releaseAim();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pickedId, releaseAim]);
 
   useEffect(() => {
     const onTarget = (event: Event) => {
@@ -435,6 +547,7 @@ function HandInner({
     (text: string) => {
       onKindChange("do");
       setInput(text);
+      onComposeAs?.(picked?.actor?.id ?? null);
       clearAim();
       // After the box has the text, put the caret where the blank is.
       window.setTimeout(() => {
@@ -446,13 +559,14 @@ function HandInner({
         area.setSelectionRange(at, at);
       }, 50);
     },
-    [onKindChange, setInput, clearAim, composerRef],
+    [onKindChange, setInput, clearAim, composerRef, onComposeAs, picked?.actor?.id],
   );
 
   const commit = useCallback(async () => {
     if (!picked || !sheet || sending || commitBusy.current) return;
-    if (inputBlocked && picked.cost !== "reaction") { say(blockedReason); return; }
-    if (!handReady(picked, aim, choices)) { say(picked.asks === "trigger" && !choices.trigger?.trim() ? "Name the trigger first." : "Pick a target or an area first."); return; }
+    if (picked.intent.card === "basic" && picked.intent.action === "end-turn" && turnHeld?.characterId === sheet.id) { say(turnHeldLine(turnHeld, true)); return; }
+    if (inputBlocked && picked.cost !== "reaction" && picked.intent.card !== "reaction") { say(blockedReason); return; }
+    if (!handReady(picked, aim, choices)) { say(picked.asks === "trigger" && !choices.trigger?.trim() ? "Name the trigger first." : picked.summon && !choices.choice ? "Choose the creature first." : "Pick a target or an area first."); return; }
     if (picked.compose) {
       toComposer(sentence);
       return;
@@ -474,7 +588,7 @@ function HandInner({
                 content: sentence,
                 kind: "do",
                 characterId: picked.actor?.id ?? sheet?.id,
-                intent: intentBody(picked, aim, attachedRiders, choices),
+                intent: intentBody(raised ?? picked, aim, attachedRiders, choices),
                 ...(concentrationAck ? { concentrationAck } : {}),
               }),
             });
@@ -505,6 +619,20 @@ function HandInner({
           return;
         }
       }
+      // A share of the card the engine refused for one creature while the
+      // rest landed (the actions route at a table the GM runs): said, as a
+      // refusal is, and the card is spent, since the others are done.
+      const answered = (await response.json().catch(() => ({}))) as { refused?: string; held?: boolean };
+      if (typeof answered.refused === "string" && answered.refused) {
+        say(answered.refused);
+      }
+      // The End Turn is in and the move waits on a watcher's stop
+      // (turn-hold.ts): said here as the banner and the board say it.
+      if (ending && answered.held) {
+        say(turnHeldLine(turnHeld ?? { characterId: sheet.id, watcher: "" }, true));
+      }
+      // A reaction waits by its hero until the GM resolves it, whoever's it is.
+      if (picked.cost === "reaction") onReactionSent?.(picked.actor?.id ?? sheet.id);
       // Nothing is marked spent: the engine's count arrives with the
       // encounter. Until it moves, the same cost waits on this card. Another
       // hero's reaction spends nothing of this one's.
@@ -536,7 +664,7 @@ function HandInner({
       commitBusy.current = false;
       setSending(false);
     }
-  }, [picked, sheet, sending, sentence, campaignId, aim, attachedRiders, choices, signature, setPending, boardName, setInput, clearAim, say, toComposer, inputBlocked, blockedReason, boardNative]);
+  }, [picked, raised, sheet, sending, sentence, campaignId, aim, attachedRiders, choices, signature, setPending, onReactionSent, boardName, setInput, clearAim, say, toComposer, inputBlocked, blockedReason, boardNative, turnHeld]);
 
   const nativePanel = useMemo<BoardPanel | null>(() => {
     if (!boardNative) return null;
@@ -552,14 +680,16 @@ function HandInner({
       ...(offered.length ? [{ id: "hand-target" as const, label: "Target", value: aim?.id, disabled: null, options: offered.map(target => option(target.id, `${target.name}${target.note ? ` · ${target.note}` : ""}`)) }] : []),
       ...(barProps.options.length ? [{ id: "hand-option" as const, label: "Attack options (choose to toggle)", disabled: null, options: barProps.options.map(entry => option(entry.id, `${barProps.chosen.includes(entry.id) ? "✓ " : ""}${entry.label}`, entry.disabled ?? null)) }] : []),
       ...(picked.intent.card === "attack" && cards.some(card => card.type === "rider") ? [{ id: "hand-rider" as const, label: "Riders (choose to toggle)", disabled: null, options: cards.filter(card => card.type === "rider").map(card => option(card.id, `${attachedRiders.some(rider => rider.id === card.id) ? "✓ " : ""}${card.name}`, card.disabled)) }] : []),
-      ...(picked.choice ? [{ id: "hand-choice" as const, label: picked.choice.label, value: barProps.choice ?? picked.choice.fallback ?? picked.choice.options[0]?.value, disabled: null, options: picked.choice.options.map(entry => option(entry.value, entry.label)) }] : []),
+      ...(picked.choice && !picked.summon?.mix ? [{ id: "hand-choice" as const, label: picked.choice.label, value: barProps.choice ?? picked.choice.fallback ?? picked.choice.options[0]?.value, disabled: null, options: picked.choice.options.map(entry => option(entry.value, entry.label)) }] : []),
+      // A summoning card's number and each target's form (issue 685).
+      ...summonBoardControls(picked, { form: barProps.choice, ...(barProps.count !== null ? { count: barProps.count } : {}), mix: barProps.mix }),
       ...(splits && picked.shares && aim && offered.some(target => target.id !== aim.id) ? [shareControl(picked, aim, offered, barProps.shares)] : []),
       ...(barProps.trigger !== null ? [{ id: "hand-trigger" as const, label: "Trigger", disabled: null, input: { value: barProps.trigger } }] : []),
       ...(picked.area && hasPick(picked.area, barProps.areaPick) ? [{ id: "hand-area-clear" as const, label: "Clear area", disabled: null }] : []),
-      { id: "hand-play", label: picked.compose ? "Write in chat" : `Play ${picked.name}`, disabled: inputBlocked && picked.cost !== "reaction" ? blockedReason : handReady(picked, aim, { trigger: barProps.trigger ?? "", area: barProps.areaPick }) ? null : "Choose a target, area or trigger first." },
+      { id: "hand-play", label: picked.compose ? "Write in chat" : `Play ${picked.name}`, disabled: inputBlocked && picked.cost !== "reaction" && picked.intent.card !== "reaction" ? blockedReason : handReady(picked, aim, { trigger: barProps.trigger ?? "", area: barProps.areaPick, ...(barProps.choice !== null ? { choice: barProps.choice } : {}), mix: barProps.mix }) ? null : picked.summon ? "Choose the creature first." : "Choose a target, area or trigger first." },
       { id: "hand-edit", label: "Edit in chat", disabled: null }, { id: "hand-back", label: "Back", disabled: null }, close,
     ] };
-  }, [boardNative, boardSwap, boardChoices, cards, picked, rows, sentence, offered, aim, attachedRiders, barProps.options, barProps.chosen, barProps.choice, barProps.trigger, barProps.areaPick, barProps.shares, splits, notice, inputBlocked, blockedReason]);
+  }, [boardNative, boardSwap, boardChoices, cards, picked, rows, sentence, offered, aim, attachedRiders, barProps.options, barProps.chosen, barProps.choice, barProps.count, barProps.mix, barProps.trigger, barProps.areaPick, barProps.shares, splits, notice, inputBlocked, blockedReason]);
   const nativeSignature = JSON.stringify([campaignId, sheet?.id, signature, nativePanel, sending && !boardSwap]);
   useEffect(() => {
     if (swapReply.current && swapTurn.current !== `${campaignId}:${sheet?.id}:${signature}`) {
@@ -586,6 +716,13 @@ function HandInner({
         case "hand-option": { const option = barProps.options.find(entry => entry.id === value); if (option && !option.disabled) barProps.onToggleOption(option.id); break; }
         case "hand-rider": { const card = cards.find(entry => entry.id === value && entry.type === "rider"); if (card) pick(card, true); break; }
         case "hand-choice": barProps.onChoice(value); break;
+        case "hand-count":
+        case "hand-mix": {
+          const step = readSummonControl(detail.actionId, value);
+          if (step && "count" in step) barProps.onCount(step.count);
+          else if (step) barProps.onStepMix(step.form, step.delta);
+          break;
+        }
         case "hand-trigger": barProps.onTrigger(value); break;
         case "hand-share": {
           const [id, step] = value.split(":");
@@ -664,10 +801,9 @@ function HandInner({
 
   if (!sheet || !turn) return null;
   if (reactionsOnly && !cards.length) return null;
-  // The other heroes' reactions, a strip for each hero.
-  const reactors = [...new Set(othersReactions.map((card) => card.actor?.id))].map((id) =>
-    othersReactions.filter((card) => card.actor?.id === id),
-  );
+  // A strip for each hit answered, this hero's first (hand-react.ts); a card
+  // sent and waiting holds the strip's chips as it holds the fan's.
+  const strips = reactionStrips(holdPendingCards(reactions, waiting), othersReactions);
 
   // Off this character's turn (or while initiative is rolled) the whole
   // hand is held for one reason, the engine's own. The header already says
@@ -732,12 +868,12 @@ function HandInner({
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span
           key={myTurn ? "mine" : (currentName ?? "other")}
-          className="hand-label min-w-0 break-words font-display text-[11px] uppercase tracking-[0.22em] text-amber-200/90"
+          className="hand-label min-w-0 break-words font-display text-[11px] uppercase tracking-[0.14em] text-amber-200/90"
         >
-          {reactionsOnly ? "Your heroes' reactions" : myTurn ? "Your hand" : `${currentName ?? "Another hero"}'s turn`}
+          {reactionsOnly ? (sheet.isCompanion ? "Companions' reactions" : "Your heroes' reactions") : myTurn ? "Your hand" : `${currentName ?? "Another hero"}'s turn`}
         </span>
-        <span className="hidden text-[11px] text-stone-500 sm:inline">
-          {reactionsOnly ? "A hero of yours was hit: answer it now or let it pass." : myTurn ? "Play a card, or type your move below." : "Look your cards over while you wait."}
+        <span className="hand-hint hidden text-[11px] text-stone-500 sm:inline">
+          {reactionsOnly ? `${sheet.isCompanion ? "A companion you play" : "A hero of yours"} was hit: answer it now or let it pass.` : myTurn ? "Play a card, or type your move below." : "Look your cards over while you wait."}
         </span>
         <span className="ml-auto flex items-center gap-1">
           {reactionsOnly ? null : <HandPips pips={pips} flurryStrikes={turn.flurryStrikes} />}
@@ -789,8 +925,12 @@ function HandInner({
               }}
               aria-expanded={!collapsed}
               aria-label={collapsed ? "Show your hand" : "Hide your hand"}
-              className="flex size-9 items-center justify-center rounded-lg text-stone-500 hover:text-amber-200 sm:size-7"
+              // hand-fold: lying on the board the Hand covers part of the map,
+              // so there this is a lettered tab and not one glyph among three
+              // (world.css); in the desk it is the chevron it was.
+              className="hand-fold flex size-9 items-center justify-center rounded-lg text-stone-500 hover:text-amber-200 sm:size-7"
             >
+              <span className="hand-fold-word" aria-hidden="true">{collapsed ? "Show hand" : "Hide"}</span>
               <ChevronDown className={cn("chevron-turn size-4", collapsed && "rotate-180")} />
             </button>
           </Tooltip>
@@ -809,10 +949,10 @@ function HandInner({
       {/* A reaction the moment offers (an attack just hit you or an ally):
           above the fan, even while the hand is put away, because it is gone
           once the turn moves on. */}
-      {/* One strip per hero hit: this one's, then each other of theirs. */}
-      {[reactions, ...reactors].map((group) => (
+      {/* One strip per hit answered: this hero's, then each other of theirs. */}
+      {strips.map((group) => (
         <HandReactPrompt
-          key={group[0]?.actor?.id ?? "own"}
+          key={group[0].id}
           cards={group}
           pickedId={picked?.id ?? null}
           onPick={(card) => {
@@ -918,7 +1058,7 @@ function HandInner({
               onRefused={say}
               // A reaction is taken on anyone's turn: the initiative floor
               // does not hold it (the engine's canAct judges it instead).
-              blocked={inputBlocked && picked.cost !== "reaction" ? blockedReason : null}
+              blocked={inputBlocked && picked.cost !== "reaction" && picked.intent.card !== "reaction" ? blockedReason : null}
               onBack={releaseAim}
               onEdit={() => toComposer(sentence)}
               onCommit={() => void commit()}

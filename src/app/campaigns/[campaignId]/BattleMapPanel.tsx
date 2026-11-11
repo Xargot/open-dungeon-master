@@ -5,6 +5,7 @@ import { returnFocus } from "@/components/ui/return-focus";
 import {
   Eraser,
   Footprints,
+  Info,
   Lock,
   Maximize2,
   MapPin,
@@ -59,11 +60,13 @@ import type { PlayerMapView } from "@/lib/battlemap/view";
 import { boardHudGates } from "@/lib/battlemap/hand-hud";
 import { effectiveMaxHp } from "@/lib/dm/condition-logic";
 import type { PublicEncounter } from "@/lib/db/encounter-view";
+import { TurnHoldNote, turnHeldLine, useTurnHeld } from "@/app/campaigns/[campaignId]/TurnHoldNote";
 import type { CameraEvent, SceneState } from "@/lib/scene/state";
 import { SkyLayer } from "@/components/SkyLayer";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { characterPlaceholder, monsterPlaceholder, npcPlaceholder } from "@/lib/placeholders";
 import { usePaintedMap } from "@/app/campaigns/[campaignId]/usePaintedMap";
+import { useDocked, useShortWindow } from "@/app/campaigns/[campaignId]/useDocked";
 import {
   FieldDie,
   InitiativeRail,
@@ -210,13 +213,14 @@ export function BattleMapPanel({
       byRef.set(sheet.id, characterPlaceholder({ race: sheet.race, class: sheet.class, gender: sheet.gender }));
     }
     for (const enemy of encounter?.enemies ?? []) {
-      byRef.set(enemy.id, monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name, slug: enemy.slug, name: enemy.name }));
+      byRef.set(enemy.id, monsterPlaceholder(enemy.type, { cr: enemy.cr, genre, seed: enemy.name, slug: enemy.slug, name: enemy.name, race: enemy.race, gender: enemy.gender }));
     }
-    // Somebody the DM put down by hand has no sheet and no stat block: they
-    // draw one of the neutral faces by their name, and keep it.
+    // Somebody the DM put down by hand has no sheet and no stat block: the
+    // face the Cast gives them when it knows them, else one of the neutral
+    // faces by their name, kept.
     for (const token of view.tokens) {
       if (token.kind === "npc" && !byRef.has(token.refId)) {
-        byRef.set(token.refId, npcPlaceholder(null, token.name));
+        byRef.set(token.refId, token.face || npcPlaceholder(null, token.name));
       }
     }
     return byRef;
@@ -264,13 +268,15 @@ export function BattleMapPanel({
   const anchorsOf = (expanded: boolean) => (addonView && (!drawActive || nativeBattlefieldActive) ? (expanded ? anchorStores.enlarged : anchorStores.inline) : null);
   // A slot the DM added to the order has no token to borrow a face from.
   const faceOfEntry = useCallback(
-    (entry: { id: string; kind: string; name: string }) => [
+    (entry: { id: string; kind: string; name: string; face?: string }) => [
       ...faceOfRef(entry.id),
-      entry.kind === "npc" ? npcPlaceholder(null, entry.name) : null,
+      entry.kind === "npc" ? entry.face || npcPlaceholder(null, entry.name) : null,
     ],
     [faceOfRef],
   );
   const [enlarged, setEnlarged] = useState(false);
+  const docked = useDocked();
+  const shortWindow = useShortWindow();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pointing, setPointing] = useState(false);
@@ -325,6 +331,13 @@ export function BattleMapPanel({
   // The stage: the figure the pointer rests on (the hover plate), the target
   // the aim is on, the order dialog, and the banner for a new turn.
   const [plateTokenId, setPlateTokenId] = useState<string | null>(null);
+  // A click or Details holds the plate open (it pages and takes the
+  // keyboard) until it is closed; while held, hovering leaves it be.
+  const [platePinned, setPlatePinned] = useState(false);
+  const closePlate = useCallback(() => {
+    setPlateTokenId(null);
+    setPlatePinned(false);
+  }, []);
   const [aimHoverId, setAimHoverId] = useState<string | null>(null);
   const [orderOpen, setOrderOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -333,6 +346,8 @@ export function BattleMapPanel({
   const [orderScore, setOrderScore] = useState(12);
   const [orderConfirm, setOrderConfirm] = useState<{ key: string; title: string; line: string; body: Record<string, unknown> } | null>(null);
   const [endingTurn, setEndingTurn] = useState(false);
+  // The End Turn is in and the move waits on a watcher's stop (turn-hold.ts).
+  const turnHeld = useTurnHeld(encounter);
   const turnKey = view.turn ? `${view.turn.tokenId}:${view.turn.round}` : "";
   const [seenTurn, setSeenTurn] = useState(turnKey);
   const [bannerKey, setBannerKey] = useState<string | null>(null);
@@ -789,6 +804,7 @@ export function BattleMapPanel({
     setAimHoverId(null);
     setPendingMove(null);
     setPlateTokenId(null);
+    setPlatePinned(false);
     setHudTokenId(null);
     setTeleporting(null);
     setHeld(null);
@@ -842,6 +858,7 @@ export function BattleMapPanel({
   function handleTile(x: number, y: number) {
     setNativeSelection(null);
     setPlateTokenId(null);
+    setPlatePinned(false);
     if (!targeting) setHudTokenId(null);
     if (pointing) {
       void sendPing(x, y);
@@ -994,8 +1011,15 @@ export function BattleMapPanel({
       setHudTokenId((current) => (current === tokenId ? null : tokenId));
       return;
     }
-    // Anybody else's figure: a tap is the phone's hover, and shows its plate.
-    setPlateTokenId((current) => (current === tokenId ? null : tokenId));
+    // Anybody else's figure: a click or tap holds its plate open, and a
+    // second one on the same figure lets it go. (On a desktop the hover has
+    // already opened it, so a toggle closed it on the first click.)
+    if (platePinned && plateTokenId === tokenId) {
+      closePlate();
+      return;
+    }
+    setPlateTokenId(tokenId);
+    setPlatePinned(true);
   }
 
   // Every tile takes a tap when the DM is placing something, when anyone is
@@ -1007,6 +1031,10 @@ export function BattleMapPanel({
 
   const hudToken = hudTokenId ? tokensById.get(hudTokenId) : undefined;
   const plateToken = plateTokenId ? tokensById.get(plateTokenId) : undefined;
+  // Held only while its figure is on the board: once that figure is taken
+  // away or hidden from this viewer nothing is held, or hovering, which
+  // leaves a held plate be, stayed switched off for every other figure.
+  const plateHeld = platePinned && plateToken !== undefined;
   const myTurn = Boolean(view.turn && view.myTokenId && view.turn.tokenId === view.myTokenId);
   // A walk this turn that can still be taken back (the move route keeps it).
   const undoFeet = myTurn && !canDirect && view.board === "fight" ? view.undoMove?.feet ?? null : null;
@@ -1017,8 +1045,22 @@ export function BattleMapPanel({
     if (!hudToken) {
       return [];
     }
+    // The figure's plate held open: its painting, and every condition with
+    // what it does, a page at a time. The dial is how the DM, and a player
+    // on their own figure, reach it, since their click opens the dial.
+    // A native board view draws no plate, so it is not offered there.
+    const details: HudAction[] = nativeHudActive ? [] : [{
+      id: "details",
+      label: "Details",
+      icon: Info,
+      onPick: () => {
+        setHudTokenId(null);
+        setPlateTokenId(hudToken.id);
+        setPlatePinned(true);
+      },
+    }];
     if (canDirect) {
-      return dmActions(hudToken, {
+      return [...dmActions(hudToken, {
         hold: () => {
           setHeld((current) => (current === hudToken.id ? null : hudToken.id));
           setTool("handle");
@@ -1040,7 +1082,7 @@ export function BattleMapPanel({
           void board({ do: "remove", tokenId: hudToken.id });
           setHudTokenId(null);
         },
-      });
+      }), ...details];
     }
     // The same engine questions the Hand asks (src/lib/battlemap/hand-hud.ts),
     // so a sigil the engine would refuse says so instead of composing.
@@ -1053,16 +1095,16 @@ export function BattleMapPanel({
       mySheet && !scene ? boardHudGates(mySheet, encounter ?? null, { myTurn, currentName: view.currentTurnName }) : undefined,
       (reason) => setError(reason),
     );
-    return nativeHudSupported ? actions.map(action => action.disabled ? action : { ...action, onPick: () => {
+    return [...(nativeHudSupported ? actions.map(action => action.disabled ? action : { ...action, onPick: () => {
       window.dispatchEvent(new CustomEvent(HAND_BOARD_ACTION_EVENT, { detail: { campaignId, action: action.id as HandBoardAction, nativeChoices: nativeBattlefieldActive } }));
       setHudTokenId(null);
-    } }) : actions;
+    } }) : actions), ...details];
     // `board` is a closure over state; the actions are rebuilt per token.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hudToken, canDirect, onCompose, mySheet, encounter, myTurn, view.currentTurnName, scene, nativeHudSupported, nativeBattlefieldActive, campaignId]);
+  }, [hudToken, canDirect, onCompose, mySheet, encounter, myTurn, view.currentTurnName, scene, nativeHudSupported, nativeHudActive, nativeBattlefieldActive, campaignId]);
 
   const closeHud = useCallback(() => {
-    setNativeSelection(null); setPlateTokenId(null);
+    setNativeSelection(null); setPlateTokenId(null); setPlatePinned(false);
     setHudTokenId(null); setTargeting(null); setAimHoverId(null); setTeleporting(null);
   }, []);
   const hudHint = targeting ? (targeting === "attack" ? "Tap the enemy you attack" : "Tap the enemy you cast at")
@@ -1121,7 +1163,7 @@ export function BattleMapPanel({
     hint: [hudHint ?? (handAim?.active ? "Choose the card's target on the board or in your hand, then play the card." : cameraLocked ? "The DM is steering the view" : boardHintText({ canDirect, tool, teleporting: Boolean(teleporting), held: Boolean(held), liveOrigin: Boolean(liveOrigin), pointing, drawing, targeting: Boolean(targeting), canMove, moveAimed: Boolean(livePending), scene, budgetLeft: view.budgetLeft, hasToken: Boolean(view.myTokenId) })), moveModeHint(moveMode, view.moves), areaAim.hint].filter(Boolean).join("\n"),
     notices: [...moveNotes.notes.map(note => note.text), ...(fieldRoll ? [fieldRoll.label] : []), ...(handStatus?.notice ? [handStatus.notice] : []), ...(areaAim.caught.length ? [`Area catches: ${areaAim.caught.join(", ")}`] : []), ...(liveMeasure?.caught.length ? [`Measured: ${liveMeasure.caught.map(entry => entry.name).join(", ")}`] : [])], error, pending: busy || endingTurn || Boolean(handStatus?.sending),
     controls: prompt && tokensById.has(prompt.tokenId) ? [{ id: "prompt-submit", label: "Apply", disabled: null }, { id: "prompt-cancel", label: "Cancel input", disabled: null }] : [
-      ...(myTurn && !scene && !targeting ? [{ id: "end-turn" as const, label: "End turn", disabled: endingTurn ? "Ending turn…" : null }] : []),
+      ...(myTurn && !scene && !targeting ? [{ id: "end-turn" as const, label: "End turn", disabled: endingTurn ? "Ending turn…" : turnHeld ? turnHeldLine(turnHeld, true) : null }] : []),
       ...(undoFeet !== null && !targeting ? [{ id: "undo-move" as const, label: `Undo ${undoFeet} ft`, disabled: null }] : []),
       ...(!cameraLocked ? [{ id: "fit" as const, label: "Fit board", disabled: null }] : []),
       ...(canDirect ? [{ id: "camera-pull" as const, label: "Bring everyone here", disabled: null }, { id: "camera-lock" as const, label: "Lock view", disabled: null }, { id: "camera-free" as const, label: "Free view", disabled: null }] : []),
@@ -1226,6 +1268,18 @@ export function BattleMapPanel({
     }
   }
 
+  // Below the docked layout the board has no margin for the order to stand in,
+  // so it takes a row above the board. An addon's own view keeps its list on
+  // the frame: that view lays out its own board.
+  const orderAbove = !docked && !addonViewport;
+  const orderAboveBoard = orderAbove && !scene && encounter ? (
+    <InitiativeRail above encounter={encounter} round={view.round} faceOf={faceOfEntry} onOpen={() => setOrderOpen(true)} />
+  ) : null;
+  // On a phone on its side that row would come off a board already short, so
+  // the order shares a row that is there anyway: the tools, or for a player
+  // the heading. The native battlefield draws neither, so it keeps its own.
+  const orderInRow = shortWindow && !nativeBattlefieldActive;
+
   // The painted picture is one canvas, and a DOM node sits in one place: the
   // board on screen carries it (the open tabletop covers the panel). Both
   // boards drawing it let the tabletop take it and close with it, leaving
@@ -1254,6 +1308,15 @@ export function BattleMapPanel({
         if (action) { event.preventDefault(); controlAddonCamera(action); }
       }}
       onPointerDownCapture={onFramePointerDownCapture}
+      // The camera places everything in the frame, so the frame itself never
+      // scrolls: focus on a control the frame cuts off (a dial sigil at the
+      // edge, by Tab or a dialog handing focus back) scrolled it, and with
+      // overflow hidden nothing scrolled it back, leaving every square off
+      // from where the board drew it.
+      onScroll={(event) => {
+        const frame = event.currentTarget;
+        if (frame.scrollTop || frame.scrollLeft) frame.scrollTo(0, 0);
+      }}
       onPointerMove={(event) => {
         if (!addonViewport) { cam.frameProps.onPointerMove(event); onFramePointerMove(event); }
       }}
@@ -1289,7 +1352,10 @@ export function BattleMapPanel({
           }
           onTokenClick={handleToken}
           onTokenHover={(tokenId) => {
-            setPlateTokenId(tokenId);
+            if (!plateHeld) {
+              setPlateTokenId(tokenId);
+              setPlatePinned(false);
+            }
             if (targeting) {
               setAimHoverId(tokenId && aimTargets.some((entry) => entry.token.id === tokenId) ? tokenId : null);
             }
@@ -1395,7 +1461,12 @@ export function BattleMapPanel({
                 boardHeight={view.height}
                 footprint={view.tokenFootprint[hudToken.id] ?? 1}
                 anchor={anchor}
-                actions={targeting ? [] : hudActions}
+                camera={addonViewport ? undefined : cam.camera}
+                // Choosing a target or a teleport's tile, the dial keeps only
+                // its hint and Close: its sigils hold their size at any zoom,
+                // so zoomed out they lay over the very squares around the
+                // figure that are being picked.
+                actions={targeting || teleporting === hudToken.id ? [] : hudActions}
                 hint={
                   targeting
                     ? targeting === "attack"
@@ -1432,6 +1503,7 @@ export function BattleMapPanel({
           <Anchored store={anchorsOf(expanded)} tokenId={plateToken.id}>
             {(anchor) => (
               <TokenPlate
+                key={plateToken.id}
                 token={plateToken}
                 boardWidth={view.width}
                 boardHeight={view.height}
@@ -1441,6 +1513,8 @@ export function BattleMapPanel({
                 health={view.tokenHealth[plateToken.id]}
                 conditions={view.tokenConditions[plateToken.id]}
                 edge={plateToken.kind === "enemy" ? view.edges?.[plateToken.refId] : undefined}
+                pinned={platePinned}
+                onClose={closePlate}
               />
             )}
           </Anchored>
@@ -1449,7 +1523,7 @@ export function BattleMapPanel({
       {/* The chrome of the stage (BoardChrome.tsx), fixed to the frame so it
           stays put while the camera moves under it. */}
       {!nativeHudActive ? <>
-      {!scene && encounter ? (
+      {!scene && encounter && !orderAbove ? (
         <InitiativeRail
           namesOnly={addonViewport}
           encounter={encounter}
@@ -1477,8 +1551,8 @@ export function BattleMapPanel({
       {fieldRoll ? <FieldDie label={fieldRoll.label} /> : null}
       <BoardMoveNotes notes={moveNotes.notes} />
       {targeting ? (
-        <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2.5 rounded-[10px] border border-[rgba(224,112,58,0.5)] bg-[rgba(13,11,28,0.94)] px-3 py-1.5 shadow-elev-2">
-          <span className="whitespace-nowrap font-display text-[10px] font-semibold uppercase tracking-[0.18em] text-[#ffbe8f]">
+        <div className="board-foot-note absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2.5 rounded-[10px] border border-[rgba(224,112,58,0.5)] bg-[rgba(13,11,28,0.94)] px-3 py-1.5 shadow-elev-2">
+          <span className="whitespace-nowrap font-display text-[10px] font-semibold uppercase tracking-[0.14em] text-[#ffbe8f]">
             {targeting === "attack" ? "Attack" : "Cast"} · pick a target
           </span>
           <button
@@ -1491,7 +1565,7 @@ export function BattleMapPanel({
             className="motion-press rounded-md border border-[rgba(107,99,148,0.5)] bg-[rgba(21,18,41,0.8)] px-2 py-0.5 text-[#aeaac6] hover:text-[#e9e6f4]"
           >
             {/* The size sits on a span: globals.css resets a button's own font. */}
-            <span className="font-mono text-[11px]">esc</span>
+            <span className="font-code text-[11px]">esc</span>
           </button>
         </div>
       ) : null}
@@ -1519,11 +1593,13 @@ export function BattleMapPanel({
           <button
             type="button"
             onClick={() => void endTurn()}
-            disabled={endingTurn}
+            disabled={endingTurn || Boolean(turnHeld)}
+            aria-busy={turnHeld ? true : undefined}
             className={TURN_BUTTON}
           >
-            <span className="block font-display text-[10px] font-semibold uppercase tracking-[0.16em]">End turn</span>
+            <span className="block font-display text-[10px] font-semibold uppercase tracking-[0.16em]">{turnHeld ? "Ending turn…" : "End turn"}</span>
           </button>
+          {turnHeld ? <TurnHoldNote held={turnHeld} mine className="max-w-56 rounded bg-black/60 px-2 py-1" /> : null}
         </div>
       ) : null}
       {/* Camera controls: corner buttons for everyone, the DM's pull and
@@ -1539,7 +1615,7 @@ export function BattleMapPanel({
       </div>
       {cam.locked ? null : <BoardKeyStrip />}
       {cam.locked ? (
-        <div className="absolute bottom-2 left-2 z-10 flex items-center gap-2 rounded-md border border-amber-800/60 bg-stone-950/90 px-2 py-1 text-[11px] text-amber-200 shadow-elev-1">
+        <div className="board-foot-note absolute bottom-2 left-2 z-10 flex items-center gap-2 rounded-md border border-amber-800/60 bg-stone-950/90 px-2 py-1 text-[11px] text-amber-200 shadow-elev-1">
           <Lock className="size-3" />
           The GM is steering the view
           {cam.canRelease ? (
@@ -1569,30 +1645,34 @@ export function BattleMapPanel({
         stored={viewOptions}
         onOption={setViewOption}
       />
-      <BoardMoveHints
-        moveMode={moveMode}
-        moves={!canDirect && canMove && !areaAim.active ? view.moves : undefined}
-        onMode={setMoveMode}
-        areaHint={areaAim.hint}
-        caught={areaAim.caught}
-      />
-      <p className="text-[11px] leading-4 text-stone-500">
-        {boardHintText({
-          canDirect,
-          tool,
-          teleporting: Boolean(teleporting),
-          held: Boolean(held),
-          liveOrigin: Boolean(liveOrigin),
-          pointing,
-          drawing,
-          targeting: Boolean(targeting),
-          canMove,
-          moveAimed: Boolean(livePending),
-          scene,
-          budgetLeft: view.budgetLeft,
-          hasToken: Boolean(view.myTokenId),
-        })}
-      </p>
+      {/* One row on the fight stage, the hint beside the move modes
+          (world.css); stacked everywhere else, as they were. */}
+      <div className="board-under-row space-y-2">
+        <BoardMoveHints
+          moveMode={moveMode}
+          moves={!canDirect && canMove && !areaAim.active ? view.moves : undefined}
+          onMode={setMoveMode}
+          areaHint={areaAim.hint}
+          caught={areaAim.caught}
+        />
+        <p className="board-hint text-[11px] leading-4 text-stone-500">
+          {boardHintText({
+            canDirect,
+            tool,
+            teleporting: Boolean(teleporting),
+            held: Boolean(held),
+            liveOrigin: Boolean(liveOrigin),
+            pointing,
+            drawing,
+            targeting: Boolean(targeting),
+            canMove,
+            moveAimed: Boolean(livePending),
+            scene,
+            budgetLeft: view.budgetLeft,
+            hasToken: Boolean(view.myTokenId),
+          })}
+        </p>
+      </div>
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
       {targeting ? (
         <TargetChips
@@ -1648,8 +1728,11 @@ export function BattleMapPanel({
     // the shared screen, the side panel and the phone) its header and footer
     // stay put and the board takes what is left (world.css, issue 87).
     <div className="board-panel space-y-2">
-      {!nativeBattlefieldActive ? <div className="flex items-center justify-between">
-        <h3 className="flex items-center gap-1.5 text-sm font-medium text-stone-200">
+      {/* board-head: on the fight stage the heading is read off the frame
+          (the order rail names the round, the turn HUD names whose turn) and
+          the tools ride on the board, so the row is the board's (world.css). */}
+      {!nativeBattlefieldActive ? <div className="board-head flex items-center justify-between">
+        <h3 className="board-head-title flex items-center gap-1.5 text-sm font-medium text-stone-200">
           {scene ? (
             <>
               <Footprints className="size-4 text-amber-400" />
@@ -1667,7 +1750,8 @@ export function BattleMapPanel({
             </>
           )}
         </h3>
-        <div className="flex items-center gap-1">
+        {orderInRow && !canDirect ? orderAboveBoard : null}
+        <div className="board-head-tools flex items-center gap-1">
           {playerTools}
           <button
             type="button"
@@ -1681,17 +1765,23 @@ export function BattleMapPanel({
         </div>
       </div> : null}
       {canDirect && !nativeBattlefieldActive ? (
-        <BoardToolRail
-          tool={tool}
-          onTool={(next) => {
-            setTool(next);
-            setHeld(null);
-            setTeleporting(null);
-            setMeasureOrigin(null);
-          }}
-          disabled={busy}
-        />
+        <div className="flex items-center gap-2">
+          {orderInRow ? orderAboveBoard : null}
+          <div className="min-w-0 flex-1">
+            <BoardToolRail
+              tool={tool}
+              onTool={(next) => {
+                setTool(next);
+                setHeld(null);
+                setTeleporting(null);
+                setMeasureOrigin(null);
+              }}
+              disabled={busy}
+            />
+          </div>
+        </div>
       ) : null}
+      {orderInRow ? null : orderAboveBoard}
       {gridWith(enlarged ? null : painted)}
       {canDirect && tool === "place" && !nativeBattlefieldActive ? (
         <PlaceTokenForm
@@ -1807,6 +1897,7 @@ export function BattleMapPanel({
                     On a narrow phone the strip scrolls rather than pushing
                     the close off the edge: it is the only way back. */}
                 <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+                  {orderInRow ? orderAboveBoard : null}
                   <PlayAsStrip
                     campaignId={campaignId}
                     sheets={sheets}
@@ -1825,6 +1916,7 @@ export function BattleMapPanel({
             <div className="cine-tabletop-body">
               {chronicle}
               <div className="flex min-w-0 flex-1 flex-col gap-2">
+                {orderInRow ? null : orderAboveBoard}
                 <div className="cine-board-frame">{gridWith(enlarged ? painted : null, true)}</div>
                 {underBoard}
               </div>

@@ -82,8 +82,21 @@ export const AUTHORED_CONDITION_ROWS: ConditionEffectRow[] = [
     attackAdvantage: true,
     consumedBy: "attack",
   },
+  // Held from the Hand or use_resource (src/lib/dm/destructive-wrath.ts): the
+  // chip on the party card says what it waits for.
+  summaryOnly("destructive_wrath", "destructive wrath", "Destructive Wrath: the next lightning or thunder damage they roll is dealt at its maximum; a rest ends it."),
   summaryOnly("drunkards_luck_check", "drunkard's luck (check)", "Drunkard's Luck: the next ability check cancels its disadvantage."),
   summaryOnly("drunkards_luck_save", "drunkard's luck (save)", "Drunkard's Luck: the next saving throw cancels its disadvantage."),
+  {
+    id: "tides_of_chaos_attack",
+    match: ["tides of chaos (attack)"],
+    summary: "Tides of Chaos: advantage on the next attack roll, which spends it.",
+    attackAdvantage: true,
+    consumedBy: "attack",
+  },
+  summaryOnly("tides_of_chaos_check", "tides of chaos (check)", "Tides of Chaos: advantage on the next ability check, which spends it."),
+  summaryOnly("tides_of_chaos_save", "tides of chaos (save)", "Tides of Chaos: advantage on the next saving throw, which spends it."),
+  summaryOnly("surge_chance", "surge chance", "Wild Magic Surge: a sorcerer spell was just cast with Tides of Chaos spent; if the GM has the sorcerer roll on the wild magic table now, Tides of Chaos comes back."),
   ...(["1d8", "1d10"] as const).map(
     (dice): ConditionEffectRow => ({
       id: `giants_might_${dice}`,
@@ -114,6 +127,26 @@ export const AUTHORED_CONDITION_ROWS: ConditionEffectRow[] = [
   summaryOnly("blessing_of_the_trickster", "blessing of the trickster", "Blessing of the Trickster: advantage on Stealth checks for an hour."),
   summaryOnly("vigilant_blessing", "vigilant blessing", "Vigilant Blessing: advantage on the next initiative roll."),
   summaryOnly("elegant_maneuver", "elegant maneuver", "Elegant Maneuver: advantage on the next Acrobatics or Athletics check this turn."),
+  {
+    id: "emissary_of_peace",
+    match: ["emissary of peace"],
+    summary: "Emissary of Peace: +5 to Persuasion checks for 10 minutes.",
+    skillBonus: { skill: "persuasion", bonus: 5 },
+  },
+  summaryOnly("peerless_athlete", "peerless athlete", "Peerless Athlete: advantage on Athletics and Acrobatics, extra carrying capacity and 10 extra feet of jump distance, for 10 minutes."),
+  {
+    id: "watchers_will",
+    match: ["watcher's will"],
+    summary: "Watcher's Will: advantage on Intelligence, Wisdom and Charisma saves for a minute.",
+    advantageOn: [
+      { kind: "save", ability: "int" },
+      { kind: "save", ability: "wis" },
+      { kind: "save", ability: "cha" },
+    ],
+  },
+  summaryOnly("champion_challenge", "champion challenge", "Champion Challenge: cannot willingly move more than 30 feet from the paladin who challenged it; ends if the paladin is incapacitated or dies, or it is more than 30 feet away."),
+  // Its turn-end benefits are the cleric's row (turn_end_aura, authored-turns.ts).
+  summaryOnly("twilight_sanctuary", "twilight sanctuary", "Twilight Sanctuary: a 30-foot sphere of twilight around the cleric for a minute; a creature ending its turn in it loses a charm or fear, or gains temporary hit points."),
   summaryOnly(
     "corona_of_light",
     "corona of light",
@@ -181,6 +214,18 @@ export const AUTHORED_CONDITION_ROWS: ConditionEffectRow[] = [
     saveFlatAbility: "dex",
   },
   {
+    id: "abjured_still",
+    match: ["abjured still"],
+    summary: "Abjure Enemy: speed 0 for a minute or until it takes damage.",
+    speedMultiplier: 0,
+  },
+  {
+    id: "abjured_slowed",
+    match: ["abjured slowed"],
+    summary: "Abjure Enemy: half speed for a minute or until it takes damage.",
+    speedMultiplier: 0.5,
+  },
+  {
     id: "held_in_place",
     match: ["held in place"],
     summary: "Held in place (Hold the Line): speed 0 for the rest of the turn.",
@@ -195,6 +240,7 @@ export const AUTHORED_CONDITION_ROWS: ConditionEffectRow[] = [
   summaryOnly("storm_aura", "storm aura", "Storm Aura: the raging Storm Herald's 10-foot aura (desert, sea or tundra)."),
   summaryOnly("fanatical_focus_spent", "fanatical focus spent", "Fanatical Focus is spent until this rage ends."),
   summaryOnly("elder_champion", "elder champion", "Elder Champion: 10 hit points at the start of each turn, and enemies within 10 feet save at disadvantage against the paladin."),
+  summaryOnly("vow_of_enmity", "vow of enmity", "Vow of Enmity: advantage on attacks against the creature vowed against, for a minute."),
   summaryOnly("avenging_angel", "avenging angel", "Avenging Angel: a 60-foot flying speed for an hour, and a 30-foot aura of menace that frightens enemies who fail a Wisdom save."),
   {
     id: "menaced_by_an_avenging_angel",
@@ -316,6 +362,7 @@ export const AUTHORED_CONDITION_ROWS: ConditionEffectRow[] = [
   summaryOnly("emissary_lapsed", "emissary lapsed", "Emissary of Redemption is set aside until a long rest: the paladin attacked or harmed a creature."),
   summaryOnly("spurned_by_redemption", "spurned by redemption", "The Redemption paladin attacked this creature: their Emissary of Redemption holds nothing against it until their long rest."),
   summaryOnly("withstood_among_the_dead", "withstood among the dead", "This undead made its save against the Undying warlock's Among the Dead and may attack them for 24 hours."),
+  summaryOnly("withstood_instinctive_charm", "withstood instinctive charm", "This creature resisted the Enchantment wizard's Instinctive Charm, which cannot sway it again until their long rest."),
   summaryOnly("pulled_by_perfected_armor", "pulled by perfected armor", "Perfected Armor: pulled up to 25 feet toward the Guardian armorer (move_token forced); if it lands within 5 feet, they may attack it as part of the reaction."),
   {
     id: "hearth_of_moonlight_and_shadow",
@@ -352,4 +399,5 @@ export const AUTHORED_CONDITION_ROWS: ConditionEffectRow[] = [
   summaryOnly("wildfire_spirit", "wildfire spirit", "The wildfire spirit is out: the druid's fire and healing spells gain 1d8 (Enhanced Bond)."),
   summaryOnly("slayers_prey_marked", "slayer's prey (marked)", "The Monster Slayer's prey: the ranger adds 1d6 to saves against its effects (Supernatural Defense)."),
   summaryOnly("struck_as_it_fled", "struck as it fled", "Relentless Avenger: the paladin's opportunity attack hit; they may move up to half their speed with use_reaction, drawing no opportunity attacks."),
+  summaryOnly("echo_manifested", "echo manifested", "Manifest Echo: the Echo Knight's echo is out (AC 14 + proficiency bonus, 1 hit point); Shadow Martyr can send it into an attack that hit another creature, and a hit that destroys it ends it."),
 ];

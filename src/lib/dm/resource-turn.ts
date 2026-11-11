@@ -18,6 +18,7 @@ import { conditionTurnShape } from "@/lib/srd/condition-effects";
 import { matchResource, type ResourceAction } from "@/lib/srd/class-resources";
 import { ACTION_SURGED, spendAction } from "@/lib/dm/action-budget";
 import { canAct } from "@/lib/dm/can-act";
+import { heldTurnRefusal } from "@/lib/dm/held-turn";
 import { readiedReleaseFor } from "@/lib/dm/readied-release";
 import { EMBODIMENT_MARK, LEVELLED_SPELL, SURGE_MARK } from "@/lib/dm/cast-rules";
 import {
@@ -28,7 +29,7 @@ import {
   storeBudget,
 } from "@/lib/dm/turn-budget";
 import { toolError, type ToolError, type ToolResult } from "@/lib/dm/tool-errors";
-import { holdsFeature } from "@/lib/srd/feature-names";
+import { counterCost } from "@/lib/srd/counter-rules";
 
 export type ResourceCharge =
   | ToolError
@@ -63,12 +64,12 @@ export function prepareResourceCharge(
   if (def.effect.kind === "wild_shape" && sheet.wildShape) {
     return FREE;
   }
+  // The cost the Hand's card shows, from the same place (counter-rules.ts):
   // Combat Wild Shape (Circle of the Moon) makes the change a bonus action.
-  const action =
-    def.effect.kind === "wild_shape" &&
-    holdsFeature(sheet, "Combat Wild Shape")
-      ? "bonus"
-      : def.action;
+  const action = override ? def.action : counterCost(def, sheet);
+  if (!action) {
+    return FREE;
+  }
   if (action === "reaction") {
     return prepareReaction(encounter, sheet, def.displayName);
   }
@@ -84,6 +85,10 @@ export function prepareResourceCharge(
   const able = canAct({ sheet, encounter, kind });
   if (!able.ok) {
     return toolError(able);
+  }
+  const heldOff = heldTurnRefusal(encounter, sheet);
+  if (heldOff) {
+    return heldOff;
   }
   if (def.id === "action_surge") {
     // SRD 5.1 fighter, Action Surge: "only once on the same turn", whatever

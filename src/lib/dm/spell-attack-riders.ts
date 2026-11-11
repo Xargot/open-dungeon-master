@@ -18,16 +18,16 @@
 // A "until the start of" effect is untilTurnOf; a "before the end of" one is
 // untilTurnEndOf, ended as that turn ends (src/lib/dm/turn-end.ts).
 
+import { regainHitPoints } from "@/lib/dm/regain";
 import { getFoe } from "@/lib/dm/sheet-foe";
-import { allocateSeq, type Campaign } from "@/lib/db/campaigns";
+import type { Campaign } from "@/lib/db/campaigns";
 import { patchEnemyConditions } from "@/lib/db/encounters";
-import { insertSheetAudit } from "@/lib/db/sheet-audit";
-import { getSheetById, patchSheet } from "@/lib/db/sheets";
-import { publishPersisted } from "@/lib/events";
-import { effectiveMaxHp, type ConditionMetaMap } from "@/lib/dm/condition-logic";
+import { getSheetById } from "@/lib/db/sheets";
+import type { ConditionMetaMap } from "@/lib/dm/condition-logic";
 import { publishEncounter } from "@/lib/dm/enemy-damage";
 import { untilTurnEnd } from "@/lib/dm/turn-end";
 import { layEnfeeblement } from "@/lib/dm/spell-retort";
+import { connectBeam } from "@/lib/dm/witch-bolt";
 import { layAreaConditions } from "@/lib/dm/spell-riders";
 import { spellAuthorsFor } from "@/lib/dm/spell-authors";
 import { spellMechanicsFor } from "@/lib/content";
@@ -49,6 +49,8 @@ type SpellAttackRider = {
   // The hit lays a condition the target shakes off with a save at the end of
   // each of its turns (Ray of Enfeeblement), against the caster's DC.
   saveEnds?: { condition: string; ability: "con" };
+  // The hit connects a beam, and a miss ends the spell (src/lib/dm/witch-bolt.ts).
+  beam?: string;
   // The hit lays the spell row's own condition with its end-of-turn mark
   // (Contagion's poison and its count of saves), named by the spell.
   rowCondition?: string;
@@ -65,6 +67,7 @@ const RIDERS: SpellAttackRider[] = [
   { match: /^(?:melf's )?acid arrow$/i, halfOnMiss: true, onHit: { condition: "acid arrow", until: "target", at: "end" } },
   { match: /^ray of enfeeblement$/i, saveEnds: { condition: "enfeebled", ability: "con" } },
   { match: /^contagion$/i, rowCondition: "Contagion" },
+  { match: /^witch bolt$/i, beam: "Witch Bolt" },
 ];
 
 export function spellAttackRider(spell: string | undefined): SpellAttackRider | null {
@@ -83,6 +86,9 @@ export function applySpellHitCondition(
   enemyId: string,
   casterId: string,
 ): string | null {
+  if (rider.beam) {
+    return connectBeam(campaign, enemyId, casterId, rider.beam);
+  }
   if (rider.saveEnds) {
     return layEnfeeblement(campaign, rider.saveEnds, enemyId, casterId);
   }
@@ -141,26 +147,11 @@ export function healCasterHalf(campaign: Campaign, casterId: string, dealt: numb
   if (!sheet || amount <= 0 || sheet.currentHp <= 0) {
     return null;
   }
-  const currentHp = Math.min(effectiveMaxHp(sheet), sheet.currentHp + amount);
-  if (currentHp === sheet.currentHp) {
+  // Under the heal tool's rules (regain.ts): a caster Chill Touch grips, or in
+  // a beast form, is healed as any heal would heal them.
+  const gained = regainHitPoints(campaign, null, sheet, amount, `${spell}: half the necrotic damage dealt`);
+  if (gained <= 0) {
     return null;
   }
-  const patch = { currentHp };
-  const updated = patchSheet(sheet.id, patch);
-  const entry = insertSheetAudit({
-    campaignId: campaign.id,
-    characterId: sheet.id,
-    turnId: null,
-    kind: "heal",
-    delta: { amount: currentHp - sheet.currentHp, currentHp },
-    reason: `${spell}: half the necrotic damage dealt`,
-    seq: allocateSeq(campaign.id),
-    before: sheet,
-    patch,
-  });
-  publishPersisted(campaign.id, "sheet_audit", { entry, characterName: sheet.name });
-  if (updated) {
-    publishPersisted(campaign.id, "sheet_updated", { sheet: updated });
-  }
-  return `${spell}: ${sheet.name} regains ${currentHp - sheet.currentHp} hit points`;
+  return `${spell}: ${sheet.name} regains ${gained} hit points`;
 }

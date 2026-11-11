@@ -5,18 +5,22 @@
 // which holds the attack moments.
 
 import type { Campaign } from "@/lib/db/campaigns";
-import { getEnemy, type Encounter } from "@/lib/db/encounters";
+import { getActiveEncounter, getEnemy, type Encounter } from "@/lib/db/encounters";
 import { getSheetById, listSheets } from "@/lib/db/sheets";
 import { patchSheetAudited } from "@/lib/dm/audited-patch";
 import { computeSheetDerived } from "@/lib/srd";
 import { activeAuthored, resolveFormula } from "@/lib/srd/authored-effects";
-import { effectiveMaxHp, type ConditionMetaMap } from "@/lib/dm/condition-logic";
+import { effectiveMaxHp, incapacitatedBy, removeConditionInstances, removeConditions, type ConditionMetaMap } from "@/lib/dm/condition-logic";
 import { hurtEnemy } from "@/lib/dm/spell-aura";
 import { withinFeet } from "@/lib/dm/authored-saves";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { rollCard, sheetAttacker } from "@/lib/dm/roll-card";
 import { rollAgainst } from "@/lib/roll-labels";
 import { textKey } from "@/lib/language/text-logic";
+import { isConditionNamed } from "@/lib/srd/feature-names";
+import { withActor } from "@/lib/dm/acting-party";
+import { regainHitPoints } from "@/lib/dm/regain";
+import { risesWithVengeance, searingVengeance } from "@/lib/dm/searing-vengeance";
 
 function fielded(campaignId: string): CharacterSheet[] {
   return listSheets(campaignId)
@@ -42,18 +46,9 @@ function reach(range: number | Array<[number, number]>, level: number): number {
 }
 
 function heal(campaign: Campaign, sheet: CharacterSheet, amount: number): number {
-  const max = effectiveMaxHp(sheet);
-  const currentHp = Math.min(max, sheet.currentHp + Math.max(0, amount));
-  if (currentHp === sheet.currentHp) {
-    return 0;
-  }
-  // Audited: the turn that moved the pointer takes it back (issue #622).
-  patchSheetAudited(campaign.id, sheet.id, { currentHp }, {
-    kind: "heal",
-    reason: "a feature, as their turn starts",
-    delta: { amount: currentHp - sheet.currentHp, newHp: currentHp },
-  });
-  return currentHp - sheet.currentHp;
+  // Under the heal tool's rules (regain.ts), audited: the turn that moved the
+  // pointer takes it back (issue #622).
+  return regainHitPoints(campaign, null, sheet, amount, "a feature, as their turn starts");
 }
 
 function setTempHp(campaign: Campaign, sheet: CharacterSheet, amount: number): boolean {
@@ -75,6 +70,11 @@ export function authoredTurnStart(campaign: Campaign, encounter: Encounter, comb
   for (const id of combatantIds) {
     const sheet = getSheetById(id);
     if (sheet && !sheet.deathSaves?.dead) {
+      // A dying warlock's turn the pointer stopped on starts with the rise
+      // their death save would have been (searing-vengeance.ts).
+      if (risesWithVengeance(sheet)) {
+        lines.push(...searingVengeance(campaign, sheet));
+      }
       for (const { effect, held } of activeAuthored(sheet, "turn_heal")) {
         if (effect.when !== "start") {
           continue;
@@ -108,7 +108,8 @@ export function authoredTurnStart(campaign: Campaign, encounter: Encounter, comb
         }
         const amount = rollCard(campaign, null, holder.id, "damage", rollAgainst(held.feature, live.displayName), resolveFormula(effect.formula, held.level, modsOf(holder)), sheetAttacker(holder)).total;
         if (amount > 0) {
-          lines.push(hurtEnemy(campaign, encounter, live, amount, effect.type, held.feature));
+          // The feature's holder is whose damage it is (acting-party.ts).
+          lines.push(withActor({ kind: "sheet", ref: holder.id }, () => hurtEnemy(campaign, encounter, live, amount, effect.type, held.feature)));
         }
       }
     }
@@ -116,9 +117,10 @@ export function authoredTurnStart(campaign: Campaign, encounter: Encounter, comb
   return lines;
 }
 
-// Combatants whose turns are ending: Protective Spirit.
+// Combatants whose turns are ending: Protective Spirit, Twilight Sanctuary.
 export function authoredTurnEnd(campaign: Campaign, combatantIds: string[]): string[] {
   const lines: string[] = [];
+  lines.push(...turnEndAuras(campaign, combatantIds));
   for (const id of combatantIds) {
     const sheet = getSheetById(id);
     if (!sheet || sheet.deathSaves?.dead || sheet.currentHp <= 0) {
@@ -136,6 +138,60 @@ export function authoredTurnEnd(campaign: Campaign, combatantIds: string[]): str
       const given = heal(campaign, now, amount);
       if (given > 0) {
         lines.push(`${held.feature}: ${now.name} regains ${given} hit points.`);
+      }
+    }
+  }
+  return lines;
+}
+
+// Twilight Sanctuary: a character who ends a turn in the cleric's sphere loses
+// one charm or fear on them or, with none, gains temporary hit points. The text
+// leaves the pick to the cleric; ending the charm or fear is the pick that
+// matters whenever there is one, and temporary hit points never stack, so the
+// lower roll changes nothing. Before this the sanctuary spent the use and the
+// GM had to remember it every turn for a minute.
+function turnEndAuras(campaign: Campaign, combatantIds: string[]): string[] {
+  const lines: string[] = [];
+  const encounter = getActiveEncounter(campaign.id);
+  // The sanctuary ends with its cleric incapacitated or dead, not only waits:
+  // stunned for a round, the cleric's sphere does not come back.
+  for (const stale of listSheets(campaign.id)) {
+    const holder = getSheetById(stale.id) ?? stale;
+    if (!(holder.deathSaves?.dead || holder.currentHp <= 0 || incapacitatedBy(holder.conditions))) {
+      continue;
+    }
+    for (const { effect, held } of activeAuthored(holder, "turn_end_aura")) {
+      const gate = effect.gate && "condition" in effect.gate ? effect.gate.condition : undefined;
+      const now = getSheetById(holder.id) ?? holder;
+      const ended = gate ? now.conditions.filter((entry) => isConditionNamed(entry, gate)) : [];
+      if (ended.length) {
+        const cleared = removeConditions(now.conditions, now.conditionMeta, ended);
+        patchSheetAudited(campaign.id, now.id, { conditions: cleared.conditions, conditionMeta: cleared.meta }, { kind: "set_condition", reason: `${held.feature} ends`, delta: { removed: ended.join(", ") } });
+        lines.push(`${held.feature} ends: ${now.name} is ${now.deathSaves?.dead ? "dead" : "incapacitated"}.`);
+      }
+    }
+  }
+  const holders = fielded(campaign.id).filter((holder) => !incapacitatedBy(holder.conditions) && activeAuthored(holder, "turn_end_aura").length);
+  for (const id of combatantIds) {
+    for (const holder of holders) {
+      for (const { effect, held } of activeAuthored(holder, "turn_end_aura")) {
+        const now = getSheetById(id);
+        if (!now || now.deathSaves?.dead || (encounter && !withinFeet(encounter.id, holder.id, id, effect.rangeFt))) {
+          continue;
+        }
+        const ending = effect.ends.find((name) => now.conditions.some((entry) => isConditionNamed(entry, name)));
+        if (ending) {
+          // One effect: a second charm from another source holds.
+          let taken = false;
+          const next = removeConditionInstances(now.conditions, now.conditionMeta as ConditionMetaMap, ending, () => !taken && (taken = true));
+          patchSheetAudited(campaign.id, id, { conditions: next.conditions, conditionMeta: next.meta }, { kind: "set_condition", reason: `${held.feature} (${holder.name})`, delta: { removed: ending } });
+          lines.push(`${held.feature}: ${now.name} is no longer ${ending}${next.ended ? "" : " by one of its sources"}.`);
+          continue;
+        }
+        const amount = rollCard(campaign, null, holder.id, "custom", `${held.feature}: temporary hit points`, resolveFormula(effect.tempHp, held.level, modsOf(holder)), null).total;
+        if (setTempHp(campaign, now, amount)) {
+          lines.push(`${held.feature}: ${now.name} gains ${amount} temporary hit points.`);
+        }
       }
     }
   }

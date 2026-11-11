@@ -44,8 +44,10 @@ export const magicItemEffectSchema = z.discriminatedUnion("kind", [
     kind: z.literal("weapon_rider"),
     weapons: z.array(z.string()),
     ranged: z.boolean().optional(),
+    attack: z.number().optional(),
     damage: z.number().optional(),
     proficient: z.boolean().optional(),
+    unarmed: z.object({ die: z.string(), damageType: z.string() }).optional(),
   }),
 ]);
 
@@ -121,7 +123,9 @@ export const homebrewDataSchema = z
     // spell hints
     level: z.number().int().min(0).max(9).optional(),
     school: z.string().trim().max(40).optional(),
-    classes: z.array(z.string().trim().max(40)).max(20).optional(),
+    // Class ids: an SRD class's ("wizard") or a workshop class's
+    // ("homebrew-" and its 36-letter entry id, issue #833), which 40 cut.
+    classes: z.array(z.string().trim().max(60)).max(20).optional(),
     ritual: z.boolean().optional(),
     concentration: z.boolean().optional(),
     // item hints

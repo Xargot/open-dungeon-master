@@ -1,5 +1,6 @@
 "use client";
 
+import type { ThrownRoll } from "@/lib/dm/after-roll-logic";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { isHaltedTurnNotice, type CampaignMember, type SessionUser } from "@/lib/campaign-types";
 import type { CoordinationPhase } from "@/lib/dm/coordination-logic";
@@ -22,6 +23,7 @@ import type { Campaign } from "@/lib/db/campaigns";
 import type { Chapter } from "@/lib/db/chapters";
 import type { CharacterEvent } from "@/lib/db/character-events";
 import type { ClockTurn } from "@/lib/db/clock-moves";
+import type { TurnChangeView } from "@/lib/db/turn-changes";
 import { changesWindow } from "@/lib/sheet-audit-logic";
 import type { PublicEncounter } from "@/lib/db/encounter-view";
 import type { CampaignMessage } from "@/lib/db/messages";
@@ -44,12 +46,14 @@ import { DEPARTING_KEPT_MS, type DepartingSheet } from "@/app/campaigns/[campaig
 import type { DmJobView } from "@/lib/dm/job-stage-logic";
 import type { VoiceRosterEntry } from "@/lib/voice/types";
 import { navigateTo } from "@/lib/navigation";
+import { announceDmStatus } from "@/lib/dm-status-event";
 import { registerBrowserSpecies } from "@/lib/srd/race-id";
 import { registerBrowserSubclassExtras, type SubclassExtras } from "@/lib/srd/subclass-tables";
 import { registerBrowserTableFeats } from "@/lib/srd/feat-effects";
 import type { TableBreak } from "@/lib/dm/table-break-logic";
 import { sessionHoldFrom, type SessionHold } from "@/lib/dm/session-hold-logic";
 import { registerWorkshopClasses } from "@/lib/classes/workshop-registry";
+import { revealIsNews, STAGE_HEARD_MAX } from "@/lib/dice/roll-stage-logic";
 import type { WorkshopClass } from "@/lib/homebrew/class-data";
 
 export type DmStatus =
@@ -79,6 +83,12 @@ export type NarrationStatus = {
 
 export type PendingRoll = {
   id: string;
+  parkedFor?: string | null;
+  status?: string;
+  // A watch stop (src/lib/dm/foresight.ts): what it waits on, which feature
+  // it is for, and whose roll it may answer when there is more than one
+  // (`when`: the words a Chronal Shift waits for, "if it succeeds").
+  watch?: { line: string; deadline: string; power?: "portent" | "chronal_shift" | "flash_of_genius" | "favored_by_the_gods"; choices?: Array<{ name: string; when: string }> } | null;
   userId: string;
   characterId: string | null;
   kind: string;
@@ -87,6 +97,8 @@ export type PendingRoll = {
   advantage: string;
   dc: number | null;
   reason: string;
+  // The dice already thrown, waiting on the roller's after-the-roll choice.
+  thrown?: ThrownRoll | null;
   createdAt: string;
 };
 
@@ -209,6 +221,9 @@ export type CampaignState = {
   auditLog: AuditEntry[];
   // The GM turns whose time the event log can still put back (issue #622).
   clockTurns: ClockTurn[];
+  // What else those turns kept for their revert: a prepared event, a test
+  // die, a card resolved as played (issue 685).
+  turnChanges: TurnChangeView[];
   levelUps: LevelUpNotice[];
   locations: CampaignLocation[];
   chapters: Chapter[];
@@ -231,6 +246,10 @@ export type CampaignState = {
   // Bumped by the contentless relationships_updated ephemeral; the Bonds
   // panel fetches its own tier-scoped view when this changes.
   relationshipsVersion: number;
+  // Bumped by each cast_updated: the GM console's people list reads its
+  // full records again, so a person the story adds or renames shows there
+  // without leaving the tab (issue 733).
+  castVersion: number;
   // Lasting companions whose sheet just went with sheet_deleted's
   // `departed` (issue 503): the Party panel dims each card and moves it to
   // its Gone list (PartyGone.tsx). Kept briefly, never persisted.
@@ -308,10 +327,10 @@ export type CampaignState = {
   // `live` marks a passage offered while it is still being rendered
   // (tts_stream): heard now, by whoever is at the table now.
   latestTts: { messageId: string; url: string; seq: number; live?: boolean } | null;
-  latestRoll: { roll: StoredRoll; source: string; seq: number } | null;
-  // The last few rolls, oldest first, for the 3D dice: two rolls handled in
-  // one render (an enemy's attack and its damage) used to animate only the
-  // second, because latestRoll holds one (issue 668).
+  // The last few rolls, oldest first, for the dice stage (the 3D dice and the
+  // roll toast): two rolls handled in one render (an enemy's attack and its
+  // damage) used to animate only the second (issue 668), and a burst of more
+  // than six lost its oldest before the stage heard it (issue 843).
   recentRolls: { roll: StoredRoll; source: string; seq: number }[];
   lastSeq: number;
   dmStatus: DmStatus;
@@ -389,6 +408,7 @@ const initialState: CampaignState = {
   pendingRolls: [],
   auditLog: [],
   clockTurns: [],
+  turnChanges: [],
   levelUps: [],
   locations: [],
   chapters: [],
@@ -403,6 +423,7 @@ const initialState: CampaignState = {
   asksLoaded: false,
   facts: [],
   relationshipsVersion: 0,
+  castVersion: 0,
   departingSheets: [],
   factionsVersion: 0,
   worldVersion: 0,
@@ -432,7 +453,6 @@ const initialState: CampaignState = {
   sessionHold: null,
   narrationAudio: {},
   latestTts: null,
-  latestRoll: null,
   recentRolls: [],
   lastSeq: 0,
   dmStatus: "idle",
@@ -604,22 +624,27 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
           }
           return next;
         }
-        case "roll_result":
+        case "roll_result": {
+          const roll = payload.roll as StoredRoll;
+          const held = state.rolls.find((entry) => entry.id === roll.id) as (StoredRoll & { hidden?: boolean }) | undefined;
           // A hidden roll revealed (issue 503) arrives again under its own id:
           // it replaces the copy its player had, rather than doubling it.
-          next.rolls = [...state.rolls.filter((entry) => entry.id !== (payload.roll as StoredRoll).id).slice(-30), payload.roll as StoredRoll];
-          next.latestRoll = {
-            roll: payload.roll as StoredRoll,
-            source: String(payload.source ?? "digital"),
-            seq: action.seq ?? 0,
-          };
-          next.recentRolls = [...state.recentRolls.slice(-5), next.latestRoll];
+          next.rolls = [...state.rolls.filter((entry) => entry.id !== roll.id).slice(-30), roll];
+          // The stage throws and toasts it only where it is news: the roller
+          // and the GM watched it land the first time (issue 843).
+          if (!payload.revealed || revealIsNews(held)) {
+            next.recentRolls = [
+              ...state.recentRolls.slice(-(STAGE_HEARD_MAX - 1)),
+              { roll, source: String(payload.source ?? "digital"), seq: action.seq ?? 0 },
+            ];
+          }
           if (payload.pendingRollId) {
             next.pendingRolls = state.pendingRolls.filter(
               (pending) => pending.id !== payload.pendingRollId,
             );
           }
           return next;
+        }
         case "beat_recorded": {
           const beat = payload.beat as DmBeat | undefined;
           // Only the DM seat is given a beat list to append to; for everyone
@@ -633,7 +658,10 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
         case "roll_pending": {
           const pending = payload.pendingRoll as PendingRoll | undefined;
           if (pending) {
-            next.pendingRolls = upsertBy(state.pendingRolls, pending, (entry) => entry.id);
+            // A watch stop closes with no roll to say so.
+            next.pendingRolls = pending.status && pending.status !== "pending"
+              ? state.pendingRolls.filter((entry) => entry.id !== pending.id)
+              : upsertBy(state.pendingRolls, pending, (entry) => entry.id);
           }
           return next;
         }
@@ -852,7 +880,9 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
         }
         case "cast_updated":
           next.cast = Array.isArray(payload.cast) ? (payload.cast as CastMember[]) : state.cast;
+          next.castVersion = state.castVersion + 1;
           return next;
+        // An older host's painted face; a newer one sends it in the cast.
         case "npc_updated":
           next.cast = state.cast.map((member) =>
             member.id === payload.npcId && typeof payload.portraitUrl === "string"
@@ -967,6 +997,23 @@ export function campaignReducer(state: CampaignState, action: Action): CampaignS
           }
           if (typeof payload.reverted === "string") {
             next.clockTurns = state.clockTurns.filter((entry) => entry.turnId !== payload.reverted);
+          }
+          return next;
+        }
+        // A turn kept something for its revert, or a revert took it back
+        // (issue 685): the event log offers the turn's revert while it stands.
+        case "turn_changed": {
+          const change = payload.change as TurnChangeView | null | undefined;
+          if (change?.id) {
+            next.turnChanges = upsertBy(state.turnChanges.slice(-50), change, (entry) => entry.id);
+          }
+          if (typeof payload.reverted === "string") {
+            next.turnChanges = state.turnChanges.filter((entry) => entry.turnId !== payload.reverted);
+          }
+          // One change a revert of an earlier turn wrote over (turn-rows.ts
+          // supersedeLaterRows): its turn stops offering the fight's revert.
+          if (typeof payload.removed === "string") {
+            next.turnChanges = state.turnChanges.filter((entry) => entry.id !== payload.removed);
           }
           return next;
         }
@@ -1207,6 +1254,9 @@ const PERSISTED_EVENTS = [
   // The clock moved or was put back; the event log reads the GM turn it
   // names (issue #622).
   "clock_changed",
+  // What a turn kept for its revert, or the revert that took it back (issue
+  // 685).
+  "turn_changed",
 ];
 const EPHEMERAL_EVENTS = [
   // A visual effect planned from a resolved outcome. Worthless after the
@@ -1424,6 +1474,7 @@ export function useCampaignStream(campaignId: string) {
           pendingRolls: data.pendingRolls ?? [],
           auditLog: data.auditLog ?? [],
           clockTurns: data.clockTurns ?? [],
+          turnChanges: data.turnChanges ?? [],
           locations: data.locations ?? [],
           chapters: data.chapters ?? [],
           notes: data.notes ?? [],
@@ -1707,6 +1758,11 @@ export function useCampaignStream(campaignId: string) {
             clearDmDraft();
           }
           dispatch({ type: "event", eventType, seq, payload });
+          // A control outside this state that follows the GM's turns (the
+          // test fight's turn trace) hears them here.
+          if (eventType === "dm_status") {
+            announceDmStatus(campaignId, payload.state);
+          }
           if (eventType === "note_suggested") {
             void refreshNotes();
           }

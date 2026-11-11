@@ -29,7 +29,7 @@ import { matchWeapon } from "@/lib/srd/weapons";
 import { magicWeaponOfRow } from "@/lib/dm/gear-attack";
 import { combatRiders } from "@/lib/srd/feature-effects";
 import { conditionBlocksReactions } from "@/lib/srd/condition-effects";
-import { critDamageExpression } from "@/lib/dm/encounter-logic";
+import { critDamageExpression, ordinaryOfCritical } from "@/lib/dm/encounter-logic";
 
 import { openLastHit } from "@/lib/dm/last-hit";
 import {
@@ -37,13 +37,15 @@ import {
   attackContext,
   effectiveSpeed,
   mergeAdvantage,
+  sightBlockedBy,
   type ConditionMetaMap,
 } from "@/lib/dm/condition-logic";
+import type { Senses } from "@/lib/srd/senses";
 import { acWithEffects } from "@/lib/dm/ac-effects";
 import { canAct, canEnemyAct } from "@/lib/dm/can-act";
 import { opportunityReactionKey } from "@/lib/srd/authored-effects-more";
 import { conditionsOf } from "@/lib/dm/vitals-logic";
-import { fearAsRolled, lightOnAttack } from "@/lib/dm/attack-light";
+import { attackSenses, characterSenses, enemySenses, fearAsRolled, lightOnAttack, sensesReaching } from "@/lib/dm/attack-light";
 import { opportunityWeapon } from "@/lib/dm/enemy-profile";
 import { opportunitySight, pcOpportunitySwing, withOpportunityTurn } from "@/lib/dm/opportunity-strike";
 import { martialArtsApplies } from "@/lib/dm/pc-attack-options";
@@ -93,10 +95,11 @@ export type OpportunityOutcome = {
 // Where a walk enters or leaves a reach (opportunity-reach-logic.ts).
 export { entersReachAt, leavesReachAt };
 
-const lowered = (conditions: string[]) => conditions.map((entry) => entry.toLowerCase());
-const cannotSee = (conditions: string[]) => lowered(conditions).includes("blinded");
-const cannotBeSeen = (conditions: string[]) =>
-  lowered(conditions).some((entry) => entry === "invisible" || entry === "hidden");
+// Only a creature the reactor can see provokes it: a blinded reactor, an
+// invisible or hidden leaver, past the blindsight or truesight that reaches
+// it (attack-light.ts sensesReaching, the rule every sight check reads).
+const unseenBy = (encounterId: string, viewer: { id: string; conditions: string[]; senses: Senses }, seen: { id: string; conditions: string[] }) =>
+  Boolean(sightBlockedBy(viewer.conditions, seen.conditions, sensesReaching(encounterId, { refId: viewer.id, senses: viewer.senses }, { refId: seen.id })));
 
 // Dodge is lost with the dodger's speed (SRD 5.1, Dodge): a grappled or
 // restrained dodger puts nobody at disadvantage.
@@ -147,8 +150,7 @@ export function resolveOpportunityAttacks(
     // the reaction away), and to see who is leaving.
     if (
       !canEnemyAct({ enemy, encounter, kind: "reaction" }).ok ||
-      conditionBlocksReactions(enemy.conditions) ||
-      cannotSee(enemy.conditions)
+      conditionBlocksReactions(enemy.conditions)
     ) {
       continue;
     }
@@ -176,7 +178,7 @@ export function resolveOpportunityAttacks(
     if (!sheet || sheet.currentHp <= 0) {
       break;
     }
-    if (cannotBeSeen(sheet.conditions)) {
+    if (unseenBy(encounter.id, { ...enemy, senses: enemySenses(enemy) }, sheet)) {
       continue;
     }
     // Mobile (and Skirmisher): a creature they attacked in melee this turn
@@ -201,6 +203,7 @@ export function resolveOpportunityAttacks(
     // only against an attacker they can see (attack-light.ts), as on
     // enemy_attack: an opportunity attack read neither.
     const context = attackContext({
+      ...attackSenses(encounter.id, { refId: enemy.id, senses: enemySenses(enemy) }, { refId: sheet.id, senses: characterSenses(sheet) }),
       attackerConditions: fearAsRolled(encounter.id, enemy.id, enemy.conditions, enemy.conditionMeta),
       targetConditions: withLiveDodge(conditionsOf(sheet)),
       melee: true,
@@ -227,7 +230,9 @@ export function resolveOpportunityAttacks(
       ...(attackEffect.disadvantage ? ["disadvantage" as const] : []),
     ]);
     const targetAc = acWithEffects(campaign.id, sheet);
-    const hitOutcome = rollExpression(d20Expression(attack.toHit + attackEffect.bonus, advantage));
+    const hitOutcome = rollExpression(d20Expression(attack.toHit + attackEffect.bonus, advantage), undefined, {
+      purpose: { roller: "enemy", kind: "attack", who: enemy.displayName },
+    });
     const hitRoll = insertRoll({
       campaignId: campaign.id,
       characterId: null,
@@ -259,6 +264,8 @@ export function resolveOpportunityAttacks(
       : attack.damage;
     const damageOutcome = rollExpression(
       damageEffect > 0 ? `${rolledDamage}+${damageEffect}` : damageEffect < 0 ? `${rolledDamage}-${-damageEffect}` : rolledDamage,
+      undefined,
+      { purpose: { roller: "enemy", kind: "damage", who: enemy.displayName } },
     );
     const damageRoll = insertRoll({
       campaignId: campaign.id,
@@ -288,6 +295,14 @@ export function resolveOpportunityAttacks(
     const magical = hasTrait(enemy.stats, "magicWeapons") || attack.magical === true;
     const blow = blowByType(attack, damageOutcome, crit);
     const rolled = enfeebledBlow(enemy, attack, false, Math.max(0, blow.amount));
+    // The blow without its critical dice when the natural 20 alone made it one,
+    // for a reaction that rolls the attack again (last-hit.ts plainOfReroll).
+    const plainRoll = adjudicated.crit && !context.autoCrit
+      ? ordinaryOfCritical(damageOutcome, damageEffect > 0 ? `${attack.damage}+${damageEffect}` : damageEffect < 0 ? `${attack.damage}-${-damageEffect}` : attack.damage, { multiplyNumeric: campaign.gameSettings.variantRules.criticalDamageMods })
+      : null;
+    const plainBlow = plainRoll ? blowByType(attack, plainRoll, false) : null;
+    const plainRaw = plainBlow ? enfeebledBlow(enemy, attack, false, Math.max(0, plainBlow.amount)) : 0;
+    const plain = plainBlow ? { raw: plainRaw, ...(plainBlow.parts ? { parts: scaledParts(plainBlow.parts, plainRaw) } : {}) } : undefined;
     const { landed, onHit } = withOpportunityTurn(campaign.id, (turn) => {
       const hitSheets = listSheets(campaign.id);
       const hitSheetsById = new Map(hitSheets.map((entry) => [entry.id, entry]));
@@ -307,7 +322,14 @@ export function resolveOpportunityAttacks(
       return { landed: applied, onHit: rider };
     });
     const updated = getSheetById(sheet.id);
-    hitLog.swing(hitOutcome, targetAc, { hit: true, crit, raw: rolled, advantage, ...(blow.type ? { type: blow.type } : {}), ...(blow.parts ? { parts: scaledParts(blow.parts, rolled) } : {}) });
+    // A critical's normal figure, for Sentinel at Death's Door (last-hit.ts).
+    const normalRoll = crit
+      ? ordinaryOfCritical(damageOutcome, damageEffect > 0 ? `${attack.damage}+${damageEffect}` : damageEffect < 0 ? `${attack.damage}-${-damageEffect}` : attack.damage, { multiplyNumeric: campaign.gameSettings.variantRules.criticalDamageMods })
+      : null;
+    const normalBlow = normalRoll ? blowByType(attack, normalRoll, false) : null;
+    const normalRaw = normalBlow ? enfeebledBlow(enemy, attack, false, Math.max(0, normalBlow.amount)) : 0;
+    const normal = normalBlow ? { raw: normalRaw, type: normalBlow.type ?? "", ...(normalBlow.parts ? { parts: scaledParts(normalBlow.parts, normalRaw) } : {}), from: rolled } : undefined;
+    hitLog.swing(hitOutcome, targetAc, { hit: true, crit, raw: rolled, advantage, ...(blow.type ? { type: blow.type } : {}), ...(blow.parts ? { parts: scaledParts(blow.parts, rolled) } : {}), ...(plain ? { plain } : {}), ...(normal ? { normal } : {}), ...(magical ? { flags: { magical: true } } : {}) });
     hitLog.close({ attacker: { kind: "enemy", id: enemy.id, name: enemy.displayName }, attack: `${attack.name} (opportunity attack)`, type: attack.type, ranged: false });
     if (updated && updated.currentHp <= 0 && !updated.wildShape) {
       downed = true;
@@ -412,8 +434,7 @@ export function resolvePcOpportunityAttacks(
     }
     if (
       !canAct({ sheet, encounter, kind: "reaction" }).ok ||
-      conditionBlocksReactions(sheet.conditions) ||
-      cannotSee(sheet.conditions)
+      conditionBlocksReactions(sheet.conditions)
     ) {
       continue;
     }
@@ -451,7 +472,7 @@ export function resolvePcOpportunityAttacks(
     if (!enemy || enemy.status !== "alive" || (isSheetFoe(enemy) && enemy.currentHp <= 0)) {
       break;
     }
-    if (cannotBeSeen(enemy.conditions)) {
+    if (unseenBy(encounter.id, { ...sheet, senses: characterSenses(sheet) }, enemy)) {
       continue;
     }
     // Only a creature they can see provokes it (attack-light.ts).

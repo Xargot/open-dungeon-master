@@ -40,7 +40,9 @@
    "ability": null,
    "proficiency": 2,
    "recharge": "long",
-   "guidance": "The shared pool behind every psionic feature of this subclass. Name the use in variant: Telekinetic Movement and Psychic Whispers take an action, Psychic Teleportation a bonus action; Psionic Strike and Psi-Bolstered Knack ride a hit or a check already made; Protective Field is a reaction (use_reaction). Every die returns on a long rest; once per short or long rest a bonus action regains one spent die (use_resource 'Psionic Recovery'). The die size grows with level: d6, then d8 at 5th, d10 at 11th and d12 at 17th."
+   "guidance": "The shared pool behind every psionic feature of this subclass. Name the use in variant: Telekinetic Movement and Psychic Whispers take an action, Psychic Teleportation a bonus action; Psionic Strike and Psi-Bolstered Knack ride a hit or a check already made; Protective Field is a reaction (use_reaction). Every die returns on a long rest; once per short or long rest a bonus action regains one spent die (use_resource 'Psionic Recovery'). The die size grows with level: d6, then d8 at 5th, d10 at 11th and d12 at 17th.",
+   "passive": true,
+   "options": true
   },
   {
    "id": "sub_psionic_recovery",
@@ -116,7 +118,8 @@
    "proficiency": 1,
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction forcing an attacker to reroll a hit against an ally within 60 feet."
+   "guidance": "Not spent with use_resource: use_reaction 'Runic Shield' when an attack hits an ally within 60 feet. The attacker rolls the d20 again and must use the new roll.",
+   "passive": true
   },
   {
    "id": "sub_unleash_incarnation",
@@ -154,7 +157,8 @@
    "ability": null,
    "recharge": "short",
    "action": "reaction",
-   "guidance": "A reaction making the echo the target of an attack aimed at another creature."
+   "guidance": "Use use_reaction 'Shadow Martyr' when an attack hits another creature, with that creature's targetCharacterId. The echo takes the attack and the hit becomes a miss. The server does not track the echo: refuse it when none is out, and remove the echo when the reply says so.",
+   "passive": true
   },
   {
    "id": "sub_warding_maneuver",
@@ -203,7 +207,8 @@
    "ability": "wis",
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction imposing disadvantage on one attack roll, against the cleric and, from 6th level, an ally within 30 feet."
+   "guidance": "Not spent with use_resource: use_reaction 'Warding Flare' when an attack hits the cleric or, with Improved Flare, a creature within 30 feet. The attack is rolled again at disadvantage.",
+   "passive": true
   },
   {
    "id": "sub_wrath_of_the_storm",
@@ -215,12 +220,8 @@
    "ability": "wis",
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction dealing 2d8 lightning or thunder damage to a creature that hit the cleric in melee, halved on a Dexterity save.",
-   "fx": {
-    "kind": "enemy_save",
-    "save": "dex",
-    "dice": "2d8"
-   }
+   "guidance": "Not spent with use_resource: use_reaction 'Wrath of the Storm' when a creature hits the cleric in melee. It takes 2d8 lightning or thunder (variant names one; else whichever hurts it more), halved on a Dexterity save.",
+   "passive": true
   },
   {
    "id": "sub_war_priest",
@@ -231,7 +232,7 @@
    "uses": 1,
    "ability": "wis",
    "recharge": "long",
-   "guidance": "A bonus-action weapon attack after taking the Attack action, made with pc_attack (bonusAttack \"feature\"); the attack spends the use."
+   "guidance": "A bonus-action weapon attack after taking the Attack action, made with pc_attack (feature \"War Priest\"); the attack spends the use."
   },
   {
    "id": "sub_eyes_of_the_grave",
@@ -255,7 +256,8 @@
    "ability": "wis",
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction turning a critical hit against a creature within 30 feet into an ordinary hit."
+   "guidance": "Not spent with use_resource: use_reaction 'Sentinel at Death's Door' when a critical hit lands on the cleric or, with targetCharacterId, a creature within 30 feet. It becomes a normal hit.",
+   "passive": true
   },
   {
    "id": "sub_eyes_of_night",
@@ -394,7 +396,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "Triggers when the druid drops to 0 hit points or is incapacitated against their will: as conjure animals with a 9th-level slot, four beasts of the druid's choice (each challenge rating 2 or lower) appear within 20 feet, guard them and attack their foes for an hour without concentration."
+   "passive": true,
+   "guidance": "This is not spent by choice: the next time the druid drops to 0 hit points or is incapacitated by something other than their own doing, the server spends it and four wolves appear beside them as allies, guarding them and attacking their foes for an hour without concentration."
   },
   {
    "id": "sub_fungal_infestation",
@@ -418,7 +421,8 @@
    "ability": null,
    "proficiency": 1,
    "recharge": "long",
-   "guidance": "Free castings of guiding bolt from the map, without a spell slot. Resolve the attack with cast_at_enemy."
+   "guidance": "Free castings of guiding bolt from the map, without a spell slot: pc_attack with spell 'Guiding Bolt', and the cast spends a use (no use_resource call).",
+   "passive": true
   },
   {
    "id": "sub_cosmic_omen",
@@ -446,7 +450,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "Triggers when the druid drops to 0 hit points while the wildfire spirit is out: the spirit is destroyed and the druid returns at half their hit point maximum."
+   "passive": true,
+   "guidance": "This is not spent by choice: the next time damage would drop the druid to 0 hit points without killing them outright while the wildfire spirit is out, the server lets the spirit fall in their place, brings the druid back at half their hit point maximum, and burns the use."
   },
   {
    "id": "sub_walker_in_dreams",
@@ -457,7 +462,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "After a short rest: dream (the druid as messenger), scrying or teleportation circle without a slot or material components; the circle opens to the last place the druid finished a long rest on this plane. Once per long rest."
+   "guidance": "After a short rest: dream (the druid as messenger), scrying or teleportation circle without a slot or material components. Cast the spell with its own tool and the cast spends the use (no use_resource call).",
+   "passive": true
   },
   {
    "id": "sub_enthralling_performance",
@@ -472,7 +478,15 @@
    "fx": {
     "kind": "enemy_save",
     "save": "wis",
-    "condition": "charmed"
+    "condition": "charmed",
+    "dcAbility": "spell",
+    "rounds": 600,
+    "rangeFt": 60,
+    "types": [
+     "humanoid"
+    ],
+    "most": "cha",
+    "magical": true
    }
   },
   {
@@ -517,7 +531,14 @@
    "fx": {
     "kind": "enemy_save",
     "save": "wis",
-    "condition": "frightened"
+    "condition": "frightened",
+    "dcAbility": "spell",
+    "rounds": 600,
+    "types": [
+     "humanoid"
+    ],
+    "most": 1,
+    "magical": true
    }
   },
   {
@@ -546,7 +567,12 @@
    "fx": {
     "kind": "enemy_save",
     "save": "wis",
-    "condition": "charmed"
+    "condition": "charmed",
+    "dcAbility": "spell",
+    "rounds": 4800,
+    "rangeFt": 30,
+    "most": 1,
+    "magical": true
    }
   },
   {
@@ -629,7 +655,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "short",
-   "guidance": "A free casting of augury or clairvoyance using Wisdom, with no slot or components."
+   "guidance": "A free casting of augury or clairvoyance using Wisdom, with no slot or components: cast the spell with its own tool and the cast spends the use (no use_resource call).",
+   "passive": true
   },
   {
    "id": "sub_magic_awareness",
@@ -670,7 +697,11 @@
    "fx": {
     "kind": "enemy_save",
     "save": "wis",
-    "dice": "2d12"
+    "dice": "2d12",
+    "dcAbility": "con",
+    "type": "psychic",
+    "most": 1,
+    "magical": true
    },
    "proficiency": 1
   },
@@ -713,7 +744,11 @@
    "fx": {
     "kind": "enemy_save",
     "save": "wis",
-    "condition": "charmed"
+    "condition": "charmed",
+    "dcAbility": "spell",
+    "rounds": 1,
+    "rangeFt": 10,
+    "magical": true
    }
   },
   {
@@ -747,7 +782,12 @@
    "fx": {
     "kind": "enemy_save",
     "save": "wis",
-    "condition": "charmed"
+    "condition": "charmed",
+    "dcAbility": "spell",
+    "rounds": 10,
+    "rangeFt": 60,
+    "most": 1,
+    "magical": true
    }
   },
   {
@@ -760,7 +800,8 @@
    "ability": null,
    "recharge": "short",
    "action": "reaction",
-   "guidance": "A reaction imposing disadvantage on an attack; if it then misses, the warlock has advantage on their next attack against that creature."
+   "guidance": "Not spent with use_resource: use_reaction 'Entropic Ward' when an attack hits the warlock. The attack is rolled again at disadvantage; if it then misses, the warlock's next attack roll against that creature before the end of their next turn has advantage.",
+   "passive": true
   },
   {
    "id": "sub_healing_light",
@@ -790,7 +831,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "Instead of rolling a death save, rise at half hit points, blinding enemies within 30 feet and dealing 2d8 + Charisma radiant damage to them."
+   "passive": true,
+   "guidance": "This is not spent by choice: the next time the warlock would make a death save, the server has them rise at half their hit points instead, on their feet, burning (2d8 + Charisma radiant) and blinding every enemy within 30 feet until the end of their turn, and in a fight the turn is theirs to take."
   },
   {
    "id": "sub_accursed_specter",
@@ -831,7 +873,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "Evard's black tentacles once without a spell slot; casting it gives temporary hit points equal to the warlock level and damage can't break the concentration on it."
+   "guidance": "Evard's black tentacles once without a spell slot; casting it gives temporary hit points equal to the warlock level and damage can't break the concentration on it. Cast it with its own tool and the cast spends the use (no use_resource call).",
+   "passive": true
   },
   {
    "id": "sub_fathomless_plunge",
@@ -970,7 +1013,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "short",
-   "guidance": "Add 2d4 to a failed saving throw or a missed attack, possibly turning it into a success."
+   "guidance": "Add 2d4 to a failed saving throw or a missed attack, possibly turning it into a success. A player's missed attack or failed request_roll save waits on a card that offers this, so do not spend it for them there. Use it here only for a roll that cannot wait (a forced save, an agent's seat), and narrate the result.",
+   "passive": true
   },
   {
    "id": "sub_unearthly_recovery",
@@ -998,7 +1042,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "When damage drops the sorcerer to 0 hit points: a Charisma save (DC 5 + the damage) leaves them at 1 instead. It does not work against radiant damage or a critical hit, and only a success spends the use."
+   "passive": true,
+   "guidance": "This is not spent by choice: the next time damage other than radiant or a critical hit would drop the sorcerer to 0 hit points without killing them outright, the server rolls their Charisma save (DC 5 + the damage taken) and, on a success, leaves them at 1 hit point and burns the use."
   },
   {
    "id": "sub_restore_balance",
@@ -1056,7 +1101,12 @@
    "fx": {
     "kind": "aoe",
     "dice": "3d10",
-    "save": "str"
+    "save": "str",
+    "dcAbility": "spell",
+    "type": "force",
+    "half": true,
+    "rangeFt": 30,
+    "magical": true
    }
   },
   {
@@ -1080,7 +1130,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "The current phase's 1st-level spell, cast once without a spell slot until the next long rest."
+   "guidance": "The current phase's 1st-level spell (shield at the full moon, ray of sickness at the new, color spray at the crescent), cast once without a spell slot until the next long rest: cast it with its own tool and the cast spends the use.",
+   "passive": true
   },
   {
    "id": "sub_lunar_boons",
@@ -1103,7 +1154,8 @@
    "uses": 3,
    "ability": null,
    "recharge": "long",
-   "guidance": "One 1st-level spell of each phase cast once without a spell slot; changing the phase costs 1 sorcery point and a bonus action."
+   "guidance": "One 1st-level spell of each phase (shield, ray of sickness, color spray) cast once without a spell slot: cast it with its own tool and the cast spends a use.",
+   "passive": true
   },
   {
    "id": "sub_portent",
@@ -1125,7 +1177,8 @@
     ]
    ],
    "recharge": "long",
-   "guidance": "Rolled after each long rest and kept as fixed numbers. Spend one to replace the result of an attack, check or save by the wizard or a creature they can see, declared before the roll."
+   "guidance": "The server rolls these after each long rest and keeps the numbers. On the wizard's own ability check or saving throw from request_roll it offers them before the roll and waits, so do not spend one for them. In a fight their player can watch for it: the server then stops before an attack, a check or one creature's save and puts the number on the d20 itself, and the result says so. Never name or invent a number.",
+   "passive": true
   },
   {
    "id": "sub_illusory_self",
@@ -1137,7 +1190,8 @@
    "ability": null,
    "recharge": "short",
    "action": "reaction",
-   "guidance": "A reaction interposing an illusory duplicate so an attack that would hit misses instead."
+   "guidance": "Not spent with use_resource: use_reaction 'Illusory Self' when an attack hits the wizard. An illusory duplicate takes it, and the attack misses.",
+   "passive": true
   },
   {
    "id": "sub_benign_transposition",
@@ -1164,7 +1218,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "short",
-   "guidance": "A free self-polymorph into a beast of challenge rating 1 or lower, without a spell slot."
+   "guidance": "A free self-polymorph into a beast of challenge rating 1 or lower, without a spell slot: cast polymorph on themselves and the cast spends the use (no use_resource call).",
+   "passive": true
   },
   {
    "id": "sub_third_eye",
@@ -1217,7 +1272,7 @@
    "ability": null,
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction forcing a creature within 30 feet to reroll an attack, check or save after the wizard sees whether it succeeded; the second roll stands."
+   "guidance": "A reaction forcing a creature within 30 feet to reroll an attack, check or save after the wizard sees whether it succeeded; the second roll stands. Against a hit on the wizard or an ally by an attacker within 30 feet, use_reaction 'Chronal Shift' (targetCharacterId for the creature hit): the server rolls the attack again and settles the hit. The wizard's own failed roll, and a player ally's failed check, save or attack, offer it on the after-the-roll card (the wizard's player answers an ally's on their own screen). In a fight the wizard's player can watch for it: a creature's save against a spell or an area, an ally's save against a hazard, and a companion's attack stop first, and the server rolls it again if it goes the way the wizard said. Never use_resource it for any of these; only for a roll the engine never threw."
   },
   {
    "id": "sub_momentary_stasis",
@@ -1233,7 +1288,12 @@
    "fx": {
     "kind": "enemy_save",
     "save": "con",
-    "condition": "incapacitated"
+    "condition": "incapacitated",
+    "dcAbility": "spell",
+    "rounds": 1,
+    "rangeFt": 60,
+    "most": 1,
+    "magical": true
    }
   },
   {
@@ -1273,7 +1333,12 @@
    "fx": {
     "kind": "aoe",
     "dice": "2d10",
-    "save": "str"
+    "save": "str",
+    "dcAbility": "spell",
+    "type": "force",
+    "half": true,
+    "rangeFt": 30,
+    "magical": true
    }
   },
   {
@@ -1436,7 +1501,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "A free casting of summon fey without a spell slot or material component, once per long rest; it can be cast without concentration, lasting a minute."
+   "guidance": "A free casting of summon fey without a spell slot or material component, once per long rest; it can be cast without concentration, lasting a minute. Cast it with its own tool and the cast spends the use (no use_resource call).",
+   "passive": true
   },
   {
    "id": "sub_drake_companion",
@@ -1448,7 +1514,8 @@
    "ability": null,
    "recharge": "long",
    "action": "action",
-   "guidance": "Summon the drake for as long as it lasts: it acts on the ranger's initiative, has 5 + five times the ranger level hit points, bites for 1d6 + proficiency piercing, and is immune to its chosen essence. A spell slot of 1st level or higher buys another summoning."
+   "guidance": "Summon the drake with summon_pet (its stat block: 5 + five times the ranger level hit points, a bite for 1d6 + proficiency piercing, immune to its chosen essence); a spell slot of 1st level or higher buys another summoning.",
+   "passive": true
   },
   {
    "id": "sub_drakes_breath",
@@ -1473,7 +1540,18 @@
       "10d6"
      ]
     ],
-    "save": "dex"
+    "save": "dex",
+    "dcAbility": "spell",
+    "typeFromVariant": [
+     "acid",
+     "cold",
+     "fire",
+     "lightning",
+     "poison"
+    ],
+    "half": true,
+    "rangeFt": 30,
+    "magical": true
    }
   },
   {
@@ -1487,7 +1565,7 @@
    "proficiency": 1,
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction when the ranger or their drake takes damage within 30 feet of each other: the one hurt resists that damage. The server gives back the resisted half (use_reaction 'Reflexive Resistance')."
+   "guidance": "A reaction when the ranger or their drake takes damage within 30 feet of each other: the one hurt resists that damage. For an attack that hit the ranger, the server gives back the resisted half (use_reaction 'Reflexive Resistance'). For the drake, halve the damage before apply_damage and spend this with use_resource."
   },
   {
    "id": "sub_wails_from_the_grave",
@@ -1543,7 +1621,11 @@
    "fx": {
     "kind": "enemy_save",
     "save": "wis",
-    "condition": "stunned"
+    "condition": "stunned",
+    "dcAbility": "dex",
+    "rounds": 10,
+    "most": 1,
+    "magical": true
    }
   },
   {
@@ -1579,7 +1661,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "short",
-   "guidance": "Reroll a missed attack, with advantage."
+   "guidance": "Reroll a missed attack, with advantage. A player's missed attack waits on a card that offers this, so do not spend it for them there. Use it here only for a roll that cannot wait (an agent's seat), and narrate the result.",
+   "passive": true
   },
   {
    "id": "sub_wholeness_of_body_mercy",
@@ -1627,7 +1710,18 @@
       "3d10"
      ]
     ],
-    "save": "dex"
+    "save": "dex",
+    "dcAbility": "wis",
+    "typeFromVariant": [
+     "acid",
+     "cold",
+     "fire",
+     "lightning",
+     "poison"
+    ],
+    "half": true,
+    "rangeFt": 30,
+    "magical": true
    },
    "proficiency": 1,
    "fallbackPool": {
@@ -1683,7 +1777,8 @@
    "ability": "cha",
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction adding the paladin's Charisma modifier to the AC of themselves or an ally within 10 feet; if the attack then misses, they may attack the attacker."
+   "passive": true,
+   "guidance": "Not spent with use_resource: use_reaction 'Glorious Defense' when an attack hits the paladin or an ally within 10 feet. It adds their Charisma modifier to that AC, and a resulting miss lets them attack the attacker."
   },
   {
    "id": "sub_undying_sentinel",
@@ -1694,7 +1789,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "Triggers on its own: drop to 1 hit point instead of 0."
+   "passive": true,
+   "guidance": "This is not spent by choice: the server drops them to 1 hit point instead of 0 the next time damage would fell them without killing them outright, and burns the use."
   },
   {
    "id": "race_stones_endurance",
@@ -1783,7 +1879,12 @@
    "uses": 1,
    "ability": null,
    "recharge": "short",
-   "guidance": "Extra damage equal to the goblin's level on a hit against a creature larger than them."
+   "guidance": "Extra damage equal to the goblin's level on a hit against a creature larger than them: spent after the hit, on the creature hit (targetEnemyId), and the server deals it.",
+   "fx": {
+    "kind": "hit_damage",
+    "dice": "level",
+    "larger": true
+   }
   },
   {
    "id": "race_hungry_jaws",
@@ -1794,7 +1895,7 @@
    "uses": 1,
    "ability": null,
    "recharge": "short",
-   "guidance": "A bonus-action bite, made with pc_attack (weapon \"bite\", bonusAttack \"feature\"): on a hit the lizardfolk also gains temporary hit points equal to their Constitution modifier (minimum 1). The attack spends the use."
+   "guidance": "A bonus-action bite, made with pc_attack (weapon \"bite\", feature \"Hungry Jaws\"): on a hit the lizardfolk also gains temporary hit points equal to their Constitution modifier (minimum 1). The attack spends the use."
   },
   {
    "id": "race_genasi_magic",
@@ -1820,7 +1921,7 @@
    "ability": "int",
    "recharge": "long",
    "action": "reaction",
-   "guidance": "A reaction adding the artificer's Intelligence modifier to an ability check or saving throw by them or an ally within 30 feet."
+   "guidance": "A reaction adding the artificer's Intelligence modifier to an ability check or saving throw by them or an ally within 30 feet. A player's request_roll check or save waits on a card that offers this, so do not spend it for them there. Use it here only for a roll that cannot wait (a forced save, an agent's seat), and narrate the result."
   },
   {
    "id": "art_right_tool",
@@ -1859,28 +1960,6 @@
    "guidance": "Elixirs brewed on a long rest (one, two from 6th level, three from 15th), each rolled on a d6: healing (2d4 + Intelligence), swiftness (+10 feet of speed for an hour), resilience (+1 AC for 10 minutes), boldness (a d4 on attacks and saves for a minute), flight (a 10-foot flying speed for 10 minutes) or transformation (alter self). A spell slot brews another of a chosen effect. From 9th level a drinker also gains 2d6 + Intelligence temporary hit points."
   },
   {
-   "id": "art_eldritch_cannon",
-   "displayName": "Eldritch Cannon",
-   "match": [
-    "eldritch cannon"
-   ],
-   "uses": 1,
-   "ability": null,
-   "scale": [
-    [
-     15,
-     2
-    ],
-    [
-     3,
-     1
-    ]
-   ],
-   "recharge": "long",
-   "action": "action",
-   "guidance": "An action builds a flamethrower, force ballista or protector cannon, and a bonus action activates it. A spell slot buys extra uses."
-  },
-  {
    "id": "art_spell_storing_item",
    "displayName": "Spell-Storing Item",
    "match": [
@@ -1911,7 +1990,8 @@
    "uses": 2,
    "ability": "int",
    "recharge": "long",
-   "guidance": "Free castings of lesser restoration without a spell slot, with alchemist's supplies as the focus."
+   "guidance": "Free castings of lesser restoration without a spell slot, with alchemist's supplies as the focus: cast it with its own tool and the cast spends a use (no use_resource call).",
+   "passive": true
   },
   {
    "id": "sub_starry_form",
@@ -1968,7 +2048,7 @@
    "uses": 1,
    "ability": "str",
    "recharge": "long",
-   "guidance": "The bonus-action melee attack against a marked creature that damaged someone else, on the fighter's next turn: pc_attack bonusAttack \"feature\" at that creature, with advantage and +half the fighter level damage; the attack spends the use. The mark itself the server lays on every melee hit."
+   "guidance": "The bonus-action melee attack against a marked creature that damaged someone else, on the fighter's next turn: pc_attack feature \"Unwavering Mark\" at that creature, with advantage and +half the fighter level damage; the attack spends the use. The mark itself the server lays on every melee hit."
   },
   {
    "id": "sub_bulwark_of_force",
@@ -1991,7 +2071,8 @@
    "uses": 1,
    "ability": null,
    "recharge": "long",
-   "guidance": "Telekinesis once without a slot; while concentrating on it, a weapon attack as a bonus action (pc_attack bonusAttack 'feature')."
+   "guidance": "Telekinesis once without a slot (cast it with its own tool; the cast spends the use); while concentrating on it, a weapon attack as a bonus action (pc_attack feature 'Telekinetic Master').",
+   "passive": true
   },
   {
    "id": "sub_elder_champion",
@@ -2106,7 +2187,7 @@
    "id": "sub_defensive_field",
    "displayName": "Defensive Field",
    "match": [
-    "defensive field"
+    "armor model"
    ],
    "uses": 1,
    "ability": null,

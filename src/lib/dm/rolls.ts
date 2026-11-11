@@ -12,6 +12,7 @@ import {
 import { isConditionNamed } from "@/lib/srd/feature-names";
 import { heldHelp } from "@/lib/dm/help-logic";
 import { encumbranceCovers, encumbranceFor } from "@/lib/srd/encumbrance";
+import { purseCoins } from "@/lib/srd/currency";
 import { conditionRollRiders } from "@/lib/srd/condition-effects";
 import {
   defenseRiders,
@@ -22,7 +23,7 @@ import { strengthCheckFloor } from "@/lib/srd/trait-rules";
 import { computeAbilityScore, INSPIRATION_SPEND, toolProficiencyBonus } from "@/lib/dm/roll-riders";
 import { rollFeatureRiders } from "@/lib/dm/roll-feature-riders";
 import type { RollArgs } from "@/lib/dm/roll-args";
-import { DM_TOOL_NAME_PATTERN, toolTextRegex, xmlToolCallRegex } from "@/lib/dm/tool-text";
+import { DM_TOOL_NAME_PATTERN, invokeToolCallRegex, toolTextRegex, withoutIdArguments, withoutServerLines, xmlToolCallRegex } from "@/lib/dm/tool-text";
 import { acBreakdownFor, computeSheetDerived, findSkill } from "@/lib/srd";
 import { withoutSentences, type NarrationClaim } from "@/lib/dm/claims-logic";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
@@ -113,6 +114,13 @@ function coerceLeakValue(raw: string): unknown {
   return value;
 }
 
+// The Anthropic-style dialect an agent program writes as text is read from
+// prose, not called (issue 794). Only a call that hands the floor over and
+// changes nothing in the game runs from it: damage, gold or conditions
+// written this way are stripped and never applied, and widening this list is
+// a decision of its own.
+const INVOKE_TEXT_TOOLS: ReadonlySet<string> = new Set(["request_player_input"]);
+
 // qwen3.6's chat template instructs the model to emit tool calls in an XML
 // dialect: <tool_call><function=name><parameter=key>value</parameter>...
 // </function></tool_call>. llama-server normally extracts these into
@@ -122,11 +130,12 @@ function coerceLeakValue(raw: string): unknown {
 // calls, all tags are stripped from the narration, and unknown tool names
 // are stripped but never dispatched. A JSON body inside <tool_call>
 // ({"name":...,"arguments":{...}}, the older Qwen dialect) is also accepted.
+// The Anthropic-style dialect is parsed here too, under INVOKE_TEXT_TOOLS.
 export function salvageXmlToolCalls(text: string): {
   text: string;
   calls: ParsedToolCall[];
 } {
-  if (!text || !/<\/?(?:tool_call|function[=>]|parameter=)/i.test(text)) {
+  if (!text || (!/<\/?(?:tool_call|function[=>]|parameter=)/i.test(text) && !invokeToolCallRegex().test(text))) {
     return { text, calls: [] };
   }
   const calls: ParsedToolCall[] = [];
@@ -192,6 +201,22 @@ export function salvageXmlToolCalls(text: string): {
     parseFunctionBlocks(text);
   }
 
+  // Only a block that closed: a call cut off mid-argument is not one to act on.
+  const invokeRe = /<(?:[\w-]+:)?invoke\s+name\s*=\s*["']?([^"'\s>]+)["']?[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?invoke\s*>/gi;
+  for (const invoke of text.matchAll(invokeRe)) {
+    // The harness shows its tools as mcp__odm__name or odm_name (harness/render.ts).
+    const name = invoke[1].replace(/^(?:mcp__.+?__|odm_)/, "");
+    if (!INVOKE_TEXT_TOOLS.has(name)) {
+      continue;
+    }
+    const args: Record<string, unknown> = {};
+    const paramRe = /<(?:[\w-]+:)?parameter\s+name\s*=\s*["']?([^"'\s>]+)["']?[^>]*>([\s\S]*?)(?:<\/(?:[\w-]+:)?parameter\s*>|(?=<(?:[\w-]+:)?parameter\s)|$)/gi;
+    for (const param of invoke[2].matchAll(paramRe)) {
+      args[param[1]] = coerceLeakValue(param[2]);
+    }
+    addCall(name, args);
+  }
+
   const cleaned = text
     .replace(xmlToolCallRegex(), "")
     .replace(/[ \t]{2,}/g, " ")
@@ -213,7 +238,11 @@ export function salvageTextualToolCalls(text: string): {
     return { text, calls: [] };
   }
   const calls: ParsedToolCall[] = [];
-  const cleaned = text
+  // A card line copied into the reply goes first (issue 900), and every other
+  // line of the server's: it names a tool and its arguments in words, and is
+  // neither a call to run nor the story, so the claims reader must not find a
+  // blow or a roll in it either. The ids it leaves go once the calls are read.
+  const read = withoutServerLines(text)
     .replace(toolTextRegex(), (_match, name: string, body: string) => {
       const args = parseKeyValueArgs(body);
       if (Object.keys(args).length) {
@@ -224,9 +253,8 @@ export function salvageTextualToolCalls(text: string): {
         });
       }
       return "";
-    })
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
+    });
+  const cleaned = withoutIdArguments(read).replace(/[ \t]{2,}/g, " ").trim();
   return { text: cleaned, calls };
 }
 
@@ -318,6 +346,8 @@ export function resolveRollExpression(
     // The roller moved no more than half their speed this turn (Supreme
     // Sneak, src/lib/srd/check-traits.ts); the caller reads the board.
     movedLittle?: boolean;
+    // The roll can wait on its player (src/lib/dm/after-roll.ts).
+    keepHeldDie?: boolean;
     // A death saving throw (src/lib/dm/death.ts): a saving throw tied to no
     // ability, so no ability modifier and no proficiency, while every rider
     // a save takes (Bless, an aura, exhaustion, Lucky) still applies.
@@ -419,6 +449,7 @@ export function resolveRollExpression(
     kind: derivationKind,
     ability: derivationAbility,
     movedLittle: extras?.movedLittle,
+    keepHeldDie: extras?.keepHeldDie,
   });
   if ("error" in riders) {
     return riders;
@@ -445,7 +476,7 @@ export function resolveRollExpression(
       ? encumbranceFor({
           strength: sheet.abilities.str,
           equipment: sheet.equipment ?? [],
-          coins: sheet.gold ?? 0,
+          coins: purseCoins({ gold: sheet.gold ?? 0, copper: sheet.copper ?? 0 }),
         })
       : null;
   const overloaded =

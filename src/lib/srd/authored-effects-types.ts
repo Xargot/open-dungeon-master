@@ -22,10 +22,14 @@ export type Gate = {
   raging?: boolean;
   // The holder wears heavy armor.
   heavyArmor?: boolean;
+  // The holder wears no body armor (Dragon Wings).
+  unarmored?: boolean;
   // The holder is concentrating on a spell.
   concentrating?: boolean;
   // The holder has (or has not) a condition, by name or "name (" prefix.
+  // `because`: what the refusal says is missing, in place of the mark's name.
   condition?: string;
+  because?: string;
   notCondition?: string;
   // The option chosen for this feature ("Totem Spirit (Bear)"), or for
   // another feature of the same sheet ("Armor Model (Guardian)").
@@ -109,6 +113,11 @@ export type AuthoredEffect = Base &
     | { kind: "death_heal"; rangeFt: number }
     // Hit points at the start or end of the holder's turn in a fight.
     | { kind: "turn_heal"; when: "start" | "end"; formula: Formula; belowHalf?: boolean }
+    // An aura while the holder's spend holds (gate.condition): each character
+    // who ends a turn within `rangeFt` of the holder, the holder too, loses one
+    // of `ends` laid on them or, holding none, gains temporary hit points
+    // (Twilight Sanctuary). Ends with the holder down or incapacitated.
+    | { kind: "turn_end_aura"; rangeFt: number; tempHp: Formula; ends: string[] }
     // Temporary HP after every rest, for the holder and up to `count` allies.
     | { kind: "rest_temp_hp"; formula: Formula; allies?: { count: number; formula: Formula } }
     // Extra damage dice on the holder's weapon hits (feature-effects rider).
@@ -285,6 +294,9 @@ export type SpendDoes =
       condition: string | Array<[number, string]>;
       rounds: number;
       target?: "self" | "ally" | "enemy" | "allies";
+      // An ally other than the holder ("a willing creature other than
+      // yourself": Blessing of the Trickster): the holder is no target.
+      othersOnly?: boolean;
       variants?: Record<string, string>;
       tempHp?: Formula;
       rangeFt?: number;
@@ -300,6 +312,13 @@ export type SpendDoes =
       // `mark`: a second condition each creature that failed carries
       // (Avenging Angel: "menaced", which gives every attacker advantage).
       burst?: { save: Ability; dcAbility: Ability | "spell"; rangeFt: number; dice?: Formula; type?: string; condition?: string; mark?: string; rounds?: number };
+      // Until the end of the holder's next turn, not a count of rounds (Cloak
+      // of Shadows). `rounds` still states its length on the card.
+      untilNextTurnEnds?: boolean;
+      // Only allies the holder can see (Watcher's Will: "creatures you can
+      // see"): an invisible one, or any while the holder is blinded, is left
+      // out, and one named for it is refused with nothing spent.
+      sight?: boolean;
     }
   // Choose an option for the feature, outside a fight: the feature is
   // renamed "Feature (Option)", which the passive effects read.
@@ -309,6 +328,9 @@ export type SpendDoes =
   | {
       kind: "save_effect";
       save: Ability;
+      // The creature picks: it rolls whichever of the two is better for it
+      // (Nature's Wrath: "a Strength or Dexterity save").
+      orSave?: Ability;
       dcAbility: Ability | "spell";
       dice?: Formula;
       perUnit?: string;
@@ -316,13 +338,83 @@ export type SpendDoes =
       half?: boolean;
       condition?: string;
       rounds?: number;
+      // The condition lasts until the creature saves at a round's end; with
+      // `orSave`, it picks between the two again at each of those saves.
+      saveEnds?: boolean;
       rangeFt?: number;
+      // Only a creature the holder can see (Nature's Wrath): in line of sight,
+      // not invisible or hidden, and the holder not blinded.
+      sight?: boolean;
       onFail?: string;
       typeFromVariant?: string[];
+      // Only a creature of these types (its block's type, creature-type.ts):
+      // any other is refused before the use is paid.
+      types?: string[];
+      // The creature rolls with advantage when its score in this ability is
+      // at least `atLeast` (Command Undead: "if the target has an
+      // Intelligence of 8 or higher, it has advantage on the saving throw").
+      advantageAt?: { ability: Ability; atLeast: number };
+      // The condition hands the creature to the holder: it fights on their
+      // side while the condition lasts, and the holder's next use lets the
+      // last creature go (src/lib/dm/command-undead.ts).
+      commands?: boolean;
+    }
+  // Every foe in reach that the holder can see saves or suffers, with one roll
+  // of damage shared among them. `types` keeps it to creatures of those types;
+  // with none of them in reach, nothing is spent.
+  | {
+      kind: "save_area";
+      save: Ability;
+      dcAbility: Ability | "spell";
+      rangeFt: number;
+      dice?: Formula;
+      type?: string;
+      half?: boolean;
+      condition?: string;
+      rounds?: number;
+      // Until the end of the holder's next turn, not a count of rounds.
+      untilNextTurnEnds?: boolean;
+      endsOnDamage?: boolean;
+      // Held while the holder stands within this many feet and is neither down
+      // nor incapacitated, with no count of rounds (src/lib/dm/condition-leash.ts).
+      leashFeet?: number;
+      onFail?: string;
+      types?: string[];
+      // The creatures of the user's choice in reach, named in targetEnemyIds
+      // (every one when none is named): "each creature of your choice".
+      chosen?: boolean;
+      // Only creatures the holder can see (a wall or a heavily obscured space
+      // hides one). Without it every creature in reach is caught: Radiance of the
+      // Dawn's text asks no sight, and Order's Demand's "see or hear" carries
+      // through a fog. True also leaves out an invisible or hidden creature, and
+      // every one while the holder is blinded (Champion Challenge: "that you can
+      // see"). "seesHolder" turns it round: Charm Animals and Plants takes a
+      // beast "that can see you", so a blinded one is left out, and every one
+      // while the cleric is invisible or hidden from it.
+      sight?: true | "seesHolder";
+      // A creature with total cover from the holder is not affected, seen or
+      // not (Radiance of the Dawn reaches into a fog, not through a wall).
+      coverShields?: boolean;
+      // Every area of magical darkness within rangeFt of the holder ends, of
+      // any spell level (Radiance of the Dawn). With darkness in reach the use
+      // is not refused for want of a foe.
+      dispelsDarkness?: boolean;
     }
   | { kind: "reroll_save" }
   // Temporary hit points: to the holder, or to allies in range.
   | { kind: "temp_hp"; formula: Formula; allies?: { rangeFt: number; count: Formula } }
+  // Hit points to the characters in reach (Turn the Tide, Balm of Peace), at
+  // least 1 each. `rangeFt` "move": the holder's speed plus 5 feet, for a
+  // healing the holder deals as they walk past. `belowHalf`: only those at or
+  // under half their maximum. `othersOnly`: not the holder. `each`: one roll
+  // per creature, not one shared. `hears`: not a deafened creature. With
+  // nobody to heal, nothing is spent (src/lib/dm/authored-heal-area.ts).
+  // `divided`: the formula is a total shared among those healed (Clockwork
+  // Cavalcade's 100 hit points), not each one's.
+  | { kind: "heal_area"; formula: Formula; rangeFt: number | "move"; belowHalf?: boolean; othersOnly?: boolean; each?: boolean; hears?: boolean; note?: string; divided?: boolean }
+  // A creature touched rolls the die and regains one spent spell slot of
+  // that level or lower (Bolstering Magic).
+  | { kind: "regain_slot"; die: string }
   // An area the model resolves with aoe_damage: the dice, save and DC.
   | { kind: "aoe_report"; dice: Formula; perUnit?: string; baseUnits?: number; save: Ability; dcAbility: Ability | "spell"; type: string; area: string }
   // `touched`: a willing creature the holder touches is the one moved.
@@ -338,7 +430,9 @@ export type SpendDoes =
   // heals (Hand of Healing).
   | { kind: "flames"; formula: Formula; type: string; healOnly?: boolean }
   // A variant word picks one of several spends.
-  | { kind: "variants"; options: Record<string, { does: SpendDoes; action?: SpendAction }> }
+  // An option that rides a weapon hit this turn (Telekinetic Thrust after
+  // Psionic Strike's) says so; the others of the same spend do not.
+  | { kind: "variants"; options: Record<string, { does: SpendDoes; action?: SpendAction; afterWeaponHit?: boolean }> }
   // Insightful Fighting: an Insight check against the creature's Deception.
   | { kind: "insight_contest"; condition: string; rounds: number }
   // Gathered Swarm's push: after the holder's hit this turn, the creature hit
@@ -352,7 +446,8 @@ export type SpendDoes =
   // what happens (Spirit Totem's move, the cannon's ballista option).
   | { kind: "note"; text: string }
   // Spent dice come back to a pool (Psionic Recovery: one Psionic Energy die).
-  | { kind: "restore"; pool: string; amount: number };
+  // `clears`: the mark the spend's gate asked for is spent with it.
+  | { kind: "restore"; pool: string; amount: number; clears?: string };
 
 export type SpendAction = "action" | "bonus" | "reaction" | "none";
 
@@ -373,8 +468,17 @@ export type AuthoredSpend = {
   // The turn key oncePerTurn claims, when the spend shares its once-a-turn
   // with a rider (Gathered Swarm's push and its damage: "rider:gathered swarm").
   onceKey?: string;
+  // Rides a weapon's hit (Arcane Jolt): on the holder's own turn one must have
+  // landed, and a burn goes to the creature it hit. Off their turn (their steel
+  // defender's hit, an opportunity attack) the engine has no record to ask. Any
+  // weapon counts: an infused or attuned weapon reads as a plain one here, so
+  // asking for a magic one would shut the feature for the artificers it is for.
+  afterWeaponHit?: boolean;
   // Chosen outside a fight only, or only in one.
   fight?: "in" | "out";
+  // The GM's call, not the player's: no card in the Hand (Wild Magic Surge,
+  // which the GM may have the sorcerer roll).
+  gm?: boolean;
   does: SpendDoes;
 };
 
@@ -385,13 +489,27 @@ export type ReactionDoes =
   // `reflect`: with that feature held, the damage prevented strikes the
   // attacker (Spirit Shield with Vengeful Ancestors).
   | { kind: "reduce"; amount: Formula | "half" | "slot5" | "psionic_int" | "ward"; who: "self" | "ally" | "either"; rangeFt?: number; types?: string[]; reflect?: { feature: string; type: string } }
-  // A bonus to AC (or the Bardic Inspiration die) against the last hit.
-  | { kind: "ac_vs_hit"; amount: number | "bardic" }
+  // A bonus to AC (the Bardic Inspiration die, or the holder's Charisma modifier,
+  // at least 1) against the last hit. `rangeFt`: it may cover an ally that near.
+  // `strikeOnMiss`: a miss it causes lets the holder attack the attacker.
+  | { kind: "ac_vs_hit"; amount: number | "bardic" | "cha"; rangeFt?: number; strikeOnMiss?: boolean }
   // The attack that hit is rolled again at disadvantage. `notVsAdvantage`:
   // not against an attack rolled with advantage (Shadowy Dodge).
-  | { kind: "disadv_vs_hit"; notVsAdvantage?: boolean }
+  // `allyWith`: holding this feature, it may also answer a hit on an ally within
+  // `rangeFt` (Improved Flare). `advantageOnMiss`: a miss gives the holder
+  // advantage on their next attack roll against the attacker before the end
+  // of their next turn (Entropic Ward; authored-hooks.ts reads the mark).
+  | { kind: "disadv_vs_hit"; notVsAdvantage?: boolean; allyWith?: string; rangeFt?: number; advantageOnMiss?: boolean }
+  // The attacker rolls the d20 that hit an ally in range again and must use the
+  // new roll, high or low (Runic Shield). `roller`: the reach is to the creature
+  // that rolled, not the one it hit, so a hit on the holder counts too
+  // (Chronal Shift: "after you or a creature you can see within 30 feet of you
+  // makes an attack roll").
+  | { kind: "reroll_hit"; rangeFt: number; roller?: boolean }
   // Resistance to the last hit's damage when it is one of these types.
-  | { kind: "resist_instance"; types: string[]; who: "either"; rangeFt: number }
+  // `bond`: only for the holder, and only while that creature is on their sheet and up
+  // (a Drakewarden's drake); no other ally.
+  | { kind: "resist_instance"; types: string[]; who: "either"; rangeFt: number; bond?: "drake" }
   // The holder takes the hit an ally in range took.
   // `share`: "halved", the holder takes half of it and the ally none
   // (Penance Shared); "split", each takes half (Blood Bond).
@@ -401,15 +519,26 @@ export type ReactionDoes =
   // Damage back at a creature: the attacker, or the named enemy.
   | {
       kind: "strike_back";
+      // It answers a save a creature made, not a hit: no record says who forced a
+      // save, so no card offers it, and the call names the creature.
+      afterSave?: boolean;
       amount: Formula;
       type: string;
+      // Or this type, the holder's choice (Wrath of the Storm: "lightning or
+      // thunder damage (your choice)"): the one named after the feature, else
+      // whichever the creature's defenses let more of through.
+      orType?: string;
       melee?: boolean;
       rangeFt?: number;
       save?: { ability: Ability; dcAbility: Ability | "spell"; half?: boolean; onFail?: string; damageRegardless?: boolean };
     }
+  // The damage a hit dealt another creature, back at whoever dealt it, on a
+  // save for half (Rebuke the Violent). `rangeFt`: how near the attacker is.
+  | { kind: "echo_hit"; type: string; rangeFt: number; save: { ability: Ability; dcAbility: Ability | "spell" } }
   // One weapon attack with the reaction (the holder's own, or an ally's
   // when the feature belongs to someone else in the party).
-  | { kind: "attack"; rangeFt: number; onHitCondition?: { name: string; rounds: number } }
+  // `vowed`: only at the creature under the holder's Vow of Enmity, once it has attacked.
+  | { kind: "attack"; rangeFt: number; onHitCondition?: { name: string; rounds: number }; vowed?: boolean }
   // The creature saves or gains a condition (Beguiling Defenses, Raging Storm).
   | { kind: "save_condition"; save: Ability; dcAbility: Ability | "spell"; condition: string; rounds?: number; variants?: Record<string, string> }
   // The holder gains a condition (Tokens of the Departed's soul trinket).
@@ -425,6 +554,13 @@ export type ReactionDoes =
   | { kind: "chance_miss"; die: string; min: number; vsMark?: string }
   // The last hit is declared a miss, for a level of exhaustion.
   | { kind: "force_miss"; exhaustion: number }
+  // A critical hit on the holder or a creature in range becomes a normal hit:
+  // the same dice without the critical's, and a death-save failure for one blow
+  // at 0 rather than two (Sentinel at Death's Door).
+  | { kind: "uncrit"; rangeFt: number }
+  // The holder's echo takes the attack that hit another creature, and the hit
+  // becomes a miss for them. The echo is no creature the engine tracks.
+  | { kind: "echo_takes_hit" }
   // A move off the holder's turn, up to half their speed, drawing no
   // opportunity attack: when an enemy stands within 5 feet (Skirmisher), or
   // right after the holder's opportunity attack hit, as part of that same
@@ -442,6 +578,11 @@ export type AuthoredReaction = {
   // Who takes the reaction: the feature's holder (default), a creature
   // holding the holder's Bardic Inspiration, or any ally of the holder.
   usedBy?: "holder" | "inspired" | "party";
+  // Its text needs the holder to see a creature: the one the hit fell on
+  // ("a creature you can see", Runic Shield, Sentinel at Death's Door) or the
+  // attacker (Warding Flare). On a board, line of sight decides; off one, it
+  // is open.
+  sees?: "target" | "attacker";
   does: ReactionDoes;
 };
 

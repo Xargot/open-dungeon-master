@@ -10,7 +10,7 @@ import { handleLairAction, handleLegendaryAction, handleLegendaryResist, legenda
 import { declareIntentTool, handleDeclareIntent } from "@/lib/dm/intent-tools";
 import { canonicalCondition } from "@/lib/dm/mutations";
 import { conditionNameRefusal } from "@/lib/dm/set-condition";
-import { instancesOf, pruneMeta, type ConditionMetaMap } from "@/lib/dm/condition-logic";
+import { instancesOf, pruneMeta, wakesOnDamage, type ConditionMetaMap } from "@/lib/dm/condition-logic";
 import { petrifiedRefusal } from "@/lib/dm/damage-logic";
 import { AI_BIND_REFUSAL, AI_CLEAR_REFUSAL, bindsCreature, engineKept } from "@/lib/dm/ai-boundary";
 import { rollEnemySave } from "@/lib/dm/forced-save";
@@ -25,11 +25,14 @@ import { normalizeAbility } from "@/lib/dm/arg-coerce";
 import { publishBattleMapUpdate } from "@/lib/dm/map-tools";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { aoeDamageTool, handleAoeDamage } from "@/lib/dm/aoe-damage";
-import type { ToolResult } from "@/lib/dm/tool-errors";
+import { badArguments, type ToolResult } from "@/lib/dm/tool-errors";
 import { isConditionNamed } from "@/lib/srd/feature-names";
 import { enemyExhaustion } from "@/lib/dm/monster-abilities";
 import { isKnockedOut } from "@/lib/dm/knockout";
+import { canEnemyAct } from "@/lib/dm/can-act";
+import { releaseGrapplesHeldByAny } from "@/lib/dm/grapple";
 import { standingOn } from "@/lib/dm/combatant";
+import { leftBehind, swallowCoverError } from "@/lib/dm/swallow";
 
 // Encounter tools beyond the core start/damage/attack/end set:
 // reinforcements, enemy flight, enemy conditions, and multi-target AoE.
@@ -113,8 +116,8 @@ function handleEnemyFlees(
   let args: z.infer<typeof enemyRefArgsSchema>;
   try {
     args = enemyRefArgsSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: enemy_flees needs enemyId.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: enemy_flees needs enemyId.", error, rawArguments);
   }
   const enemy = resolveEnemyRef(encounter.id, args.enemyId);
   if (!enemy) {
@@ -128,7 +131,27 @@ function handleEnemyFlees(
   if (isKnockedOut(enemy)) {
     return { error: `${enemy.displayName} is knocked out: unconscious, they cannot flee. They stay where they fell.`, refused: "rules" };
   }
+  // Fleeing is a walk out of the fight, held to what holds its walk on the
+  // board (can-act.ts canEnemyAct "move", and its speed): a Hold Person'd
+  // bandit captain escaped on the AI's word while move_token would not move
+  // it a square.
+  const walks = canEnemyAct({ enemy, encounter, kind: "move" });
+  if (!walks.ok) {
+    return { error: `${walks.error} It cannot flee.`, refused: "rules" };
+  }
+  if (enemySpeedTiles(enemy) === 0) {
+    const held = enemy.conditions.find((entry) => isConditionNamed(entry, "grappled", "restrained"));
+    return {
+      error: `${enemy.displayName}'s speed is 0${held ? ` (${held})` : ""}: it cannot run from the fight. It breaks free first (take_action escape), or leaves by magic it casts.`,
+      refused: "rules",
+    };
+  }
   patchEnemyHp(enemy.id, enemy.currentHp, "fled");
+  // Gone from the fight, it holds nobody (grapple.ts releaseGrapplesHeldByAny).
+  releaseGrapplesHeldByAny(campaign, [enemy.id]);
+  // What it swallowed stays, prone where it stood (swallow.ts): asked while
+  // its token is still there to stand them beside.
+  const behind = leftBehind(campaign, encounter.id, enemy, "flees");
   const map = getBattleMapForEncounter(encounter.id);
   if (map) {
     removeTokenByRef(map.id, enemy.id);
@@ -139,6 +162,7 @@ function handleEnemyFlees(
     ok: true,
     fled: enemy.displayName,
     note: `${enemy.displayName} has escaped and is out of the fight.`,
+    ...(behind ? { swallowedFreed: behind } : {}),
   };
   // The fight ends when nobody is left standing on the foes' side: one
   // lying knocked out does not hold it open (issue #667: it did, and the
@@ -167,8 +191,8 @@ function handleEnemyCondition(
   let args: z.infer<typeof enemyRefArgsSchema>;
   try {
     args = enemyRefArgsSchema.parse(JSON.parse(rawArguments || "{}"));
-  } catch {
-    return { error: "Invalid arguments: needs enemyId and condition.", retry: true };
+  } catch (error) {
+    return badArguments("Invalid arguments: needs enemyId and condition.", error, rawArguments);
   }
   const enemy = resolveEnemyRef(encounter.id, args.enemyId);
   if (!enemy) {
@@ -202,6 +226,13 @@ function handleEnemyCondition(
     if (stone) {
       return { error: `${enemy.displayName} cannot be ${named}: ${stone}.`, refused: "rules" };
     }
+    // Laid by a creature on the other side of a swallower's wall: it does
+    // not land (swallow.ts).
+    const layer = (args.sourceCharacterId ?? args.sourceEnemyId ?? "").trim();
+    const walled = layer ? swallowCoverError(layer, enemy.id) : null;
+    if (walled) {
+      return walled;
+    }
     // Exhaustion is a level, not a flag: the table applies (enemy-exhaustion.ts).
     if (exhaustion) {
       // A bare "exhaustion" is one more level; "exhaustion 2" is that level.
@@ -228,14 +259,16 @@ function handleEnemyCondition(
       }
     }
     const source = (args.sourceCharacterId ?? args.sourceEnemyId ?? "").trim();
+    const wakes = wakesOnDamage(wanted, enemy.currentHp);
     const incoming =
-      args.rounds || (args.saveAbility && args.saveDc) || source
+      args.rounds || (args.saveAbility && args.saveDc) || source || wakes
         ? {
             ...(source ? { source } : {}),
             ...(args.rounds ? { rounds: args.rounds } : {}),
             ...(args.saveAbility && args.saveDc
               ? { saveEnds: { ability: args.saveAbility, dc: args.saveDc } }
               : {}),
+            ...(wakes ? { endsOnDamage: true } : {}),
           }
         : undefined;
     const laid = layEnemyConditionInstance(campaign, enemy, wanted, incoming);
@@ -255,6 +288,7 @@ function handleEnemyCondition(
             duration: `until it succeeds on a ${args.saveAbility.toUpperCase()} save (DC ${args.saveDc}), re-rolled automatically at the end of each of its turns`,
           }
         : {}),
+      ...(wakes ? { wakes: "Any damage wakes it, and the server ends it then." } : {}),
     };
   }
 
@@ -333,7 +367,7 @@ export function applyExtraEncounterCall(
       return { result: early ? early : handleAoeDamage(campaign, turn, rawArguments, sheets, sheetsById) };
     }
     case "legendary_action":
-      return { result: handleLegendaryAction(campaign, rawArguments) };
+      return { result: handleLegendaryAction(campaign, rawArguments, turn) };
     case "legendary_resist":
       return { result: handleLegendaryResist(campaign, rawArguments) };
     case "lair_action":

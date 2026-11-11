@@ -40,10 +40,12 @@ import type { Note } from "@/lib/db/notes";
 import type { Genre, LastingCompanionBlock } from "@/lib/schemas/game-settings";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { computeSheetDerived, formatModifier } from "@/lib/srd";
+import { resourceName } from "@/lib/srd/class-resources";
 import { usePackArt } from "@/lib/worlds/use-pack-art";
 import { textKey } from "@/lib/language/text-logic";
 import { heroFell, livingHero, switchesHeroes } from "@/lib/characters/fallen-logic";
 import { speciesAndClassWords } from "@/lib/characters/class-words";
+import { REAL_DICE_SCOPE } from "@/lib/dice/held-rolls";
 
 // The portrait cropper (and its cropping library) loads when a portrait is
 // being cropped, not with the table.
@@ -58,8 +60,8 @@ function inspired(sheet: CharacterSheet): boolean {
 }
 
 // Mid-game physical-dice opt-in/out; the same per-member preference the
-// Lobby toggle writes. Turning it ON means the DM pauses on your rolls and
-// asks for the numbers from your real dice.
+// Lobby toggle writes. Turning it ON means the DM pauses on the rolls
+// REAL_DICE_SCOPE names and asks for the numbers from your real dice.
 function RealDiceToggle({
   campaignId,
   member,
@@ -89,8 +91,8 @@ function RealDiceToggle({
       label="Physical dice"
       title={
         member.useRealDice
-          ? "The game pauses on your rolls and asks for your real dice results. Click to switch back to automatic digital rolls."
-          : "Roll your own physical dice: the game will tell you what to roll and wait for your result. Click to opt in."
+          ? `The game pauses for your real dice results. ${REAL_DICE_SCOPE} Click to switch back to automatic digital rolls.`
+          : `Roll your own physical dice: the game tells you what to roll and waits for your result. ${REAL_DICE_SCOPE} Click to opt in.`
       }
       className="w-full text-xs"
     >
@@ -731,7 +733,7 @@ export function PartyPanel({
                 <span className="flex min-w-0 items-center gap-1 truncate">
                   <PawPrint className="size-3 shrink-0 text-stone-500" />
                   {pet.name}
-                  {textKey(pet.name) !== textKey(pet.form) ? ` (${pet.form})` : ""}
+                  {textKey(pet.name) !== textKey(pet.form) ? ` (${pet.form}${pet.creatureType ? `, ${pet.creatureType}` : ""})` : pet.creatureType ? ` (${pet.creatureType})` : ""}
                 </span>
                 <span className={cn("font-mono", pet.hp <= 0 && "text-red-400")}>
                   {pet.hp}/{pet.maxHp}
@@ -796,7 +798,11 @@ export function PartyPanel({
               </div>
             ) : null}
 
-            <div className="party-card-stats mt-2 grid grid-cols-3 gap-1.5 text-center">
+            {/* One line of figures, not three boxes: a party of five was
+                fifteen bordered wells down the panel, each with a glyph too
+                small to read. The label is small caps, the figure is the
+                thing read. */}
+            <div className="party-card-stats mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
               {(
                 [
                   ["AC", String(shape ? shape.beastAc : sheet.ac)],
@@ -806,25 +812,15 @@ export function PartyPanel({
               ).map(([statLabel, statValue]) => (
                 <span
                   key={statLabel}
-                  className={cn(
-                    "rounded-md border border-stone-700/50 bg-stone-950/60 py-1 shadow-[0_1px_2px_rgba(4,2,12,0.5)_inset]",
-                    shape && statLabel === "AC" && "border-lime-800/60 text-lime-300",
-                  )}
+                  className={cn("inline-flex items-baseline gap-1.5", shape && statLabel === "AC" && "text-lime-300")}
                   title={
                     shape && statLabel === "AC"
                       ? `The beast form's armor class; ${sheet.name}'s own is ${sheet.ac}.`
                       : undefined
                   }
                 >
-                  <span className="eyebrow block text-[8px] text-stone-500">
-                    <GameIcon
-                      icon={{ kind: "glyph", key: statLabel === "AC" ? "rest-ac" : statLabel === "PP" ? "sense-passive-perception" : "rest-initiative" }}
-                      size="size-3.5"
-                      className="mr-0.5 inline-block -translate-y-px align-middle"
-                    />
-                    {statLabel}
-                  </span>
-                  <span className="font-mono text-xs text-stone-200">{statValue}</span>
+                  <span className="eyebrow text-[9px] text-stone-500">{statLabel}</span>
+                  <span className={cn("font-mono text-[13px]", shape && statLabel === "AC" ? "text-lime-300" : "text-stone-100")}>{statValue}</span>
                 </span>
               ))}
             </div>
@@ -834,10 +830,10 @@ export function PartyPanel({
                 {Object.entries(sheet.resources).map(([id, state]) => (
                   <span
                     key={id}
-                    className="rounded-full border border-stone-700/50 bg-stone-950/60 px-2 py-0.5 text-[10px] capitalize text-stone-300"
+                    className="rounded-full border border-stone-700/50 bg-stone-950/60 px-2 py-0.5 text-[10px] text-stone-300"
                     title="Limited-use resource: remaining/max"
                   >
-                    {id.replaceAll("_", " ")} {state.max - state.used}/{state.max}
+                    {resourceName(id)} {state.max - state.used}/{state.max}
                   </span>
                 ))}
               </div>

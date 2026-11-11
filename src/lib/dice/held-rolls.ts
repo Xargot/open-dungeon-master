@@ -10,6 +10,19 @@
 //
 // Pure and alias-import-free so scripts/test-held-rolls.mjs can load it.
 
+// What a player rolling real dice is asked for, said wherever they opt in.
+// Every d20 a GM's call throws for a character goes through one door
+// (src/lib/dm/character-roll.ts), which holds the call for the card: a
+// request_roll and a pc_attack park their own, and every other check, save,
+// contest and attack waits the same way, the saves the engine forces and
+// concentration included ("A seat on physical dice rolls its own saves,
+// including saves the engine forces", maintainer decision R5 of the
+// 2026-11-09 gap sweep, after issue #896). A roll made outside any of the
+// GM's calls (a death save as the turn passes once the GM has spoken, a
+// disease's save at a rest) has no call to hold, and is still thrown.
+export const REAL_DICE_SCOPE =
+  "You roll your attacks and their damage, initiative, and every check and save your character makes, the saves a spell, trap or monster forces on you included. Only a roll that comes between the GM's moves, such as a death save as your turn begins, may be rolled for you.";
+
 export type HeldRollMember = {
   userId: string;
   useRealDice: boolean;
@@ -20,7 +33,16 @@ export type HeldRollMember = {
 // parked, because the two reasons are answered differently: real dice are
 // typed by the player and believed, a held roll is thrown by the server the
 // moment the player lets it go.
-export type ParkReason = "real_dice" | "held";
+//
+// The third reason is the game's own: the server has thrown the dice and the
+// roll waits on what the player does with them (src/lib/dm/after-roll.ts).
+//
+// The fourth is too: no die is thrown yet, and the player may replace it with
+// a number Portent foretold (src/lib/dm/foretold-logic.ts).
+//
+// The fifth holds no roll of this player's at all: another creature is about
+// to roll, and the player watching for Portent may answer (src/lib/dm/foresight.ts).
+export type ParkReason = "real_dice" | "held" | "after_roll" | "foretold" | "watch";
 
 type DicePreferences = Pick<HeldRollMember, "useRealDice" | "holdRolls">;
 
@@ -50,7 +72,7 @@ export function mayTypeFaces(
   dicePolicy: string,
   member: DicePreferences | null | undefined,
 ): boolean {
-  if (parkedFor === "held") {
+  if (parkedFor === "held" || parkedFor === "after_roll" || parkedFor === "foretold" || parkedFor === "watch") {
     return false;
   }
   return parkReasonFor(dicePolicy, member) === "real_dice";

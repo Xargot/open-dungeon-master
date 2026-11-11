@@ -555,6 +555,15 @@ await test("Opportunist: a reaction melee attack against a creature within 5 fee
   const friend = hero({ class: "fighter", level: 17 });
   const [enemy] = await stage(friend);
   kit.place(shade.id, 5, 7);
+  // "A creature within 5 feet of you that another creature just hit": the
+  // friend's hit, on record (src/lib/srd/trigger-table.ts). With none it is
+  // refused, as every reaction with nothing to answer is.
+  const unprompted = await react(shade, "Opportunist", { targetEnemyId: enemy.id });
+  assert.equal(unprompted.ok, false, "no creature has hit the foe");
+  world.clearDice();
+  world.dice(19, 5);
+  const struck = await world.invoke("pc_attack", { characterId: friend.id, targetEnemyId: enemy.id });
+  assert.equal(struck.ok, true, struck.error);
   world.clearDice();
   world.dice(18, 5);
   const out = await react(shade, "Opportunist", { targetEnemyId: enemy.id });
@@ -597,7 +606,7 @@ await test("Every typed authored effect kind is read by the engine file that nam
 await test("Every condition an authored spend, reaction or mark writes has a meaning the engines read: a registry row or an SRD condition.", async () => {
   const { authoredRows } = await import("../src/lib/srd/authored-effects.ts");
   const { conditionEffectsFor } = await import("../src/lib/srd/condition-effects.ts");
-  const SRD = new Set(["prone", "frightened", "charmed", "restrained", "stunned", "poisoned", "blinded", "deafened"]);
+  const SRD = new Set(["prone", "frightened", "charmed", "restrained", "stunned", "poisoned", "blinded", "deafened", "invisible"]);
   const names = new Set();
   const addBuff = (does) => {
     const bases = Array.isArray(does.condition) ? does.condition.map(([, name]) => name) : [does.condition];
@@ -611,7 +620,7 @@ await test("Every condition an authored spend, reaction or mark writes has a mea
       const options = spend.does.kind === "variants" ? Object.values(spend.does.options).map((option) => option.does) : [spend.does];
       for (const does of options) {
         if (does.kind === "buff") addBuff(does);
-        if (does.kind === "save_effect" && does.condition) names.add(does.condition);
+        if ((does.kind === "save_effect" || does.kind === "save_area") && does.condition) names.add(does.condition);
         if (does.kind === "insight_contest") names.add(does.condition);
       }
     }

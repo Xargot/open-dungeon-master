@@ -3,7 +3,7 @@ import { getCampaignById } from "@/lib/db/campaigns";
 import { getActiveEncounter } from "@/lib/db/encounters";
 import { gutterBurntLights } from "@/lib/dm/light-timers";
 import { dawnsBetween, rechargeAtDawn } from "@/lib/dm/item-charges";
-import { upkeepAtDawns } from "@/lib/dm/supplies";
+import { mealAtTable, upkeepAtDawns } from "@/lib/dm/supplies";
 import { afflictionClockTick } from "@/lib/dm/afflictions";
 import { poisonClockTick } from "@/lib/dm/affliction-poisons";
 import { fireCalendarEvents } from "@/lib/dm/calendar-fire";
@@ -15,7 +15,7 @@ import { conscienceClockTick } from "@/lib/dm/conscience";
 import { currentTurnId } from "@/lib/dm/job-control";
 import { patchSheetAudited } from "@/lib/dm/audited-patch";
 import { clockTurnOf, liveClockMoves, markClockMovesReverted, recordClockMove } from "@/lib/db/clock-moves";
-import { rewindClock, type ClockRewind } from "@/lib/dm/clock-rewind-logic";
+import { rewindClock, type ClockImage, type ClockRewind } from "@/lib/dm/clock-rewind-logic";
 import {
   advance,
   clampInstant,
@@ -26,6 +26,7 @@ import {
   type Instant,
 } from "@/lib/dm/calendar";
 import type { ToolError } from "@/lib/dm/tool-errors";
+import { legsWithinDay } from "@/lib/srd/travel";
 
 // Reading and writing the campaign's in-world clock.
 //
@@ -55,6 +56,13 @@ export function advanceClock(
   campaignId: string,
   amount: number,
   unit: AdvanceUnit,
+  // A meal the story named as this time began (issue 793): written here, past
+  // the last refusal and after `current` is read, so a clock that does not
+  // move eats nothing and "Revert this turn" takes the meal back with the time.
+  // `lifestyle`: whose lifestyle the caller charges for the dawns crossed, by
+  // character id, with the copper a day their work covers (supplies.ts
+  // upkeepAtDawns); only they are fed by it.
+  options: { meal?: boolean; lifestyle?: Record<string, number> } = {},
 ): { clock: CampaignClock; minutes: number; deathSaves: string[] } | ToolError {
   const current = getClock(campaignId);
   const moved = advance(current.instant, amount, unit);
@@ -64,6 +72,11 @@ export function advanceClock(
   const clock = { ...current, instant: moved.instant };
   // Time moving on closes the choosing of hit dice after a short rest.
   delete clock.shortRest;
+  const fed = options.meal ? mealAtTable(campaignId, current.supplies ?? {}, current.waterRation) : null;
+  if (fed) {
+    clock.supplies = fed;
+    clock.mealAtDawn = true;
+  }
   // A Wild Shape lasts hours, and the hours are these.
   const lapsed = Object.entries(current.shapeEnds ?? {}).filter(([, ends]) => ends <= moved.instant);
   if (lapsed.length) {
@@ -115,9 +128,13 @@ export function advanceClock(
   // Every dawn crossed refills the wands and staffs that regain at dawn,
   // and, under the supplies variant, ends a day of eating and drinking.
   rechargeAtDawn(campaignId, current.instant, moved.instant);
-  const hunger = upkeepAtDawns(campaignId, dawnsBetween(current.instant, moved.instant), current.supplies ?? {});
-  if (hunger) {
-    setClock(campaignId, { ...getClock(campaignId), supplies: hunger });
+  const dawns = dawnsBetween(current.instant, moved.instant);
+  const hunger = upkeepAtDawns(campaignId, dawns, clock.supplies ?? {}, clock.mealAtDawn === true, options.lifestyle);
+  if (hunger || (dawns && clock.mealAtDawn)) {
+    // The dawn uses the meal up, with the variant since turned off as well.
+    const dawned = getClock(campaignId);
+    delete dawned.mealAtDawn;
+    setClock(campaignId, hunger ? { ...dawned, supplies: hunger } : dawned);
   }
   fireCalendarEvents(campaignId, current.calendar, current.instant, moved.instant);
   // A disease's symptoms, a long madness ending, a poison's daily save or
@@ -137,17 +154,35 @@ export function advanceClock(
   return { clock: after, minutes: moved.minutes, deathSaves };
 }
 
-// What reverting this turn would do to the clock (src/lib/dm/
-// clock-rewind-logic.ts), without doing it: null when the turn moved no
-// time, `kept` when the clock has moved on since.
-export function previewTurnClockRewind(campaignId: string, turnId: string): ClockRewind | null {
-  return rewindClock(getClock(campaignId), liveClockMoves(campaignId, turnId));
+// The whole clock as the turn found it and left it, from the campaign row
+// the turn kept (src/lib/db/turn-journal.ts), or null when the turn kept
+// none. A turn whose work is not sealed yet left it as it stands now.
+function turnClockImage(campaignId: string, turnId: string, current: CampaignClock): ClockImage | null {
+  const row = getDatabase()
+    .prepare(`SELECT before_json, after_json, sealed FROM turn_rows WHERE turn_id = ? AND tbl = 'campaigns' AND row_id = ? AND reverted_at IS NULL`)
+    .get(turnId, campaignId) as { before_json: string | null; after_json: string | null; sealed: number } | undefined;
+  const clockOf = (json: string | null) => parseJson<{ clock_json?: string } | null>(json, null)?.clock_json;
+  const before = clockOf(row?.before_json ?? null);
+  if (!row || before === undefined) {
+    return null;
+  }
+  const after = row.sealed ? clockOf(row.after_json) : undefined;
+  return { before: normalizeClock(parseJson(before ?? "", null)), after: after === undefined ? current : normalizeClock(parseJson(after ?? "", null)) };
 }
 
-// "Revert this turn" puts back the time the turn moved on, read after the
-// sheets are restored so what their undo wrote to the clock (a long rest
-// forgotten) stands. Returns what it did, or null for a turn that moved no
-// time (issue #622).
+// What reverting this turn would do to the clock (src/lib/dm/
+// clock-rewind-logic.ts), without doing it: null when the turn changed
+// nothing on it, `kept` when the clock has moved on since.
+export function previewTurnClockRewind(campaignId: string, turnId: string): ClockRewind | null {
+  const current = getClock(campaignId);
+  return rewindClock(current, liveClockMoves(campaignId, turnId), turnClockImage(campaignId, turnId, current));
+}
+
+// "Revert this turn" puts back what the turn changed on the clock, read
+// after the sheets are restored so what their undo wrote to the clock (a
+// long rest forgotten) stands, and before the turn's rows are marked taken
+// back. Returns what it did, or null for a turn that left the clock alone
+// (issue #622).
 export function rewindTurnClock(campaignId: string, turnId: string): ClockRewind | null {
   const plan = previewTurnClockRewind(campaignId, turnId);
   if (!plan) {
@@ -211,6 +246,13 @@ export function setTravelPace(campaignId: string, pace: CampaignClock["travelPac
   const { travelPace: _was, ...rest } = current;
   void _was;
   setClock(campaignId, pace ? { ...rest, travelPace: pace } : rest);
+}
+
+// A stretch of marching that just ended and who marched it, kept for the
+// day after it (src/lib/srd/travel.ts forcedMarchSpan).
+export function recordMarch(campaignId: string, end: number, minutes: number, ids: string[]) {
+  const current = getClock(campaignId);
+  setClock(campaignId, { ...current, marched: [...legsWithinDay(current.marched ?? [], end), { end, minutes, ids }] });
 }
 
 // How much water the party finds each day, for the `supplies` variant

@@ -12,8 +12,10 @@ import { listEffects } from "@/lib/db/active-effects";
 import { applyField, resolveField } from "@/lib/dm/effects-logic";
 import { getActiveBoard, getActiveEncounter, getEnemy, listEnemies, type Encounter, type EncounterEnemy } from "@/lib/db/encounters";
 import { listDroppedItems } from "@/lib/db/dropped-items";
-import { tokenFootprint } from "@/lib/dm/board-reach";
+import { spaceOf, tilesApart, tokenFootprint } from "@/lib/dm/board-reach";
+import { unseenByConditions } from "@/lib/dm/authored-saves";
 import { speedFor } from "@/lib/srd";
+import { wearsBodyArmor } from "@/lib/srd/authored-effects";
 import { getMounts } from "@/lib/db/mounts";
 import { mountActionTaken } from "@/lib/srd/mounts";
 import { effectiveMaxHp, effectiveSpeed, exhaustionSpeed } from "@/lib/dm/condition-logic";
@@ -32,6 +34,7 @@ import {
 } from "@/lib/db/battle-maps";
 import {
   darkvisionTilesFromText,
+  hasLineOfSightBetween,
   perceivesToken,
   visibleTiles,
   type Viewer,
@@ -49,7 +52,7 @@ import { enemyMoveBudget } from "@/lib/dm/enemy-speed";
 import { enemyActedThisRound } from "@/lib/dm/can-act";
 import { namesLookup } from "@/lib/battlemap/condition-notes";
 import { characterHealthWord, characterStageRows, enemyStageRows } from "@/lib/battlemap/view-stage";
-import { targetEdges } from "@/lib/battlemap/view-tactics";
+import { ownSquareFacts, targetEdges, targetSight } from "@/lib/battlemap/view-tactics";
 import { lightSourcesWithZones, lightsWithZones, sightTerrainFor, withZoneSteps } from "@/lib/dm/zone-rules";
 import { viewZones } from "@/lib/dm/zone-view";
 import { standUpTiles } from "@/lib/srd/authored-effects-more";
@@ -58,8 +61,9 @@ import { undoableMove, undoOffer } from "@/lib/battlemap/move-undo";
 import type { AuraTone, PlayerMapView } from "@/lib/battlemap/view-types";
 import { ENEMY_TURN_NAME, turnOwner } from "@/lib/dm/turn-owner";
 import { holdsFeature } from "@/lib/srd/feature-names";
-import { actorSex } from "@/lib/actor-sex-logic";
-import { getNpcById } from "@/lib/db/npcs";
+import { foeLook, pickedGender, storedSex, type Sex } from "@/lib/actor-sex-logic";
+import { castLookup, npcFace } from "@/lib/db/npc-faces";
+import { enemiesAhead } from "@/lib/dm/held-turn";
 
 export type { PlayerMapView } from "@/lib/battlemap/view-types";
 
@@ -103,7 +107,8 @@ export function sheetSenses(sheet: CharacterSheet): Senses {
 }
 
 // Whether this player's PC may move right now: open floor, or their own
-// slot in the initiative order.
+// slot in the initiative order once their turn has begun (a turn held for
+// the enemies before it waits for them, src/lib/dm/held-turn.ts).
 function canMoveNow(campaignId: string, characterId: string): boolean {
   const floor = getFloor(campaignId);
   if (floor.mode === "open") {
@@ -117,7 +122,7 @@ function canMoveNow(campaignId: string, characterId: string): boolean {
     return false;
   }
   const current = encounter.order[encounter.turnIndex];
-  return current?.kind === "pc" && current.characterId === characterId;
+  return current?.kind === "pc" && current.characterId === characterId && !enemiesAhead(encounter, characterId).length;
 }
 
 // Movement left this turn for a player character, in tiles, and the speed
@@ -135,7 +140,7 @@ export function pcMoveBudget(
   // A mounted rider moves at the mount's speed (SRD 5.1, Mounted Combat).
   const mount = getMounts(campaignId)[sheet.id];
   // Aloft, a character moves at their flying speed (the Fly spell's 60 feet).
-  const flying = token.movement === "fly" ? flyingSpeedOf({ conditions: sheet.conditions, features: sheet.features, worn: itemSpeeds(sheet.equipment, sheet, sheet.speed).fly }) : null;
+  const flying = token.movement === "fly" ? flyingSpeedOf({ conditions: sheet.conditions, features: sheet.features, walkingFeet: sheet.speed, worn: itemSpeeds(sheet.equipment, sheet, sheet.speed).fly, armored: wearsBodyArmor(sheet) }) : null;
   const base = mount
     ? mount.speed
     : flying ?? speedFor(sheet, {
@@ -320,6 +325,26 @@ export function buildPlayerMapView(
   // rim of a creature fighting on the side its kind does not.
   const sides = tokenSides(encounter);
   const viewerSide = sheet ? sides({ kind: "pc", refId: sheet.id }) : "party";
+  // Who a figure is, for its flat face and a 3D view's model, read after the
+  // filter below so a figure a viewer may not see carries nothing to them
+  // (src/lib/actor-sex-logic.ts). A foe: its Cast NPC's record, else its
+  // own row's look. A figure the GM placed: the Cast NPC of that name, with
+  // their face, else a stranger with a pick from its own ref (its flat face
+  // stays the one by name, which has no gender to disagree with).
+  const cast = castLookup(campaignId);
+  const lookOf = (token: (typeof tokens)[number]): { face?: string; sex?: Sex } => {
+    if (token.kind === "enemy") {
+      const enemy = enemiesById.get(token.refId);
+      const sex = enemy ? storedSex(foeLook(enemy, cast.byId(enemy.npcId)).gender) : undefined;
+      return sex ? { sex } : {};
+    }
+    if (token.kind === "npc") {
+      const npc = cast.byId(token.refId) ?? cast.byName(token.name);
+      const sex = storedSex(npc ? npc.gender : pickedGender(token.refId));
+      return { ...(npc ? { face: npcFace(npc) } : {}), ...(sex ? { sex } : {}) };
+    }
+    return {};
+  };
   const shownTokens = tokens
     .filter((token) => {
       // The DM hid it, so for everyone but the DM it is not on the board at
@@ -335,18 +360,18 @@ export function buildPlayerMapView(
         }
         // Seen, or felt through the ground by tremorsense. The DM sees all.
         // A creature fighting at the viewer's side is drawn as an ally is.
-        return fullVision || sides(token) === viewerSide || (viewer ? perceivesToken(vision, viewer, token, visible) : false);
+        return fullVision || sides(token) === viewerSide || (viewer ? perceivesToken(vision, viewer, token, visible, spaceOf(token)) : false);
       }
       // A character fighting against the viewer's side is fog-gated as an
       // enemy is: the party does not see through a turncoat's eyes.
       if (token.kind === "pc" && sides(token) !== viewerSide) {
-        return fullVision || (viewer ? perceivesToken(vision, viewer, token, visible) : false);
+        return fullVision || (viewer ? perceivesToken(vision, viewer, token, visible, spaceOf(token)) : false);
       }
       // Allies are always drawn: the party coordinates aloud at the table.
       // The DM's own NPCs and props are things standing in the room, so they
       // follow the same rule the enemies do and appear when they are seen.
       if (token.kind === "npc" || token.kind === "prop") {
-        return fullVision || (viewer ? perceivesToken(vision, viewer, token, visible) : false);
+        return fullVision || (viewer ? perceivesToken(vision, viewer, token, visible, spaceOf(token)) : false);
       }
       return true;
     })
@@ -355,14 +380,6 @@ export function buildPlayerMapView(
       kind: token.kind,
       refId: token.refId,
       name: token.name,
-      ...(token.kind === "enemy" ? {
-        sex: actorSex(enemiesById.get(token.refId)?.npcId ?? token.refId, enemiesById.get(token.refId)?.stats.sex),
-      } : token.kind === "npc" ? (() => {
-        // A display name is not a link to a cast member with the same name.
-        const linked = getNpcById(token.refId);
-        const npc = linked?.campaignId === campaignId ? linked : null;
-        return { sex: actorSex(token.refId, npc?.gender) };
-      })() : {}),
       x: token.x,
       y: token.y,
       mine: myToken !== null && token.id === myToken.id,
@@ -372,6 +389,7 @@ export function buildPlayerMapView(
       hidden: token.hidden,
       light: lightRemaining(token, clockInstant),
       stamp: token.stamp ?? "",
+      ...lookOf(token),
       ...offSide(token, sides(token)),
     }));
 
@@ -598,6 +616,7 @@ export function buildPlayerMapView(
     edges:
       sheet && myToken && encounter.kind === "fight"
         ? targetEdges({
+            campaignId,
             encounterId: encounter.id,
             characterId: sheet.id,
             characterConditions: sheet.conditions,
@@ -605,6 +624,33 @@ export function buildPlayerMapView(
             flankingRule: getCampaignById(campaignId)?.gameSettings.variantRules.flanking === true,
           })
         : {},
+    ...(sheet && myToken ? { self: ownSquareFacts(campaignId, encounter, sheet) } : {}),
+    ...(sheet && myToken && encounter.kind === "fight"
+      ? { sight: targetSight({ campaignId, encounterId: encounter.id, characterId: sheet.id, enemyIds: tokens.filter((token) => token.kind === "enemy" && (!token.hidden || fullVision)).map((token) => token.refId) }) }
+      : {}),
+    ...(sheet && myToken && encounter.kind === "fight"
+      ? (() => {
+          // Measured on the stored tokens, footprints and all, as withinFeet
+          // measures them; only those this viewer is shown.
+          const shown = new Set(shownTokens.map((token) => token.id));
+          const others = tokens.filter((token) => token.id !== myToken.id && shown.has(token.id));
+          // Sight as the engine reads it for a reaction (authored-saves.ts
+          // reactionUnseen): the line of sight, and the conditions (a blinded
+          // character, an invisible creature), which hiding does not join.
+          const sight = sightTerrainFor(map);
+          const blocked = (token: (typeof others)[number]) => {
+            const other = enemiesById.get(token.refId) ?? sheetsById.get(token.refId);
+            return Boolean(other && unseenByConditions(encounter.id, sheet, other, { hidden: false }));
+          };
+          return {
+            feet: Object.fromEntries(others.map((token) => [token.refId, tilesApart(myToken, token) * 5])),
+            unseen: others
+              .filter((token) => token.x >= 0 && token.y >= 0 && token.x < map.width && token.y < map.height)
+              .filter((token) => blocked(token) || !hasLineOfSightBetween(sight, map.width, spaceOf(myToken), spaceOf(token)))
+              .map((token) => token.refId),
+          };
+        })()
+      : {}),
     ...(fullVision
       ? {
           doors: map.doors,

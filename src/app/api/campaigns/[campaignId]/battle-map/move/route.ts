@@ -6,7 +6,7 @@ import { actingSheetFor } from "@/lib/character-seat";
 import { capsFor, isErrorResponse, requireMember } from "@/lib/campaign-api";
 import { getFloor } from "@/lib/db/campaigns";
 import { getActiveBoard, listEnemies } from "@/lib/db/encounters";
-import { patchSheet } from "@/lib/db/sheets";
+import { getSheetById, patchSheet } from "@/lib/db/sheets";
 import {
   getBattleMapForEncounter,
   getTokenByRef,
@@ -26,10 +26,12 @@ import { budgetApplies } from "@/lib/dm/action-budget";
 import { resolveOpportunityAttacks } from "@/lib/dm/opportunity";
 import { riskyOrderGate } from "@/lib/dm/party-conduct";
 import { canAct } from "@/lib/dm/can-act";
+import { dominatedRefusal } from "@/lib/dm/companion-command";
 import { removeConditions } from "@/lib/dm/condition-logic";
 import { awayFromFear, fearSourceAt } from "@/lib/dm/enemy-approach";
 import { publishPersisted } from "@/lib/events";
 import { releaseGrapplesOutOfReach } from "@/lib/dm/grapple";
+import { afterMoveLeashes } from "@/lib/dm/condition-leash";
 import { withZoneSteps } from "@/lib/dm/zone-rules";
 import { zonesAfterMove } from "@/lib/dm/zone-triggers";
 import { standUpTiles } from "@/lib/srd/authored-effects-more";
@@ -39,6 +41,9 @@ import { jumpLine } from "@/lib/srd/jump";
 import { sizeForRace } from "@/lib/srd";
 import { proneCharge } from "@/lib/battlemap/board-move";
 import { refuseDuringBreak } from "@/lib/dm/table-break";
+import { swallowWalk } from "@/lib/dm/swallow";
+import { beginHeldTurnOf, enemiesAhead, heldTurnLine } from "@/lib/dm/held-turn";
+import { heldMoveLine } from "@/lib/dm/turn-hold";
 
 export const runtime = "nodejs";
 
@@ -112,6 +117,14 @@ export async function POST(
   if (!sheet || !token) {
     return Response.json({ error: "You have no token on this map." }, { status: 400 });
   }
+  // A character dominated by the other side is the GM's to play until the
+  // charm ends (src/lib/dm/companion-command.ts), its walk included: the
+  // actions route refused its player's words while this route still walked
+  // its token on its turn.
+  const held = dominatedRefusal(campaignId, sheet);
+  if (held) {
+    return Response.json({ error: held, dominated: true }, { status: 409 });
+  }
   // The one guard every acting handler asks (src/lib/dm/can-act.ts): the
   // dead, the dying, the incapacitated and the surprised do not move, and in
   // a fight nobody moves on a turn that is not theirs.
@@ -129,6 +142,21 @@ export async function POST(
   }
 
   const floor = getFloor(campaignId);
+  // Their End Turn is in and the move waits on a watcher's stop
+  // (src/lib/dm/turn-hold.ts): the turn is over.
+  const ending = heldMoveLine(encounter, sheet.id);
+  if (ending) {
+    return Response.json({ error: ending }, { status: 409 });
+  }
+  // A turn held for the enemies before it has not begun until they have
+  // acted (src/lib/dm/held-turn.ts): the walk waits for it, as an action
+  // does, and once nothing is still to act it begins the turn.
+  if (!readied && encounter.legendary.turnStart === sheet.id) {
+    const ahead = enemiesAhead(encounter, sheet.id);
+    if (ahead.length || floor.mode === "hold") {
+      return Response.json({ error: heldTurnLine(sheet.name, ahead) }, { status: 409 });
+    }
+  }
   if (floor.mode === "initiative") {
     const current = encounter.orderReady ? encounter.order[encounter.turnIndex] : undefined;
     if (!readied && (!current || current.kind !== "pc" || current.characterId !== sheet.id)) {
@@ -139,6 +167,9 @@ export async function POST(
     }
   } else if (floor.mode !== "open") {
     return Response.json({ error: "You cannot move right now." }, { status: 409 });
+  }
+  if (!readied) {
+    beginHeldTurnOf(encounter, sheet.id);
   }
 
   const raw = await request.json().catch(() => ({}));
@@ -157,6 +188,15 @@ export async function POST(
   const speed = turnBudget.speed;
   const budget = readied ? speedToTiles(speed) : turnBudget.tiles;
   const fullTiles = readied ? speedToTiles(speed) : turnBudget.fullTiles;
+  // Swallowed (src/lib/dm/swallow.ts): inside a living creature the route
+  // says so, and how out; out of a dead one the walk is the climb out of its
+  // corpse.
+  const climb = campaign && !readied ? swallowWalk(campaign, encounter, map, sheet, token) : null;
+  if (climb) {
+    return "error" in climb
+      ? Response.json({ error: climb.error }, { status: 409 })
+      : Response.json({ ...climb, view: buildPlayerMapView(campaignId, user.id) });
+  }
   if (speed <= 0) {
     const cause =
       sheet.conditions.join(", ") ||
@@ -370,10 +410,16 @@ export async function POST(
   for (const entry of carried) {
     moveToken(entry.token.id, entry.at.x, entry.at.y, entry.token.movedThisRound);
   }
-  // Walking away from a grapple ends it (src/lib/dm/grapple.ts).
+  // Walking away from a grapple ends it (src/lib/dm/grapple.ts), and away
+  // from a creature the walker leashes ends the leash (condition-leash.ts).
   const letGo = campaign ? releaseGrapplesOutOfReach(campaign) : [];
+  if (campaign) {
+    afterMoveLeashes(campaign);
+  }
   if (stands) {
-    const stood = removeConditions(sheet.conditions, sheet.conditionMeta, ["prone"]);
+    // Read again: the move above may have ended an invisibility on the sheet.
+    const current = getSheetById(sheet.id) ?? sheet;
+    const stood = removeConditions(current.conditions, current.conditionMeta, ["prone"]);
     const updated = patchSheet(sheet.id, {
       conditions: stood.conditions,
       conditionMeta: stood.meta,

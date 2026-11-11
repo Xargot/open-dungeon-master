@@ -10,11 +10,12 @@
 // Called from pc-attack-plan.ts (the budget, before anything is spent) and
 // from authored-hooks.ts authoredOnHit (the bite, after the hit).
 
+import { fightMarked, markFight } from "@/lib/dm/turn-marks";
+import { regainHitPoints } from "@/lib/dm/regain";
 import type { Campaign } from "@/lib/db/campaigns";
 import { turnKey, type Encounter } from "@/lib/db/encounters";
-import { getSheetById, patchSheet } from "@/lib/db/sheets";
+import { getSheetById } from "@/lib/db/sheets";
 import type { Advantage } from "@/lib/dice";
-import { publishPersisted } from "@/lib/events";
 import type { TurnBudget } from "@/lib/dm/action-budget";
 import { effectiveMaxHp } from "@/lib/dm/condition-logic";
 import { computeSheetDerived } from "@/lib/srd";
@@ -24,8 +25,9 @@ import type { ToolError } from "@/lib/dm/tool-errors";
 
 const CLAWS_EXTRA = "form of the beast:claws";
 const RAPID_STRIKE = "rapid strike";
-// The turn a bite last healed in, per barbarian (turnKey).
-const BITE_HEALED = new Map<string, string>();
+// The turn a bite last healed in, per barbarian (turnKey): a mark the
+// fight's row keeps (turn-marks.ts), which a restart remembers.
+const biteKey = (holderId: string) => `form of the beast bite:${holderId}`;
 
 // The Attack action's budget after a claw attack: one more attack, the first
 // time a turn.
@@ -104,15 +106,14 @@ export function naturalWeaponOnHit(
   }
   const max = effectiveMaxHp(sheet);
   const stamp = `${encounter.id}:${turnKey(encounter)}`;
-  if (sheet.currentHp <= 0 || sheet.currentHp >= max / 2 || BITE_HEALED.get(sheet.id) === stamp) {
+  if (sheet.currentHp <= 0 || sheet.currentHp >= max / 2 || fightMarked(encounter.id, biteKey(sheet.id), stamp)) {
     return [];
   }
-  const heal = computeSheetDerived(sheet).proficiencyBonus;
-  const currentHp = Math.min(max, sheet.currentHp + heal);
-  const updated = patchSheet(sheet.id, { currentHp });
-  if (updated) {
-    publishPersisted(campaign.id, "sheet_updated", { sheet: updated });
+  // Under the heal tool's rules (regain.ts), and audited, so an undo takes it back.
+  const gained = regainHitPoints(campaign, null, sheet, computeSheetDerived(sheet).proficiencyBonus, `${natural.feature}: the bite's healing`);
+  if (gained <= 0) {
+    return [];
   }
-  BITE_HEALED.set(sheet.id, stamp);
-  return [`${natural.feature}: the bite heals ${sheet.name} ${currentHp - sheet.currentHp} hit points.`];
+  markFight(encounter.id, biteKey(sheet.id), stamp);
+  return [`${natural.feature}: the bite heals ${sheet.name} ${gained} hit points.`];
 }

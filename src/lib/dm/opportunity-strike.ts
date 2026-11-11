@@ -17,18 +17,19 @@ import { getFoe } from "@/lib/dm/sheet-foe";
 import { isSheetFoe } from "@/lib/dm/combat-sides-logic";
 import { openLastHit } from "@/lib/dm/last-hit";
 import { hasSentinel } from "@/lib/srd/feat-combat";
-import { tryParry } from "@/lib/dm/enemy-reactions";
+import { attackerUnseen, tryParry } from "@/lib/dm/enemy-reactions";
 import { allocateSeq, type Campaign } from "@/lib/db/campaigns";
 import { closeStandInTurn, openStandInTurn, type DmTurn } from "@/lib/db/dm-turns";
 import { patchEnemyConditions, type Encounter, type EncounterEnemy } from "@/lib/db/encounters";
 import { insertRoll, markRollApplied } from "@/lib/db/rolls";
 import { rollAgainst } from "@/lib/roll-labels";
 import { getSheetById, listSheets, patchSheet } from "@/lib/db/sheets";
-import { d20Expression, rollExpression, type Advantage } from "@/lib/dice";
+import { d20Expression, type Advantage } from "@/lib/dice";
+import { rollCharacterD20 } from "@/lib/dm/character-roll";
 import { publishPersisted, publishWithSeq } from "@/lib/events";
 import { healthState } from "@/lib/bestiary/health";
 import { enemyAcWithEffects } from "@/lib/dm/ac-effects";
-import { attackSight, characterSenses, enemySenses, fearAsRolled, lightOnAttack } from "@/lib/dm/attack-light";
+import { attackSenses, attackSight, characterSenses, enemySenses, fearAsRolled, lightOnAttack } from "@/lib/dm/attack-light";
 import { adjudicateHit, weaponAttackProfile, type ResolvedWeapon } from "@/lib/dm/attack-logic";
 import { endInvisibilityOnCast, planMarks, writeMarks } from "@/lib/dm/attack-marks";
 import {
@@ -37,7 +38,7 @@ import {
   mergeAdvantage,
   removeConditions,
 } from "@/lib/dm/condition-logic";
-import { critDamageExpression } from "@/lib/dm/encounter-logic";
+import { critDamageExpression, ordinaryOfCritical } from "@/lib/dm/encounter-logic";
 import { publishEncounter } from "@/lib/dm/enemy-damage";
 import { martialArtsApplies } from "@/lib/dm/pc-attack-options";
 import { shillelaghSwing } from "@/lib/dm/attack-features";
@@ -48,6 +49,7 @@ import { computeSheetDerived } from "@/lib/srd";
 import { conditionRollRiders } from "@/lib/srd/condition-effects";
 import { conditionsSpentAgainst } from "@/lib/srd/condition-effect-queries";
 import { combatRiders } from "@/lib/srd/feature-effects";
+import { magicItemRiders } from "@/lib/srd/magic-items";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import { markOpportunityHit } from "@/lib/dm/authored-reactions-more";
 
@@ -106,6 +108,8 @@ export function pcOpportunitySwing(input: {
   let profile = weaponAttackProfile(shillelagh?.derived ?? derived, sheet.proficiencies.weapons, shillelagh?.resolved ?? resolved, {
     riders,
     martialArts: martialArtsApplies(sheet),
+    // A worn item's bonus rides the reaction's swing as it does the turn's.
+    worn: magicItemRiders(sheet.equipment, sheet).weaponRiders,
   });
   if (shillelagh) {
     profile = { ...profile, magicWeapon: true };
@@ -133,6 +137,7 @@ export function pcOpportunitySwing(input: {
   // the dodger sees (attack-light.ts), as on pc_attack.
   const sight = opportunitySight({ campaignId: campaign.id, encounterId: encounter.id, enemy, sheet, enemyReacts: false });
   const context = attackContext({
+    ...attackSenses(encounter.id, { refId: sheet.id, senses: characterSenses(sheet) }, { refId: enemy.id, senses: enemySenses(enemy) }),
     attackerConditions: fearAsRolled(encounter.id, sheet.id, sheet.conditions, sheet.conditionMeta),
     targetConditions: input.targetConditions,
     melee: true,
@@ -164,7 +169,16 @@ export function pcOpportunitySwing(input: {
   const targetAc = enemyAcWithEffects(campaign.id, enemy);
   const hitLog = isSheetFoe(enemy) ? openLastHit(campaign.id, enemy.id) : null;
   const closeLog = () => hitLog?.close({ attacker: { kind: "sheet", id: sheet.id, name: sheet.name }, attack: `${profile.weapon} (opportunity attack)`, type: profile.damageType, ranged: false });
-  const hitOutcome = rollExpression(`${d20Expression(profile.toHit, advantage)}${attackRiders.diceSuffix}`);
+  // The character's own attack roll (src/lib/dm/character-roll.ts): on
+  // physical dice their player rolls it, and a miss waits on what they hold,
+  // as a pc_attack's does.
+  const hitOutcome = rollCharacterD20(campaign, sheet, {
+    kind: "attack",
+    expression: `${d20Expression(profile.toHit, advantage)}${attackRiders.diceSuffix}`,
+    detail: rollAgainst(`${profile.weapon} (opportunity attack)`, enemy.displayName),
+    advantage,
+    attack: { ac: targetAc, critRange: riders.critRange ?? 20, melee: true },
+  });
   const hitRoll = insertRoll({
     campaignId: campaign.id,
     characterId: sheet.id,
@@ -181,7 +195,7 @@ export function pcOpportunitySwing(input: {
     critRange: riders.critRange,
   });
   // Parry: the creature's reaction lifts its AC against a melee hit (enemy-reactions.ts).
-  const parry = judged.hit && !judged.crit ? tryParry({ encounter, enemy, total: hitOutcome.total, natural20: false, ac: targetAc, melee: true, attackerUnseen: false }) : null;
+  const parry = judged.hit && !judged.crit ? tryParry({ encounter, enemy, total: hitOutcome.total, natural20: false, ac: targetAc, melee: true, attackerUnseen: attackerUnseen(sheet.conditions, enemy.conditions, sight) }) : null;
   const adjudicated = parry ? { ...judged, hit: false, crit: false } : judged;
   spendAttackCarriers(campaign, sheet, enemy, attackRiders.spent);
   // Relentless Avenger answers the hit (src/lib/dm/authored-reactions-more.ts).
@@ -213,14 +227,17 @@ export function pcOpportunitySwing(input: {
   }
   clearHitSpent(campaign, sheet.id, folded.hitSpent);
   writeMarks(campaign.id, sheet.id, marks.assign);
-  const damageOutcome = rollExpression(
-    crit
+  const damageOutcome = rollCharacterD20(campaign, sheet, {
+    kind: "damage",
+    tag: { roller: "hero", kind: "damage", who: sheet.name },
+    expression: crit
       ? critDamageExpression(profile.damageExpression, riders.critExtraDice, {
           powerfulCritical: campaign.gameSettings.variantRules.powerfulCritical,
           multiplyNumeric: campaign.gameSettings.variantRules.criticalDamageMods,
         })
       : profile.damageExpression,
-  );
+    detail: rollAgainst(`${profile.weapon} (opportunity attack)`, enemy.displayName),
+  });
   const dealt = Math.max(0, damageOutcome.total);
   return withOpportunityTurn(campaign.id, (turn) => {
     const damageRoll = insertRoll({
@@ -253,7 +270,22 @@ export function pcOpportunitySwing(input: {
     if (!("error" in applied)) {
       markRollApplied(damageRoll.id, enemy.id);
     }
-    hitLog?.swing(hitOutcome, targetAc, { hit: true, crit, raw: dealt, advantage, type: profile.damageType, ranged: false });
+    // A critical's normal figure, for Sentinel at Death's Door (last-hit.ts); a
+    // natural 20's gear dice belong to the critical, so none is read past them.
+    const normalRoll = hitLog && crit && !critGear?.suffix
+      ? ordinaryOfCritical(damageOutcome, profile.damageExpression, { multiplyNumeric: campaign.gameSettings.variantRules.criticalDamageMods, extraDice: riders.critExtraDice })
+      : null;
+    hitLog?.swing(hitOutcome, targetAc, {
+      hit: true,
+      crit,
+      raw: dealt,
+      advantage,
+      type: profile.damageType,
+      ranged: false,
+      ...(normalRoll ? { normal: { raw: Math.max(0, normalRoll.total), from: dealt } } : {}),
+      // As the blow met the damage path, for a reaction's replay (last-hit.ts flags).
+      flags: { ...(strikesAsMagic({ kind: "weapon", profile, riders, sheet }) ? { magical: true } : {}), ...(profile.material ?? {}) },
+    });
     closeLog();
     const after = getFoe(enemy.id);
     const dropped = Boolean(applied.dead) || after?.status === "dead";

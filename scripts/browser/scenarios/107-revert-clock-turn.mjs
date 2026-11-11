@@ -62,12 +62,26 @@ export default {
     const minute = row(/Time passes: 1 minute/);
     await eventually(() => minute.count(), { timeoutMs: 30_000, label: "the minute in the event log" });
     await eventually(() => reverts.count(), { label: "the turn's revert" });
-    const order = await minute.evaluate((item) => [...item.parentElement.children].map((child) => child.innerText));
-    const top = order.findIndex((text) => /Revert this turn/.test(text));
-    const at = order.findIndex((text) => /Time passes: 1 minute/.test(text));
+    // The rows arrive live: on a loaded runner the minute and the revert can
+    // be in before the saves under them, so the order is read until it holds.
+    const readOrder = () => minute.evaluate((item) => [...item.parentElement.children].map((child) => child.innerText));
+    const shape = (order) => {
+      const top = order.findIndex((text) => /Revert this turn/.test(text));
+      const at = order.findIndex((text) => /Time passes: 1 minute/.test(text));
+      // The rows between the revert and the minute; a lone save is told
+      // inside the revert's own row instead, and a death adds the story's
+      // line ("The story changes") there.
+      return { top, at, saves: order.slice(top + 1, at), inside: top >= 0 && order[top].includes(table.heroName) };
+    };
+    const holds = ({ top, at, saves, inside }) => top >= 0 && top < at && (saves.length >= 1 || inside) && saves.every((text) => text.includes(table.heroName));
+    let order = await readOrder();
+    await eventually(async () => {
+      order = await readOrder();
+      return holds(shape(order));
+    }, { timeoutMs: 20_000, label: "the hero's saves between the revert and its minute" }).catch(() => undefined);
+    const { top, at } = shape(order);
     check(top >= 0 && top < at, `the turn's revert is not above its minute: ${order.join(" | ")}`);
-    const saves = order.slice(top, at);
-    check(saves.length >= 1 && saves.every((text) => text.includes(table.heroName)), `the rows under the turn are not the hero's saves: ${saves.join(" | ")}`);
+    check(holds(shape(order)), `the rows under the turn are not the hero's saves: ${order.join(" | ")}`);
     await t.shot("turn");
 
     // The table recounts the saves by hand: the revert now asks first.
@@ -82,7 +96,7 @@ export default {
     await eventually(() => dialog.count(), { label: "the revert's confirmation" });
     const words = await dialog.innerText();
     check(/Revert this turn anyway\?/.test(words), `the dialog is not the turn's: ${words}`);
-    check(/character sheets and the clock back/.test(words), `the dialog does not say the sheets and the clock come back: ${words}`);
+    check(/character sheets, the clock and the fight back/.test(words), `the dialog does not say the sheets and the clock come back: ${words}`);
     check(/World events and companions who left stay/.test(words), `the dialog does not say what stays: ${words}`);
     check(/also changed their .*death saves/.test(words), `the dialog does not name the newer change in words: ${words}`);
     await t.shot("confirm");

@@ -16,7 +16,7 @@
 // Pure: scripts/test-hand-groups.mjs drives it.
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import type { IconRef } from "@/lib/icons";
-import { resourceDef } from "@/lib/srd/class-resources";
+import { resourceName } from "@/lib/srd/class-resources";
 import { lowestSlot, type HandCard, type HandCardType, type HandCost } from "@/lib/battlemap/hand-core";
 import { END_TURN_ID, isUrgentCard } from "@/lib/battlemap/hand-layout";
 import { textKey } from "@/lib/language/text-logic";
@@ -95,6 +95,15 @@ export function groupKeyOf(card: HandCard): HandGroupKey | null {
     : null;
 }
 
+// A spell cast from a magic item is a spell and an item's ability, and a player may
+// look for it under either (src/lib/battlemap/hand-ring.ts, hand-items.ts): one card,
+// listed in both groups where both have folded. Every other card has one home.
+export function groupKeysOf(card: HandCard): HandGroupKey[] {
+  if (card.fromItem) return ["spells", "items"];
+  const key = groupKeyOf(card);
+  return key ? [key] : [];
+}
+
 const PIP_COSTS: HandCost[] = ["action", "bonus", "reaction"];
 
 const plural = (count: number, noun: [string, string]) => `${count} ${count === 1 ? noun[0] : noun[1]}`;
@@ -140,8 +149,7 @@ function spellLeft(sheet: Pick<CharacterSheet, "spellcasting"> | null): string {
 function poolInfo(pool: string) {
   const known = POOL_NAMES[pool];
   if (known) return known;
-  const name = resourceDef(pool)?.displayName ?? pool.replace(/^sub_/, "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-  return { name, short: "Uses", noun: ["option", "options"] as [string, string] };
+  return { name: resourceName(pool), short: "Uses", noun: ["option", "options"] as [string, string] };
 }
 
 function spellSections(cards: HandCard[], sheet: Pick<CharacterSheet, "spellcasting"> | null): HandGroupSection[] {
@@ -153,6 +161,23 @@ function spellSections(cards: HandCard[], sheet: Pick<CharacterSheet, "spellcast
     level,
     cards: cards.filter((card) => (card.level ?? 0) === level),
   }));
+}
+
+// Items by the item, each with what it has left, as Spells goes by level with its
+// slots: a Staff of the Magi deals 19 cards, and its charges are the choice. With
+// nothing cast from an item, the group is the one list it always was.
+function itemSections(cards: HandCard[], name: string): HandGroupSection[] {
+  if (!cards.some((card) => card.fromItem)) {
+    return [{ id: "all", label: name, note: "", cards }];
+  }
+  const sections = new Map<string, HandGroupSection>();
+  for (const card of cards) {
+    const { key, label, note } = card.fromItem ?? { key: "", label: "Gear", note: "" };
+    const section = sections.get(key);
+    if (section) section.cards.push(card);
+    else sections.set(key, { id: `item:${key}`, label, note, cards: [card] });
+  }
+  return [...sections.values()];
 }
 
 function makeGroup(key: HandGroupKey, cards: HandCard[], sheet: Pick<CharacterSheet, "spellcasting" | "resources"> | null): HandGroup {
@@ -183,7 +208,7 @@ function makeGroup(key: HandGroupKey, cards: HandCard[], sheet: Pick<CharacterSh
       name = "Actions";
       noun = ["action", "actions"];
     }
-    sections = [{ id: "all", label: name, note: left, cards }];
+    sections = key === "items" ? itemSections(cards, name) : [{ id: "all", label: name, note: left, cards }];
   }
   const playable = cards.filter((card) => !card.disabled);
   const reasons = [...new Set(cards.map((card) => card.disabled).filter((reason): reason is string => Boolean(reason)))];
@@ -215,11 +240,11 @@ export function groupHand(
 ): { units: HandUnit[]; groups: HandGroup[] } {
   const buckets = new Map<HandGroupKey, HandCard[]>();
   for (const card of cards) {
-    const key = groupKeyOf(card);
-    if (!key) continue;
-    const bucket = buckets.get(key);
-    if (bucket) bucket.push(card);
-    else buckets.set(key, [card]);
+    for (const key of groupKeysOf(card)) {
+      const bucket = buckets.get(key);
+      if (bucket) bucket.push(card);
+      else buckets.set(key, [card]);
+    }
   }
   const folded = new Map<HandGroupKey, HandGroup>();
   for (const [key, members] of buckets) {
@@ -228,13 +253,16 @@ export function groupHand(
   const units: HandUnit[] = [];
   const placed = new Set<HandGroupKey>();
   for (const card of cards) {
-    const key = groupKeyOf(card);
-    const group = key ? folded.get(key) : undefined;
-    if (!group) {
+    // Loose only while no group that holds it has folded.
+    const holding = groupKeysOf(card).flatMap((key) => folded.get(key) ?? []);
+    if (!holding.length) {
       units.push(card);
-    } else if (!placed.has(group.key)) {
-      placed.add(group.key);
-      units.push(group);
+    }
+    for (const group of holding) {
+      if (!placed.has(group.key)) {
+        placed.add(group.key);
+        units.push(group);
+      }
     }
   }
   return { units, groups: [...folded.values()] };
@@ -260,7 +288,7 @@ export function filterCards(cards: HandCard[], filter: HandFilter): HandCard[] {
     if (filter.costs.length && !filter.costs.includes(card.cost)) return false;
     if (filter.concentration && !card.concentration) return false;
     if (!wanted.length) return true;
-    const held = textKey([card.name, card.dice, card.damageType, card.condition].join(" ")).split(" ");
+    const held = textKey([card.name, card.dice, card.damageType, card.secondType, card.condition].join(" ")).split(" ");
     return wanted.every((word) => held.some((part) => part.startsWith(word)));
   });
 }

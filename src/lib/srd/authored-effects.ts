@@ -38,7 +38,10 @@ import type {
   Formula,
   Gate,
 } from "@/lib/srd/authored-effects-types";
+import { AUTHORED_DATA_CHANNEL } from "@/lib/srd/authored-effects-channel";
+import { AUTHORED_DATA_COUNTERS } from "@/lib/srd/authored-effects-sweep-counters";
 import { textKey } from "@/lib/language/text-logic";
+import { choiceIn } from "@/lib/srd/feature-names";
 import type { CheckAbout } from "@/lib/dm/roll-about";
 import { keyFits, type RollKey } from "@/lib/srd/roll-keys";
 
@@ -50,6 +53,8 @@ export const AUTHORED_TABLE: Record<string, AuthoredEntry> = {
   ...AUTHORED_DATA_B,
   ...AUTHORED_DATA_B2,
   ...AUTHORED_DATA_C,
+  ...AUTHORED_DATA_CHANNEL,
+  ...AUTHORED_DATA_COUNTERS,
 };
 
 type Row = { key: string; classId: string; feature: string; entry: AuthoredEntry };
@@ -157,6 +162,19 @@ export function heldAuthored(sheet: AuthoredSheet): HeldAuthored[] {
       out.push({ key: `genre::${full}`, classId, feature: genre.feature, entry: genre.entry, name: feature.name, choice: null, level: classLevel(sheet, classId) });
     }
   }
+  // A pick the builder, the level-up or the sheet's owed picks wrote beside
+  // the feature ("Circle Spells: Forest", src/lib/srd/options.ts) is the
+  // option chosen for it, as "Circle Spells (Forest)" is: the Land druid
+  // built with a terrain was asked for it again in play (issue #833).
+  for (const held of out) {
+    if (held.choice || !held.entry.spends?.some((spend) => spend.does.kind === "choose")) {
+      continue;
+    }
+    const named = (sheet.features ?? []).map((feature) => choiceIn(feature.name, held.feature)).find(Boolean);
+    if (named) {
+      held.choice = textKey(named);
+    }
+  }
   return out;
 }
 
@@ -181,6 +199,17 @@ export function wearsHeavy(sheet: AuthoredSheet): boolean {
   );
 }
 
+// Any body armor on, light to heavy (a shield is not worn on the body):
+// Dragon Wings cannot come through it (SRD 5.1). The sheet's fly speed, the
+// board's and the spend read this one answer (issue #833 review).
+export function wearsBodyArmor(sheet: Pick<AuthoredSheet, "equipment">): boolean {
+  const items = sheet.equipment ?? [];
+  return items.some((item) => {
+    const category = item.gear?.armor?.category ?? matchArmor(item)?.category;
+    return isWorn(item, items) && (category === "light" || category === "medium" || category === "heavy");
+  });
+}
+
 export function gateHolds(gate: Gate | undefined, sheet: AuthoredSheet, held: HeldAuthored): boolean {
   if (!gate) {
     return true;
@@ -189,6 +218,9 @@ export function gateHolds(gate: Gate | undefined, sheet: AuthoredSheet, held: He
     return false;
   }
   if (gate.heavyArmor && !wearsHeavy(sheet)) {
+    return false;
+  }
+  if (gate.unarmored && wearsBodyArmor(sheet)) {
     return false;
   }
   if (gate.concentrating && !sheet.concentratingOn) {
@@ -378,6 +410,8 @@ const ONE_SHOT_ROLLS: Array<{ condition: string; kind: "check" | "save" | "initi
   { condition: "elegant maneuver", kind: "check", skills: ["acrobatics", "athletics"], label: "Elegant Maneuver" },
   { condition: "drunkard's luck (check)", kind: "check", label: "Drunkard's Luck" },
   { condition: "drunkard's luck (save)", kind: "save", label: "Drunkard's Luck" },
+  { condition: "tides of chaos (check)", kind: "check", label: "Tides of Chaos" },
+  { condition: "tides of chaos (save)", kind: "save", label: "Tides of Chaos" },
 ];
 const HELD_CHECKS: Array<{ condition: string; skills: string[]; label: string }> = [
   { condition: "blessing of the trickster", skills: ["stealth"], label: "Blessing of the Trickster" },

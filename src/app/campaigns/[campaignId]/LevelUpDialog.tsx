@@ -2,9 +2,7 @@
 
 import {
   classFeaturesFor,
-  isThievesTools,
   subclassCastingProfileFor,
-  THIEVES_TOOLS,
   subclassExpandedSpellsFor,
   subclassSpellListsFor,
 } from "@/lib/srd/features";
@@ -24,6 +22,7 @@ import {
   openOptionSlots,
   optionFeatureName,
   optionSlotsFor,
+  slotTakes,
   type OptionSlot,
 } from "@/lib/srd/options";
 import {
@@ -82,6 +81,10 @@ import { useFeatDescs } from "@/app/characters/builder/useFeatDescs";
 import { authoredFeatDesc, featAbilityIncrease } from "@/lib/srd/feat-effects";
 import { featGrantSpec, featOwed, type FeatChoices, type FeatPicks } from "@/lib/srd/feat-grants";
 import { grantsForHeldTraining, subclassGrants } from "@/lib/srd/subclass-training";
+import { expertiseOptionsAfter, sheetSpellbook } from "@/lib/srd/owed-picks-logic";
+import { subclassChoiceSlots } from "@/lib/srd/subclass-choice-picks";
+import { parseSubclassChoicePick, subclassChoicePickName } from "@/lib/content/subclass-choices";
+import { SubclassChoicePick } from "@/app/campaigns/[campaignId]/SubclassChoicePick";
 import FeatChoicesFields from "@/app/characters/builder/FeatChoicesFields";
 import { useArchetypeOptions, useWorldPack } from "@/app/characters/builder/useBuilderOptions";
 import { TableScopeNote } from "@/app/characters/builder/TableScopeNote";
@@ -335,16 +338,8 @@ export function LevelUpDialog({
   // Summed over every class the character holds, as the server sums it
   // (U:UB4): a rogue 6 taking bard 3 has bard's two on top of the rogue's.
   const expertiseToPick = expertiseOpen(sheet, nextClasses);
-  // A rogue may take thieves' tools in place of a skill (features.ts).
-  const toolExpertise =
-    nextClasses.some((entry) => entry.id === "rogue") && (sheet.proficiencies.tools ?? []).some(isThievesTools) && !currentExpertise.some(isThievesTools)
-      ? [THIEVES_TOOLS]
-      : [];
-  const expertiseOptions = [
-    ...sheet.proficiencies.skills.filter((skill) => !currentExpertise.includes(skill)),
-    ...toolExpertise,
-  ];
-  const needsExpertise = expertiseToPick > 0 && expertiseOptions.length > 0;
+  // What the picks may double is read once this level's training is known
+  // (expertiseOptionsAfter, below the subclass's training).
 
   // Fighting styles: the class grants the slot, the player picks which one,
   // and the pick is stored as a "choice"-sourced feature the regrant keeps.
@@ -395,8 +390,26 @@ export function LevelUpDialog({
     level: classLevelAfter,
     features: [...sheet.features, ...grantedAfter, ...optionPicks.map((name) => ({ name }))],
     feats: [...sheet.feats, ...featsPicked],
+    // Spell Mastery and Signature Spells pick from the spellbook, the spells
+    // written with this level included (the route checks the same book).
+    spellbook: [...sheetSpellbook(sheet), ...spellPicks],
   });
-  const needsOptions = openSlots.some((slot) => slot.remaining > 0);
+  // A workshop subclass's own choice due at this class level and not on the
+  // sheet (issue #833): a bloodline, an element, one option each.
+  const choicesDue = subclassChoiceSlots(
+    [{ id: classChoice, subclass: subclassChoice || entrySubclass, level: classLevelAfter }],
+    sheet.features,
+  ).filter((slot) => !slot.chosen);
+  const choicePicked = (label: string) => optionPicks.find((pick) => textKey(parseSubclassChoicePick(pick)?.label ?? "") === textKey(label));
+  const needsOptions = openSlots.some((slot) => slot.remaining > 0) || choicesDue.length > 0;
+
+  function pickChoice(label: string, name: string) {
+    const featureName = subclassChoicePickName(label, { name });
+    setOptionPicks((current) => {
+      const others = current.filter((entry) => textKey(parseSubclassChoicePick(entry)?.label ?? "") !== textKey(label));
+      return current.includes(featureName) ? others : [...others, featureName];
+    });
+  }
 
   function toggleOption(slot: OptionSlot, name: string) {
     const featureName = optionFeatureName(slot.kind, name);
@@ -404,7 +417,9 @@ export function LevelUpDialog({
       if (current.includes(featureName)) {
         return current.filter((entry) => entry !== featureName);
       }
-      return slot.remaining > 0 ? [...current, featureName] : current;
+      // A favored enemy's humanoid race is half a pick (options.ts slotTakes).
+      const option = slot.options.find((entry) => entry.n === name);
+      return option && slotTakes(slot, option) ? [...current, featureName] : current;
     });
   }
 
@@ -473,25 +488,44 @@ export function LevelUpDialog({
   // fixed grants are said; the picks are asked for, and the server refuses
   // the level without them.
   const trainingBefore = useMemo(
-    () => new Set(subclassGrants(classList).map((grant) => `${grant.classId}|${textKey(grant.name)}`)),
-    [classList],
+    () => new Set(subclassGrants(classList, undefined, sheet.features).map((grant) => `${grant.classId}|${textKey(grant.name)}`)),
+    [classList, sheet.features],
   );
-  // A skill or language already held becomes a pick (Royal Envoy).
+  // A skill or language already held becomes a pick (Royal Envoy). A
+  // workshop choice made here trains in its option's (issue #833).
   const freshTraining = grantsForHeldTraining(
-    subclassGrants(classesAfter).filter((grant) => !trainingBefore.has(`${grant.classId}|${textKey(grant.name)}`)),
+    subclassGrants(classesAfter, undefined, [...sheet.features, ...optionPicks.map((name) => ({ name, source: "choice" as const }))]).filter(
+      (grant) => !trainingBefore.has(`${grant.classId}|${textKey(grant.name)}`),
+    ),
     sheet.proficiencies,
   );
   const trainingOpen = freshTraining.some((grant) =>
     featOwed(grant.name, grant.spec, featChoice(featChoices, grant.name)),
   );
+  // Every skill held once the level is taken, the ones this level brings
+  // among them (a Lore bard's college skills at 3rd, a new rogue's skill and
+  // thieves' tools), as the server judges the picks; a rogue may take
+  // thieves' tools in place of a skill (features.ts). The step comes after
+  // the training, so those are picked first, and a pick whose skill was
+  // taken back there is not sent.
+  const expertiseOptions = expertiseOptionsAfter({
+    sheet,
+    classesAfter: nextClasses,
+    ...(chosenGrant ? { newClass: { skill: skillPick, tools: chosenGrant.tools } } : {}),
+    feats: featsPicked.map((name) => ({ name, desc: featDescOf(name) })),
+    training: freshTraining,
+    choices: featChoices,
+  });
+  const expertiseLive = expertisePicks.filter((skill) => expertiseOptions.includes(skill));
+  const needsExpertise = expertiseToPick > 0 && expertiseOptions.length > 0;
   const steps = [
     ...(needsClassStep ? ["class"] : []),
     "hp",
     ...(asiLevels.length ? ["asi"] : []),
-    ...(needsExpertise ? ["expertise"] : []),
     ...(needsStyle ? ["style"] : []),
     ...(needsSubclass ? ["subclass"] : []),
     ...(freshTraining.length ? ["training"] : []),
+    ...(needsExpertise ? ["expertise"] : []),
     ...(needsOptions ? ["options"] : []),
     ...(showSpells ? ["spells"] : []),
   ];
@@ -596,11 +630,12 @@ export function LevelUpDialog({
     () =>
       new Set(
         [
-          ...subclassSpellsFor(classChoice, effectiveSubclass, classLevelAfter, undefined, sheet.features),
+          // With a workshop choice made here: its option's spells (issue #833).
+          ...subclassSpellsFor(classChoice, effectiveSubclass, classLevelAfter, undefined, [...sheet.features, ...optionPicks.map((name) => ({ name, source: "choice" as const }))]),
           ...(learnedKey ? learnedKey.split("|") : []),
         ].map((name) => textKey(name)),
       ),
-    [classChoice, effectiveSubclass, classLevelAfter, sheet.features, learnedKey],
+    [classChoice, effectiveSubclass, classLevelAfter, sheet.features, learnedKey, optionPicks],
   );
   const heldSpells = [...new Set([...knownList, ...pendingList].map((name) => textKey(name)))].filter(
     (name) => !grantedFree.has(name),
@@ -810,7 +845,7 @@ export function LevelUpDialog({
             ? { featChoices: picksSentFor([...featsPicked, ...freshTraining.map((grant) => grant.name)]) }
             : {}),
           ...(needsSubclass && subclassChoice ? { subclass: subclassChoice } : {}),
-          ...(expertisePicks.length ? { expertise: [...currentExpertise, ...expertisePicks] } : {}),
+          ...(expertiseLive.length ? { expertise: [...currentExpertise, ...expertiseLive] } : {}),
           // The group's picks go by name with the rest: the route judges each
           // against the feature's number (src/lib/srd/level-up-spells.ts).
           ...(spellPicks.length || cantripPicks.length || anyChosen.length
@@ -857,7 +892,7 @@ export function LevelUpDialog({
       : step === "asi"
         ? asiLevels.some((_, index) => !asiChoices[index]) || featPicksOpen
         : step === "expertise"
-          ? expertisePicks.length < Math.min(expertiseToPick, expertiseOptions.length)
+          ? expertiseLive.length < Math.min(expertiseToPick, expertiseOptions.length)
           : step === "style"
             ? stylePicks.length < Math.min(stylesToPick, styleOptions.length)
             : step === "subclass"
@@ -865,7 +900,7 @@ export function LevelUpDialog({
               : step === "training"
                 ? trainingOpen
               : step === "options"
-                ? openSlots.some((slot) => slot.remaining > 0)
+                ? openSlots.some((slot) => slot.remaining > 0) || choicesDue.some((slot) => !choicePicked(slot.label))
                 : false;
   // A subclass grant's picks are the one open choice the server will not
   // take a level without, so that step holds the button until they are made.
@@ -1271,8 +1306,8 @@ export function LevelUpDialog({
                               setExpertisePicks((current) =>
                                 picked
                                   ? current.filter((entry) => entry !== skillId)
-                                  : current.length < expertiseToPick
-                                    ? [...current, skillId]
+                                  : current.filter((entry) => expertiseOptions.includes(entry)).length < expertiseToPick
+                                    ? [...current.filter((entry) => expertiseOptions.includes(entry)), skillId]
                                     : current,
                               )
                             }
@@ -1293,12 +1328,15 @@ export function LevelUpDialog({
                     New abilities for {sheet.name} to choose. These are real powers, not flavour,
                     so read them before picking.
                   </p>
+                  {choicesDue.map((slot) => (
+                    <SubclassChoicePick key={slot.label} slot={slot} picked={choicePicked(slot.label)} onPick={(name) => pickChoice(slot.label, name)} />
+                  ))}
                   {openSlots
                     .filter((slot) => slot.remaining > 0 || slot.chosen.length > 0)
                     .map((slot) => (
                       <div key={slot.kind}>
                         <p className="mb-1 mt-2 text-xs uppercase tracking-wide text-amber-200/80">
-                          {slot.label}: {slot.chosen.length}/{slot.total} chosen
+                          {slot.label}: {slot.total - slot.remaining}/{slot.total} chosen
                         </p>
                         <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
                           {slot.options.map((option) => {

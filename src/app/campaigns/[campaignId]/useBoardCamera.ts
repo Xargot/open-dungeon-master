@@ -26,6 +26,43 @@ const PAN_SLOP = 6;
 // figure (its own drag), a control, or a surface that reads the drag itself.
 const NO_PAN = "[data-token-id], [data-no-pan], button, a, input, select, textarea";
 
+// The chrome the resting view keeps clear, a direct child of the frame
+// standing in its top left corner (the docked initiative strip).
+const CLEAR_SELECTOR = ":scope > [data-fit-clear]";
+// Room between that chrome and the first tile.
+const CLEAR_GAP = 6;
+
+// What stands over the frame's bottom: the Hand on the fight stage, a
+// sibling of the board in the stage's frame (SessionView.tsx), not a child of
+// this one. The cards lie on the map and the map keeps its size under them:
+// the resting view fits the whole frame, Hand or no Hand (fitted above the
+// cards instead, the board shrank to a small picture every time the Hand was
+// shown). What the Hand does change is where a turn is followed to: the
+// figure whose turn it is is centred in what the cards leave uncovered, and
+// one under them counts as off screen, so the player's own figure is never
+// dealt over. The cards overlap the board by design, so the foot is what
+// they cover less FOOT_LAP, and never more than FOOT_SHARE of the frame.
+const STAGE_SELECTOR = "[data-fit-stage]";
+const FOOT_SELECTOR = "[data-fit-foot]";
+const FOOT_LAP = 24;
+const FOOT_SHARE = 0.55;
+
+function footOf(frame: HTMLElement | null): HTMLElement | null {
+  return frame?.closest(STAGE_SELECTOR)?.querySelector<HTMLElement>(FOOT_SELECTOR) ?? null;
+}
+
+function footToClear(frame: HTMLElement | null): number {
+  const foot = footOf(frame);
+  if (!frame || !foot || !foot.offsetHeight) return 0;
+  return Math.max(0, frame.getBoundingClientRect().bottom - foot.getBoundingClientRect().top - FOOT_LAP);
+}
+
+function cornerToClear(frame: HTMLElement | null): { width: number; height: number } | null {
+  const corner = frame?.querySelector<HTMLElement>(CLEAR_SELECTOR);
+  if (!corner || !corner.offsetWidth) return null;
+  return { width: corner.offsetLeft + corner.offsetWidth + CLEAR_GAP, height: corner.offsetTop + corner.offsetHeight + CLEAR_GAP };
+}
+
 export function useBoardCamera(
   boardWidth: number,
   boardHeight: number,
@@ -140,13 +177,16 @@ export function useBoardCamera(
       return null;
     }
     const width = frame.clientWidth;
-    const height = frame.clientHeight || (width * boardHeight) / boardWidth;
-    return { width, height, unit: width / (boardWidth * TILE) };
+    const whole = frame.clientHeight || (width * boardHeight) / boardWidth;
+    // `height` is what shows above the Hand, where a figure is centred and
+    // looked for; `whole` is the frame, which the resting view fits.
+    const height = Math.max(whole * (1 - FOOT_SHARE), whole - footToClear(frame));
+    return { width, height, whole, unit: width / (boardWidth * TILE) };
   }, [boardWidth, boardHeight]);
 
   const fit = useCallback((): Camera => {
     const m = metrics();
-    return m ? fitCamera(m, { width: boardWidth, height: boardHeight }) : IDENTITY;
+    return m ? fitCamera({ width: m.width, height: m.whole }, { width: boardWidth, height: boardHeight }, cornerToClear(frameRef.current)) : IDENTITY;
   }, [metrics, boardWidth, boardHeight]);
   const clampZoom = useCallback((zoom: number) => clampZoomTo(zoom, minZoomFor(fit())), [fit]);
 
@@ -296,6 +336,16 @@ export function useBoardCamera(
     if (!frameEl || options.enabled === false) {
       return;
     }
+    // The corner's chrome comes and goes with the fight's order and changes
+    // size with it: the view resting on the fit moves out from under it.
+    const watched = new Set<Element>();
+    const watchCorner = () => {
+      const corner = frameEl.querySelector(CLEAR_SELECTOR);
+      if (corner && !watched.has(corner)) {
+        watched.add(corner);
+        observer.observe(corner);
+      }
+    };
     const observer = new ResizeObserver(() => {
       if (!enabledRef.current) return;
       const width = frameEl.clientWidth;
@@ -322,7 +372,14 @@ export function useBoardCamera(
       );
     });
     observer.observe(frameEl);
-    return () => observer.disconnect();
+    watchCorner();
+    // The order's strip mounts once the order is rolled, after the frame.
+    const mounted = new MutationObserver(watchCorner);
+    mounted.observe(frameEl, { childList: true });
+    return () => {
+      observer.disconnect();
+      mounted.disconnect();
+    };
   }, [frameEl, fit, options.enabled]);
 
   const pointers = useRef(new Map<number, { x: number; y: number }>());

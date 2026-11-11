@@ -130,7 +130,7 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
           longRangeFt: 120,
           second: "1d4",
         },
-        note: "The published blade keeps its d6 at every level; the second blade is pc_attack offHand with the psychic blade, a d4.",
+        note: "The published blade keeps its d6 at every level; the second blade is pc_attack feature Two-Weapon Fighting with the psychic blade, a d4.",
       },
     ],
   },
@@ -142,6 +142,27 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
     subclass: "Divine Soul",
     spends: [{ name: "Divine Affinity", aliases: ["Divine Magic"], fight: "out", does: { kind: "choose", options: ["Good", "Evil", "Law", "Chaos", "Neutrality"] } }],
   },
+  // Advantage on one attack roll, ability check or saving throw: the player
+  // names which kind when they play it, as Drunkard's Luck does, and the
+  // first roll of that kind takes it and spends it. The use is the counter's
+  // own (sub_tides_of_chaos); the GM gives it back with a Wild Magic Surge
+  // (authored-effects-data4.ts SURGE_CHANCE).
+  "sorcerer::Tides of Chaos": {
+    subclass: "Wild Magic",
+    spends: [
+      {
+        name: "Tides of Chaos",
+        pool: { id: "sub_tides_of_chaos" },
+        action: "none",
+        does: {
+          kind: "buff",
+          condition: "tides of chaos (attack)",
+          variants: { attack: "tides of chaos (attack)", check: "tides of chaos (check)", save: "tides of chaos (save)" },
+          rounds: 10,
+        },
+      },
+    ],
+  },
   "sorcerer::Bend Luck": {
     subclass: "Wild Magic",
     reactions: [{ name: "Bend Luck", usedBy: "holder", pool: { id: "sorcery_points", amount: 2 }, does: { kind: "attack_penalty", die: "1d4" } }],
@@ -150,6 +171,14 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
     subclass: "Divine Soul",
     spends: [{ name: "Otherworldly Wings", action: "bonus", does: { kind: "buff", condition: "otherworldly wings", rounds: 14400 } }],
     effects: [{ kind: "move", fly: 30, gate: { condition: "otherworldly wings" } }],
+  },
+  // Dragon Wings' flight while the wings are out (src/lib/dm/draconic-spends.ts
+  // lays "dragon wings"), so the sheet shows the flying speed then and only
+  // then. The card that brings them out is class-resources.ts's.
+  "sorcerer::Dragon Wings": {
+    subclass: "Draconic Bloodline",
+    // Not through armor, as the board and the spend read it (wearsBodyArmor).
+    effects: [{ kind: "move", fly: "walk", gate: { condition: "dragon wings", unarmored: true } }],
   },
   "sorcerer::Hound of Ill Omen": {
     subclass: "Shadow Magic",
@@ -233,7 +262,7 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
     spends: [{ name: "Lunar Phase", aliases: ["Moon Phase"], fight: "out", does: { kind: "choose", options: LUNAR_PHASES } }],
   },
   // Sacred flame at one creature or two within 5 feet of each other
-  // (cast_at_enemy secondTargetEnemyId, src/lib/dm/authored-reaper.ts).
+  // (cast_at_enemy's second target, src/lib/dm/authored-reaper.ts).
   "sorcerer::Moon Fire": {
     subclass: "Lunar Sorcery",
     effects: [{ kind: "twin_spell", school: "evocation", minLevel: 0, maxLevel: 0, spells: ["sacred flame"] }],
@@ -297,7 +326,13 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
   // (subclasses.json choiceSpells).
   "warlock::Genie's Vessel": {
     subclass: "The Genie",
-    spends: [{ name: "Genie Kind", aliases: ["Patron Kind", "Genie's Kind"], fight: "out", does: { kind: "choose", options: ["Dao", "Djinni", "Efreeti", "Marid"] } }],
+    counter: "sub_genies_vessel",
+    spends: [
+      { name: "Genie Kind", aliases: ["Patron Kind", "Genie's Kind"], fight: "out", does: { kind: "choose", options: ["Dao", "Djinni", "Efreeti", "Marid"] } },
+      // Bottled Respite: "As an action, you can magically vanish and enter
+      // your vessel", for up to twice the proficiency bonus in hours.
+      { name: "Bottled Respite", pool: { id: "sub_genies_vessel" }, action: "action", does: { kind: "buff", condition: "in the genie's vessel", rounds: 2400 } },
+    ],
     effects: GENIE_KINDS.map(([kind, type]) => ({
       kind: "rider" as const,
       dice: "prof",
@@ -314,7 +349,9 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
     spends: [
       {
         name: "Elemental Flight",
-        aliases: ["Elemental Gift flight"],
+        // The counter's own name: by id or by name it spent the use and gave
+        // no flight.
+        aliases: ["Elemental Gift flight", "Elemental Gift"],
         pool: { id: "sub_elemental_gift" },
         action: "bonus",
         does: { kind: "buff", condition: "flying", rounds: 100 },
@@ -352,9 +389,12 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
         name: "Hexblade's Curse",
         pool: { id: "sub_hexblades_curse" },
         action: "bonus",
+        // "curse a creature you can see within 30 feet of you".
         does: {
           kind: "buff",
           quarry: true,
+          sight: true,
+          rangeFt: 30,
           condition: [[1, "hexblade's curse (+2)"], [5, "hexblade's curse (+3)"], [9, "hexblade's curse (+4)"], [13, "hexblade's curse (+5)"], [17, "hexblade's curse (+6)"]],
           rounds: 10,
         },
@@ -376,9 +416,11 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
       {
         name: "Master of Hexes",
         action: "none",
+        // "to another creature you can see within 30 feet of it".
         does: {
           kind: "buff",
           quarry: true,
+          sight: true,
           condition: [[1, "hexblade's curse (+2)"], [5, "hexblade's curse (+3)"], [9, "hexblade's curse (+4)"], [13, "hexblade's curse (+5)"], [17, "hexblade's curse (+6)"]],
           rounds: 10,
         },
@@ -434,6 +476,8 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
           condition: "charmed",
           rounds: 1,
           rangeFt: 5,
+          // "choose a creature that you can see within 5 feet of you".
+          sight: true,
           onFail: "is also incapacitated with speed 0 until the end of the wizard's next turn; the wizard's action extends it",
         },
       },
@@ -478,6 +522,18 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
     reactions: [
       { name: "Song of Defense", gate: { condition: "bladesong" }, pool: { slot: true }, does: { kind: "reduce", amount: "slot5", who: "self" } },
     ],
+  },
+  // Spent its use and changed nothing: no card came when an attack hit. An
+  // attack that hit is the roll the engine keeps open for a reaction; a check,
+  // a save or the wizard's own attack is thrown and settled in one call, with
+  // nothing waiting for another character's reaction, so use_resource still
+  // spends it for those and the GM narrates the reroll.
+  "wizard::Chronal Shift": {
+    subclass: "Chronurgy Magic",
+    counter: "sub_chronal_shift",
+    // The 30 feet and the sight are to the attacker, the creature that rolled:
+    // whoever it hit, the wizard included.
+    reactions: [{ name: "Chronal Shift", pool: { id: "sub_chronal_shift" }, sees: "attacker", does: { kind: "reroll_hit", rangeFt: 30, roller: true } }],
   },
   "wizard::Convergent Future": {
     subclass: "Chronurgy Magic",
@@ -604,6 +660,7 @@ export const AUTHORED_DATA_B2: Record<string, AuthoredEntry> = {
         name: "Arcane Jolt",
         pool: { id: "art_arcane_jolt" },
         oncePerTurn: true,
+        afterWeaponHit: true,
         does: { kind: "flames", formula: [[9, "2d6"], [15, "4d6"]], type: "force" },
       },
     ],

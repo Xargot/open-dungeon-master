@@ -1,7 +1,7 @@
 "use client";
 
 import { romanceCueAllowed } from "@/lib/dm/director-logic";
-import { gmTurnCompanion, initiativeCharacter, selectedCharacter } from "@/lib/player-characters";
+import { gmTurnCompanion, gmTurnDominated, initiativeCharacter, selectedCharacter, typedReactors as typedReactorsOf } from "@/lib/player-characters";
 import { useThemePrefs } from "@/lib/theme-mode";
 import { LevelUpMoment, LootMoment, MomentVeil, RestMoment, TravelBanner } from "@/app/campaigns/[campaignId]/Moments";
 import { CoordinationPanel } from "@/app/campaigns/[campaignId]/CoordinationPanel";
@@ -52,7 +52,7 @@ import { DM_TOUR, DM_TOUR_ID, FIRST_TURN_TOUR, PLAYER_TOUR, PLAYER_TOUR_ID } fro
 import { finishTour, useTourFinished } from "@/lib/tours/tour-store";
 import { Composer, type InputKind } from "@/app/campaigns/[campaignId]/Composer";
 import { composerGate } from "@/app/campaigns/[campaignId]/composerGate";
-import { DiceOverlay } from "@/app/campaigns/[campaignId]/DiceOverlay";
+import { DiceOverlay, type OverlayRoll } from "@/app/campaigns/[campaignId]/DiceOverlay";
 import { secretAudience } from "@/lib/dice/secret-audience";
 import {
   requestMotionAccess,
@@ -82,7 +82,8 @@ import { PrepLayer } from "@/app/campaigns/[campaignId]/CampaignPrep";
 import { SessionBanner, bannerButtonClass } from "@/app/campaigns/[campaignId]/SessionBanner";
 import { TestFightBanner } from "@/app/campaigns/[campaignId]/TestFightBanner";
 import { workshopHref } from "@/lib/workshop/links";
-import { isPrimaryDm } from "@/lib/dm/viewer";
+import { aiRunsFoes as aiRunsFoesAt } from "@/lib/workshop/test-seats-logic";
+import { isPrimaryDm, narratorIsAi } from "@/lib/dm/viewer";
 import Link from "next/link";
 import { SidePanel } from "@/app/campaigns/[campaignId]/SidePanel";
 import { useChatChime } from "@/app/campaigns/[campaignId]/useChatChime";
@@ -98,7 +99,8 @@ import {
 import { AudioWaitingBanner } from "@/app/campaigns/[campaignId]/AudioWaitingBanner";
 import { turnCharacterId, turnFromEncounter, turnHudBudget } from "@/lib/battlemap/hand-table";
 
-import { TabPane, useDocked } from "@/app/campaigns/[campaignId]/SidePanel";
+import { TabPane } from "@/app/campaigns/[campaignId]/SidePanel";
+import { useDocked, useHandOnBoardRoom } from "@/app/campaigns/[campaignId]/useDocked";
 import type { SidePanelRouterProps } from "@/app/campaigns/[campaignId]/SidePanelRouter";
 import { TableRow } from "@/app/campaigns/[campaignId]/TableLayout";
 import { ChronicleSplitter } from "@/app/campaigns/[campaignId]/TableLayoutParts";
@@ -149,10 +151,19 @@ function useOpenedOnce(open: boolean): boolean {
 
 // Once the table is drawn and the browser has a moment, fetch what it may
 // reach for next.
-function usePreloadTable() {
+// `tabs` is the seat's rail: the panels of a tab this seat does not have are
+// left alone (side-panel-loaders.tsx), and a tab that appears later (the
+// seat was handed the lead) brings its panel then. The list is a new array
+// on most renders, so the effect follows what it names, not which array.
+function usePreloadTable(tabs: ReadonlyArray<PanelTab>) {
+  const tabKey = tabs.join(",");
+  const tabsRef = useRef(tabs);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  });
   useEffect(() => {
     const preload = () => {
-      preloadSidePanels();
+      preloadSidePanels(tabsRef.current);
       for (const piece of Object.values(tablePieces)) {
         void piece.preload().catch(() => undefined);
       }
@@ -164,7 +175,7 @@ function usePreloadTable() {
       if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(idle as number);
       window.clearTimeout(idle as number);
     };
-  }, []);
+  }, [tabKey]);
 }
 
 // The localStorage-backed preferences below are read as external stores.
@@ -189,6 +200,10 @@ function subscribeDicePref(callback: () => void) {
   window.addEventListener(DICE3D_EVENT, listener);
   return () => window.removeEventListener(DICE3D_EVENT, listener);
 }
+
+// No reaction waits on the GM: the same empty list each render, so the Hand's
+// memos that read it keep their cards.
+const NO_SENT_REACTIONS: string[] = [];
 
 // The play table. Header, the story column, the docked context column and
 // the dialogs that float over all three. What lives here is the state the
@@ -304,6 +319,9 @@ export function SessionView({
   const [tour, setTour] = useState<"first" | "player" | "dm" | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const dice3d = useSyncExternalStore(subscribeDicePref, readDice3d, () => true);
+  // The roll the toast shows: handed over by the dice stage when its dice
+  // land, or in its turn when it is not thrown (issue 843).
+  const [stagedRoll, setStagedRoll] = useState<OverlayRoll | null>(null);
   const toggleDice3d = useCallback(() => {
     window.localStorage.setItem("odm:dice3d", dice3d ? "off" : "on");
     window.dispatchEvent(new Event(DICE3D_EVENT));
@@ -320,7 +338,6 @@ export function SessionView({
   const openReport = useCallback(() => setReportOpen(true), []);
   const isAdmin = Boolean(me?.isAdmin);
   const helpReport = useMemo(() => ({ onSave: isAdmin ? openReport : undefined }), [isAdmin, openReport]);
-  usePreloadTable();
   const helpMounted = useOpenedOnce(helpOpen);
   const reportMounted = useOpenedOnce(reportOpen);
   const diceLookMounted = useOpenedOnce(diceLookOpen);
@@ -436,6 +453,22 @@ export function SessionView({
   // than a map in the side panel. The header switch shows the story there
   // instead; the choice is the reader's, kept per browser.
   const docked = useDocked();
+  const handRoom = useHandOnBoardRoom();
+  const [handSlot, setHandSlot] = useState<HTMLDivElement | null>(null);
+  // What the Hand covers of its frame, for the board's own corner controls
+  // to stand above (world.css reads --hand-foot).
+  useEffect(() => {
+    const frame = handSlot?.parentElement;
+    if (!handSlot || !frame) return;
+    const write = () => frame.style.setProperty("--hand-foot", `${handSlot.offsetHeight}px`);
+    const observer = new ResizeObserver(write);
+    observer.observe(handSlot);
+    write();
+    return () => {
+      observer.disconnect();
+      frame.style.removeProperty("--hand-foot");
+    };
+  }, [handSlot]);
   const { active: addonBoardView, views: addonViews, choose: chooseBoardView } = useBoardView(state.battleMap?.addonView?.addonId, state.encounter?.status === "active");
   const [addonOptions, setAddonOption] = useBoardViewOptions();
   const sessionLayout = docked && addonBoardView?.sessionLayout === "stage";
@@ -481,13 +514,60 @@ export function SessionView({
   // play (player-characters.ts gmTurnCompanion), with its Hand and its Do,
   // on a host that takes them (capabilities.ts gmCompanionTurns).
   const capabilities = useCapabilities();
-  const gmCompanions = caps.role === "dm" && !state.encounter?.enemyTurns && hostOffers(capabilities, "gmCompanionTurns");
+  // A table the AI GM runs with a person steering from the GM seat, live or
+  // a test fight (src/lib/workshop/test-seats-logic.ts aiRunsFoes): the
+  // enemies and the allies nobody commands are the AI's to play, not the
+  // seat's, so it is shown neither's Hand.
+  const aiRunsFoes = aiRunsFoesAt(campaign?.gameSettings?.dmMode);
+  const gmCompanions = caps.role === "dm" && !aiRunsFoes && !state.encounter?.enemyTurns && hostOffers(capabilities, "gmCompanionTurns");
+  // A hero the other side dominates is the GM's to play card by card too
+  // (companion-command.ts gmCompanionTurn), on a host that takes its cards.
+  const gmDominated = gmCompanions && hostOffers(capabilities, "gmDominatedTurns");
+  const heldHero = gmDominated ? gmTurnDominated(sheets, turnCharacterId(state.encounter), state.encounter?.sides) : null;
   const turnSheet =
     initiativeCharacter(sheets, me?.id ?? "", turnCharacterId(state.encounter)) ??
-    (gmCompanions ? gmTurnCompanion(sheets, turnCharacterId(state.encounter)) : null);
+    (gmCompanions ? gmTurnCompanion(sheets, turnCharacterId(state.encounter)) : null) ??
+    heldHero;
   const actingSheet = turnSheet ?? mySheet;
-  // The GM seat holds a companion's turn the floor names the companion for.
-  const gmPlaysTurn = Boolean(gmCompanions && turnSheet?.isCompanion);
+  // Speaking as, for a reaction typed in the box (issue 685): the box speaks
+  // for the hero whose turn it is, so words for another of the person's
+  // heroes (or a companion they command) went out as the wrong one. Offered
+  // while one of those has a hit still open on them and their reaction
+  // unspent, on a host that takes the words as theirs; a choice that no
+  // longer fits falls back to the hero whose turn it is. A choice holds for
+  // the hits open when it was made: once they close, or another lands, the
+  // box speaks for the hero whose turn it is again.
+  const hitsKey = (state.encounter?.lastHits ?? []).map((hit) => hit.id ?? hit.characterId).join(",");
+  const [reactChoice, setReactChoice] = useState<{ id: string; hits: string } | null>(null);
+  const reactAs = reactChoice && reactChoice.hits === hitsKey ? reactChoice.id : null;
+  const setReactAs = useCallback((id: string | null) => setReactChoice(id ? { id, hits: hitsKey } : null), [hitsKey]);
+  // A reaction sent (typed here, or a card from the Hand) and not resolved
+  // yet, by its hero: at a table a person runs it waits for the GM, and the
+  // engine's count does not move until then, so the box and the cards held
+  // that hero ready for a second. Held while the encounter's reactions,
+  // round and turn stay as they were when it went.
+  const reactionMoment = JSON.stringify([state.encounter?.id ?? "", state.encounter?.round ?? 0, state.encounter?.turnIndex ?? 0, state.encounter?.reactionsUsed ?? []]);
+  const [sentReactions, setSentReactions] = useState<{ moment: string; ids: string[] }>({ moment: "", ids: [] });
+  const reactionsSent = useMemo(() => (sentReactions.moment === reactionMoment ? sentReactions.ids : NO_SENT_REACTIONS), [sentReactions, reactionMoment]);
+  const markReactionSent = useCallback(
+    (id: string) => setSentReactions((current) => ({ moment: reactionMoment, ids: [...(current.moment === reactionMoment ? current.ids : []), id] })),
+    [reactionMoment],
+  );
+  const typedReactors = useMemo(
+    () =>
+      hostOffers(capabilities, "typedReactions")
+        ? typedReactorsOf(sheets, me?.id ?? "", turnSheet?.id, campaign?.gameSettings?.multiCharacter, state.encounter, reactAs).filter((entry) => !reactionsSent.includes(entry.id))
+        : [],
+    [capabilities, sheets, me?.id, turnSheet?.id, campaign?.gameSettings?.multiCharacter, state.encounter, reactAs, reactionsSent],
+  );
+  const speakingAs = typedReactors.find((entry) => entry.id === reactAs) ?? null;
+  const reactAsPicker = useMemo(
+    () => ({ acting: actingSheet?.name ?? "", reactors: typedReactors, value: speakingAs?.id ?? null, onChange: setReactAs }),
+    [actingSheet?.name, typedReactors, speakingAs?.id, setReactAs],
+  );
+  // The GM seat holds a companion's or a dominated hero's turn the floor
+  // names nobody at the table for.
+  const gmPlaysTurn = Boolean(gmCompanions && (turnSheet?.isCompanion || (heldHero && turnSheet?.id === heldHero.id)));
   // The server's notice opens the level-up dialog once, when the experience
   // lands. Closing it only puts it off: the sheet's experience still earns
   // the level, so the party card offers a Level up button until it is done.
@@ -633,6 +713,8 @@ export function SessionView({
       }),
     [state.battleMap, campaign, caps.secretStory, caps.adjudicates, isLead],
   );
+  const panelTabIds = useMemo(() => panelTabs.map(([id]) => id), [panelTabs]);
+  usePreloadTable(panelTabIds);
   // The table's arrangement for this seat (client issue 46,
   // src/lib/table-layout.ts): which side-panel tabs have a pane of their
   // own, on a window wide enough for an arrangement at all. A tab with a
@@ -817,7 +899,9 @@ export function SessionView({
               ? leadPrivate
                 ? ["director", { oneShot: null, absoluteCommand: content }]
                 : ["lead-note", { content }]
-              : ["actions", { content, kind, characterId: (kind === "ooc" ? mySheet : actingSheet)?.id }];
+              : kind === "do" && speakingAs
+                ? ["actions", { content, kind, characterId: speakingAs.id, reaction: true }]
+                : ["actions", { content, kind, characterId: (kind === "ooc" ? mySheet : actingSheet)?.id }];
         const send = (extra: Record<string, unknown> = {}) =>
           fetch(`/api/campaigns/${campaignId}/${route}`, {
             method: "POST",
@@ -846,13 +930,17 @@ export function SessionView({
           }
         }
         setInput("");
+        // One line for the hero answering a hit: the box speaks for the hero
+        // whose turn it is again, and that hero's reaction waits on the GM.
+        if (kind === "do" && speakingAs) markReactionSent(speakingAs.id);
+        setReactAs(null);
       } catch {
         setError("Could not reach the server.");
       } finally {
         setSending(false);
       }
     },
-    [campaignId, input, sending, gate.inputBlocked, silenced, kind, leadPrivate, speaker, mySheet, actingSheet],
+    [campaignId, input, sending, gate.inputBlocked, silenced, kind, leadPrivate, speaker, mySheet, actingSheet, speakingAs, setReactAs, markReactionSent],
   );
 
   const clearChatTarget = useCallback(() => setChatTarget(null), []);
@@ -1027,47 +1115,116 @@ export function SessionView({
     [showJoinBanner, joinNoticeId, joinNoticeText],
   );
 
+  // What the header, the side panel and the board are handed, kept the same
+  // between the events that really change it. Every stream event renders
+  // this component again (it reads the whole table state), and a fresh
+  // object, element or function made here on each of those renders undid
+  // the memo on SessionHeader and SidePanel and re-rendered the board: a
+  // presence ping or a status change repainted about 900 components, the
+  // header's every button and tooltip among them. Hooks, so above the early
+  // return below.
+  const stageSwitch = sessionLayout || (Boolean(state.battleMap) && docked && !battlePane);
+  const headerStage = useMemo(
+    () => (stageSwitch ? { on: shownStageView === "board", onToggle: toggleStage } : undefined),
+    [stageSwitch, shownStageView, toggleStage],
+  );
+  const openPartyTab = useCallback(() => openTab("party"), [openTab]);
+  const fightEncounter = state.encounter?.status === "active" ? state.encounter : null;
+  const campaignGenre = campaign?.genre;
+  const headerRibbon = useMemo(
+    () =>
+      fightEncounter ? (
+        <InitiativeRibbon encounter={fightEncounter} sheets={sheets} genre={campaignGenre} onOpen={openPartyTab} />
+      ) : null,
+    [fightEncounter, sheets, campaignGenre, openPartyTab],
+  );
+  const raiseLevelUp = useCallback(() => setLevelUpByHand(true), []);
+  const questLog = campaign?.questLog;
+  const questGlance = useMemo(
+    () =>
+      campaignId ? (
+        <QuestGlance campaignId={campaignId} refreshKey={state.questsVersion} initial={questLog ?? []} onOpen={openQuests} />
+      ) : null,
+    [campaignId, state.questsVersion, questLog, openQuests],
+  );
+  // The engine's count, the one the Hand reads (src/lib/battlemap/
+  // hand-table.ts): a spent reaction lives in reactionsUsed, not the turn
+  // budget. A companion only on its own turn, when this player commands it
+  // (player-characters.ts).
+  const stageEncounter = state.encounter;
+  const stageTurnBudget = useMemo(
+    () =>
+      actingSheet && (!actingSheet.isCompanion || actingSheet.id === turnSheet?.id) && stageEncounter
+        ? turnHudBudget(
+            turnFromEncounter(stageEncounter, actingSheet, {
+              myTurn: stageEncounter.turn?.ownerId === actingSheet.id,
+            }),
+          )
+        : null,
+    [actingSheet, turnSheet?.id, stageEncounter],
+  );
+  const dismissHandout = useCallback(
+    async (id: string) => {
+      await fetch(`/api/campaigns/${campaignId}/dm/invoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "dismiss_handout", args: { handoutId: id } }),
+      });
+    },
+    [campaignId],
+  );
+  // Two copies of the scroll: the fight stage's has no composer (the desk
+  // is right under the board); the enlarged board's keeps it (the dialog
+  // covers the desk).
+  const chronicleBlocked = gate.inputBlocked || silenced;
+  const chroniclePlaceholder = silenced ? silencedPlaceholder : (heldPlaceholder ?? fallenPlaceholder ?? gate.placeholder);
+  const chronicleLimit = composerLimit(kind, leadPrivate);
+  const stateRolls = state.rolls;
+  const stateMembers = state.members;
+  const [chronicle, chronicleDesk] = useMemo(() => {
+    const chronicleFor = (composer: boolean) => needsCharacter ? null : (
+      <TabletopChronicle
+        messages={messages}
+        rolls={stateRolls}
+        sheets={sheets}
+        members={stateMembers}
+        isDm={isDm}
+        steersStory={steersStory}
+        kind={kind}
+        onKindChange={setKind}
+        input={input}
+        setInput={setInput}
+        sending={sending}
+        inputBlocked={chronicleBlocked}
+        placeholder={chroniclePlaceholder}
+        onSubmit={submit}
+        maxChars={chronicleLimit}
+        // The stage's copy opens the story for what its window leaves out;
+        // the enlarged board's dialog covers the story, so it only says so.
+        onShowStory={composer ? undefined : toggleStage}
+        composer={composer}
+        meUserId={meId}
+      />
+    );
+    return [chronicleFor(false), chronicleFor(true)] as const;
+  }, [needsCharacter, messages, stateRolls, sheets, stateMembers, isDm, steersStory, kind, input, sending, chronicleBlocked, chroniclePlaceholder, submit, chronicleLimit, toggleStage, meId]);
+
   if (!campaign || !me) {
     return null;
   }
 
   const storyDue = storyCadence.level !== "quiet";
   const fightStaged = boardStaged || sessionLayout;
-  // Two copies of the scroll: the fight stage's has no composer (the desk
-  // is right under the board); the enlarged board's keeps it (the dialog
-  // covers the desk).
-  const chronicleFor = (composer: boolean) => needsCharacter ? null : (
-    <TabletopChronicle
-      messages={messages}
-      rolls={state.rolls}
-      sheets={sheets}
-      members={state.members}
-      isDm={isDm}
-      steersStory={steersStory}
-      kind={kind}
-      onKindChange={setKind}
-      input={input}
-      setInput={setInput}
-      sending={sending}
-      inputBlocked={gate.inputBlocked || silenced}
-      placeholder={silenced ? silencedPlaceholder : (heldPlaceholder ?? fallenPlaceholder ?? gate.placeholder)}
-      onSubmit={submit}
-      maxChars={composerLimit(kind, leadPrivate)}
-      // The stage's copy opens the story for what its window leaves out;
-      // the enlarged board's dialog covers the story, so it only says so.
-      onShowStory={composer ? undefined : toggleStage}
-      composer={composer}
-      meUserId={meId}
-    />
-  );
-  const chronicle = chronicleFor(false);
-  const chronicleDesk = chronicleFor(true);
+  // The Hand lies on the staged board's lower edge (the slot below), and
+  // the desk under it is the message box alone. An addon's own stage lays
+  // its session out itself, and a short window keeps the Hand's rail.
+  const handOnBoard = boardStaged && !sessionLayout && handRoom;
 
   // Everything a side-panel tab's content needs, shared by the side panel
   // and by any tab with a pane of its own (TabPane).
   const routerProps = {
     levelUpLevel: myLevelUp && !levelUpShown ? myLevelUp.level : null,
-    onLevelUp: () => setLevelUpByHand(true),
+    onLevelUp: raiseLevelUp,
     pinsVersion: pinsVersion + state.pinsVersion,
     campaignId: campaign.id,
     sheets,
@@ -1104,6 +1261,7 @@ export function SessionView({
     facts: state.facts,
     characterEvents: state.characterEvents,
     clockTurns: state.clockTurns,
+    turnChanges: state.turnChanges,
     refreshNotes,
     refreshFacts,
     sideThreads: state.sideThreads,
@@ -1132,6 +1290,7 @@ export function SessionView({
     onOpenLabel: openLabel,
     refreshBattleMap,
     relationshipsVersion: state.relationshipsVersion,
+    castVersion: state.castVersion,
     departingSheets: state.departingSheets,
     factionsVersion: state.factionsVersion,
     worldVersion: state.worldVersion,
@@ -1181,22 +1340,13 @@ export function SessionView({
         ambience={ambience}
         sound={sound}
         onHelp={openHelp}
-        stage={sessionLayout || (state.battleMap && docked && !battlePane) ? { on: shownStageView === "board", onToggle: toggleStage } : undefined}
+        stage={headerStage}
         layoutSeat={sessionLayout ? undefined : layoutSeat}
         tableBreak={breakControl}
         prep={headerPrep}
         session={sessionControl}
         exit={headerExit}
-        ribbon={
-          state.encounter?.status === "active" ? (
-            <InitiativeRibbon
-              encounter={state.encounter}
-              sheets={sheets}
-              genre={campaign.genre}
-              onOpen={() => openTab("party")}
-            />
-          ) : null
-        }
+        ribbon={headerRibbon}
       />
 
       {/* The table itself. While prep is open it stays laid out under it,
@@ -1239,7 +1389,7 @@ export function SessionView({
                     <div className="cine-fight">
                       {chronicle}
                       {chronicle ? <ChronicleSplitter /> : null}
-                      <div className="cine-fight-board cine-board-frame" hidden={sessionLayout && (shownStageView === "story" || battlePane || boardInPanel)}>
+                      <div className="cine-fight-board cine-board-frame" data-fit-stage="" data-hand-on-board={handOnBoard ? "" : undefined} hidden={sessionLayout && (shownStageView === "story" || battlePane || boardInPanel)}>
                         {state.battleMap && !battlePane && !boardInPanel ? (
                         <Suspense fallback={<PanelLoading />}>
                         <BattleMapPanel
@@ -1251,20 +1401,7 @@ export function SessionView({
 
                           intents={state.battleMap.intents}
                           genre={campaign.gameSettings?.genre ?? null}
-                          turnBudget={
-                            // The engine's count, the one the Hand reads
-                            // (src/lib/battlemap/hand-table.ts): a spent reaction
-                            // lives in reactionsUsed, not the turn budget.
-                            // A companion only on its own turn, when this
-                            // player commands it (player-characters.ts).
-                            actingSheet && (!actingSheet.isCompanion || actingSheet.id === turnSheet?.id) && state.encounter
-                              ? turnHudBudget(
-                                  turnFromEncounter(state.encounter, actingSheet, {
-                                    myTurn: state.encounter.turn?.ownerId === actingSheet.id,
-                                  }),
-                                )
-                              : null
-                          }
+                          turnBudget={stageTurnBudget}
                           canDirect={caps.adjudicates}
                           canFocusPing={steersStory}
                           ping={state.mapPing ?? null}
@@ -1294,6 +1431,7 @@ export function SessionView({
                             onFailure={restoreNativeView}
                           />
                         ) : null}
+                        {handOnBoard ? <div ref={setHandSlot} className="cine-fight-hand" data-fit-foot="" /> : null}
                       </div>
                     </div>
                   ) : undefined
@@ -1325,7 +1463,7 @@ export function SessionView({
                     <TestFightBanner
                       campaignId={campaign.id}
                       source={state.testFight}
-                      runsIt={campaign.gameSettings?.dmMode === "ai" ? "ai" : "person"}
+                      runsIt={aiRunsFoes ? "ai" : "person"}
                     />
                   ) : null}
                   {ended ? (
@@ -1355,19 +1493,26 @@ export function SessionView({
                     <CoordinationPanel campaignId={campaign.id} phase={state.coordination} meUserId={me.id} steersStory={steersStory} />
                   ) : null}
                   <Composer
+                    handSlot={handOnBoard ? handSlot : null}
                     campaignId={campaign.id}
                     genre={campaign.gameSettings?.genre ?? null}
                     trackAmmo={campaign.gameSettings?.variantRules?.ammunition ?? false}
                     multiCharacter={campaign.gameSettings?.multiCharacter}
                     romanceCue={romanceCueAllowed(campaign.gameSettings)}
                     edges={state.battleMap?.edges}
+                    feet={state.battleMap?.feet}
+                    unseen={state.battleMap?.unseen}
                     drops={state.battleMap?.drops}
                     mounts={state.battleMap?.mounts}
+                    board={state.battleMap?.self}
+                    sight={state.battleMap?.sight}
                     sheets={sheets}
                     meUserId={me.id}
                     activeSheetId={state.activeSheetId}
                     steersStory={steersStory}
                     isDm={isDm}
+                    aiRunsFoes={aiRunsFoes}
+                    aiTurns={narratorIsAi(campaign.gameSettings?.dmMode ?? "ai")}
                     kind={kind}
                     onKindChange={setKind}
                     input={input}
@@ -1402,6 +1547,9 @@ export function SessionView({
                     onCaptureStory={openStoryCapture}
                     onSnoozeStory={snoozeStory}
                     onSubmit={submit}
+                    speakingAs={reactAsPicker}
+                    reactionsSent={reactionsSent}
+                    onReactionSent={markReactionSent}
                   />
                   </>
                 )}
@@ -1422,7 +1570,7 @@ export function SessionView({
                 chatUnread={chatUnreadTotal}
                 mobileVisible={mobileView === "panel"}
                 storyDue={storyDue}
-                glance={<QuestGlance campaignId={campaign.id} refreshKey={state.questsVersion} initial={campaign.questLog ?? []} onOpen={openQuests} />}
+                glance={questGlance}
               />
             ),
           },
@@ -1435,7 +1583,7 @@ export function SessionView({
         ]}
       />
 
-      <RollToast latestRoll={state.latestRoll} sheets={sheets} />
+      <RollToast staged={stagedRoll} sheets={sheets} />
 
       {mobileView !== "chat" && (narrationHeld > 0 || ambienceWaiting) ? (
         <div className="px-2 pb-1 lg:hidden">{audioWaiting}</div>
@@ -1455,7 +1603,7 @@ export function SessionView({
 
       {prep && (prepOpen || prepLeaving) ? <PrepLayer leaving={!prepOpen}>{prep.screen}</PrepLayer> : null}
 
-      {dice3d ? <DiceOverlay rolls={state.recentRolls} enabled /> : null}
+      <DiceOverlay rolls={state.recentRolls} enabled={dice3d} onStage={setStagedRoll} />
       <SceneTitle card={state.titleCard} onShown={markTitleCardShown} />
       <TableBreakBanner tableBreak={tableBreak} meUserId={me.id} mayResume={mayResumeTable} onResume={resumeTable} />
       <SessionHoldBanner
@@ -1475,13 +1623,7 @@ export function SessionView({
         userId={me?.id ?? ""}
         steersStory={steersStory}
         canTakeDown={caps.adjudicates}
-        onDismiss={async (id) => {
-          await fetch(`/api/campaigns/${campaign.id}/dm/invoke`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: "dismiss_handout", args: { handoutId: id } }),
-          });
-        }}
+        onDismiss={dismissHandout}
       />
       <Suspense fallback={null}>
       {labelMounted ? (

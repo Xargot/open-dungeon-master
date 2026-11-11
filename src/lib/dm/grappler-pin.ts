@@ -14,11 +14,12 @@ import type { DmTurn } from "@/lib/db/dm-turns";
 import { getActiveEncounter, listEnemies, patchEnemyConditions, type EncounterEnemy } from "@/lib/db/encounters";
 import { getSheetById, listSheets, patchSheet } from "@/lib/db/sheets";
 import { publishPersisted } from "@/lib/events";
-import { rollEnemyContest } from "@/lib/dm/action-common";
+import { enemyContestTag, rollEnemyContest } from "@/lib/dm/action-common";
 import { removeConditions, type ConditionMetaMap } from "@/lib/dm/condition-logic";
-import { rollCharacterCheck } from "@/lib/dm/contest-roll";
+import { contestShift, rollCharacterCheck } from "@/lib/dm/contest-roll";
 import { publishEncounter } from "@/lib/dm/enemy-damage";
 import { resolveTargetFoe } from "@/lib/dm/sheet-foe";
+import { swallowCoverError } from "@/lib/dm/swallow";
 import type { ToolResult } from "@/lib/dm/tool-errors";
 import { featUsable, holdsFeat } from "@/lib/srd/feat-use";
 import { isConditionNamed } from "@/lib/srd/feature-names";
@@ -66,6 +67,11 @@ export function pin(
   if (!enemy || enemy.status !== "alive") {
     return { error: "pin needs a living targetEnemyId from GAME STATE: the creature they grapple.", retry: true };
   }
+  // Swallowed (swallow.ts): hands do not cross the swallower's wall.
+  const inside = swallowCoverError(sheet.id, enemy.id);
+  if (inside) {
+    return inside;
+  }
   if (!heldFrom(enemy, GRAPPLED, sheet.id)) {
     return {
       error: `${sheet.name} is not grappling ${enemy.displayName}. A pin is made on a creature they already grapple: grapple it first. Nothing was spent.`,
@@ -85,9 +91,19 @@ export function pin(
   if (mine.rollId) {
     turn.rollIds.push(mine.rollId);
   }
-  const theirs = rollEnemyContest(campaign, turn, enemy, "either", `${enemy.displayName}: contest against the pin`);
-  const contest = `${mine.total} vs ${theirs}`;
-  if (mine.autoFailed || mine.total <= theirs) {
+  const rolledTheirs = rollEnemyContest(campaign, turn, enemy, "either", `${enemy.displayName}: contest against the pin`);
+  // A Chronal Shift a watch stop armed for either side (contest-roll.ts).
+  const settled = mine.autoFailed
+    ? { mine: mine.total, theirs: rolledTheirs }
+    : contestShift(
+        campaign.id,
+        { tag: { roller: "hero", kind: "check", who: sheet.name }, total: mine.total, again: () => rollCharacterCheck(campaign, sheet, { skill: "athletics" }, `${sheet.name}: Athletics to pin ${enemy.displayName}, rolled again`).total },
+        { tag: enemyContestTag(enemy), total: rolledTheirs, again: () => rollEnemyContest(campaign, turn, enemy, "either", `${enemy.displayName}: contest against the pin, rolled again`) },
+        (a, b) => a > b,
+      );
+  const theirs = settled.theirs;
+  const contest = `${settled.mine} vs ${theirs}`;
+  if (mine.autoFailed || settled.mine <= theirs) {
     return { ok: true, action: "pin", contest, success: false, note: `${enemy.displayName} keeps from being pinned; it is still grappled.` };
   }
   restrainEnemy(enemy, sheet.id);

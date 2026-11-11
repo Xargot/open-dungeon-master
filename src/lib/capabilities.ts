@@ -58,6 +58,9 @@ export type Capabilities = {
 // dropping it to its own pages over one button. Constant per release: a flag
 // only ever says this server's code has the thing.
 export const SERVER_FEATURES = {
+  // "Import an adventure PDF" in the workshop and in WorldForge: the
+  // /api/pdf-imports routes, which an older host answers with a 404.
+  pdfImport: true,
   // "Paint a portrait" on a companion's card (issue 569):
   // POST /api/campaigns/[id]/companions/[characterId]/portrait.
   companionPortrait: true,
@@ -106,6 +109,11 @@ export const SERVER_FEATURES = {
   // message's `shares`, which an older host drops and resolves as the aimed
   // creature alone, so the split stays shut there.
   handShares: true,
+  // A card for each spell a wand, a staff, a scroll or another item casts
+  // (hand-items.ts): an older host's actions route reads an item's spell
+  // only out of a Ring of Spell Storing and refuses the rest, so they stay
+  // typed there.
+  handItemCasts: true,
   // What each connected agent's receiver or poll link wakes, and a link
   // that stopped and why, on Settings > Connected agents (issue 654): the
   // `links` and `stoppedLinks` fields of GET /api/profile/agents.
@@ -114,6 +122,25 @@ export const SERVER_FEATURES = {
   // beside someone in the same call. The console shows the fields only on a host
   // that reads them; an older one drops them unread.
   moveWithAction: true,
+  // An improvised action in a fight (take_action improvise): the console's
+  // Improvise, the improvised action Ready holds, and every skill for its
+  // check. An older host refuses the action and takes only Perception or
+  // Investigation for a Search, so the console offers neither there.
+  improvisedActions: true,
+  // Every open hit on a character, each with its id, in the encounter's
+  // `lastHits`, and a reaction card's `hit` (issue 685): the Hand offers a
+  // card per hit and sends the one it answers. An older host keeps one hit
+  // per character and drops `hit` unread, so the Hand sends none there.
+  reactionHits: true,
+  // A companion's reaction cards (issue 685): the actions route takes one
+  // off the companion's turn from its commander, or from the GM seat for a
+  // companion nobody commands at a table a person runs. An older host
+  // refuses both, so the Hand offers no companion's reaction there.
+  companionReactions: true,
+  // "Speaking as" in the composer for another hero's reaction (issue 685):
+  // the actions route's `reaction`, which an older host drops and refuses
+  // the hero as off their turn, so the choice stays hidden there.
+  typedReactions: true,
   // The GM seat plays the turn of a companion nobody commands at a table a
   // person runs (src/lib/dm/companion-command.ts gmCompanionTurn): the
   // actions route takes that companion's cards and Do, and End turn ends its
@@ -124,6 +151,124 @@ export const SERVER_FEATURES = {
   // attraction's `open`, which an older host drops while saving the rest,
   // so the switch stays hidden there.
   openRelationships: true,
+  // An NPC's race (the Race select beside Gender in the NPC form and in the
+  // console's Write an NPC, set_npc's `race`) and a foe's race and gender on
+  // the console's fight line ("bandit race elf gender female"): an older host
+  // drops the race unread and reads that line as one unknown monster, so the
+  // selects stay hidden and the line's help says nothing of them there.
+  npcRace: true,
+  // Who a fight goes on without (start_encounter's absent, issue 740): an
+  // older host strips the field unread and stages everyone the console's
+  // "Not at this fight" named, so it stays hidden there.
+  fightAbsent: true,
+  // A fight with the party inside a building (issue 743): the console's two
+  // questions. An older host drops start_encounter's building unread and opens
+  // the fight on open ground, so they stay hidden there.
+  fightInBuilding: true,
+  // A declaration's parts in one call (PR 749): the console's "Made with"
+  // on an attack, a journey's Days and a blow's Blows. An older host strips
+  // all three unread (a flurry strike swung as the Attack action's, one day
+  // or one blow where many were asked), so they stay hidden there, and the
+  // attack's field is that host's bonusAttack.
+  actionParts: true,
+  // A test fight's moment saved as its prepared fight's set-up (issue 685):
+  // "Save as set-up" on the test table (POST /api/campaigns/[id]/fight-setup)
+  // and "Remove its set-up" on the fight, which an older host answers with
+  // a 404, so neither shows there.
+  fightSetups: true,
+  // "Turn trace" on a test fight's banner (issue 685): GET
+  // /api/campaigns/[id]/turn-trace, every call the GM made and what the
+  // engine answered, which an older host answers with a 404.
+  turnTrace: true,
+  // The Dice button on a test fight's banner (issue 685): GET, PUT and
+  // DELETE /api/campaigns/[id]/dice-script, a seed and forced faces for the
+  // test table's own dice, which an older host answers with a 404.
+  diceScripts: true,
+  // Allies at a test fight (issue 685): the test-fight route's `allyIds`,
+  // which an older host drops unread and starts the test without them, so
+  // the Test fight sheet offers no allies there.
+  testFightAllies: true,
+  // "Resolve as played" on a waiting row of the GM console (issue 685):
+  // GET and POST /api/campaigns/[id]/dm/resolve-card and the message's
+  // `cardResolvedAt`. An older host has neither, so the button stays hidden.
+  resolveAsPlayed: true,
+  // A prepared fight's Events (issue 685): the extras' `events`, which an
+  // older host drops while saving the rest of the plan and never runs, so
+  // the Events section of the fight's plan stays hidden there.
+  fightEvents: true,
+  // "The ground changes" among a prepared fight's events (issue 685): an
+  // action naming squares of the fight's prepared map, which an older
+  // host's prep routes refuse as an event they cannot read, so the editor
+  // offers it only here.
+  fightGround: true,
+  // A legendary creature's legendary actions and the lair's on initiative
+  // count 20 as cards in the GM's monsters' Hand (issue 685 audit): the
+  // `legendary` and `lair` fields on an enemy's actions in the GM's view of
+  // the fight, sent only while they can be taken. An older host sends
+  // neither, so the console's forms stay the only way there.
+  legendaryCards: true,
+  // The GM seat plays a hero dominated by the other side card by card at a
+  // table a person runs (src/lib/dm/companion-command.ts gmCompanionTurn):
+  // the actions route takes that hero's cards and Do from the GM seat, and
+  // End turn ends the turn. An older host refuses them, so its Hand and box
+  // stay closed there and "Play their turn for me" plays the basic turn.
+  gmDominatedTurns: true,
+  // The creature picker on a summoning spell's card (issue 685): GET
+  // /api/campaigns/[id]/summons and the card's `count`, which an older host
+  // answers with a 404 and drops unread, so its summon cards ask nothing
+  // and wait for the GM as before.
+  summonPicker: true,
+  // The meal field on the console's pass_time, travel and take_rest (issue
+  // 793): an older host drops `meal` unread and the party eats from the pack.
+  suppliesMeal: true,
+  // The after-the-roll card (src/lib/dm/after-roll.ts): a parked roll's
+  // `thrown` dice and POST /api/campaigns/[id]/pending-rolls/[id]/after-roll.
+  // An older host never parks a roll that way, so the card never draws there.
+  afterRollChoice: true,
+  // Watching a fight for Portent (src/lib/dm/foresight.ts): POST
+  // /api/campaigns/[id]/foresight turns the stops on, and a stop's card
+  // answers on pending-rolls/[id]/watch. An older host answers 404, so the
+  // button is not drawn there and the numbers wait on the wizard's own rolls.
+  portentWatch: true,
+  // Watching a fight for Chronal Shift, and the "whose roll" pick at a stop
+  // (src/lib/dm/foresight.ts, chronal-shift.ts): POST
+  // /api/campaigns/[id]/foresight takes a Chronurgy wizard with no Portent
+  // number, and pending-rolls/[id]/watch takes `shift` and `choice`. An older
+  // host refuses the first, so the button is drawn only here.
+  chronalWatch: true,
+  // Watching a fight for Flash of Genius or Favored by the Gods on a save the
+  // server throws inside a call (src/lib/dm/foresight.ts, chronal-shift.ts
+  // takeSaveHelp): POST /api/campaigns/[id]/foresight takes an artificer or a
+  // divine soul, and a stop's `power` may name either. An older host refuses
+  // the first, so the button is drawn only here.
+  saveWatch: true,
+  // A pointer move held for a watch stop (src/lib/dm/turn-hold.ts): the
+  // public encounter's `turnHeld`, which the End Turn controls show while the
+  // move waits on a watcher. An older host never holds a move, so nothing is
+  // drawn there.
+  turnHold: true,
+  // The owed picks on a character sheet (issue #833): POST
+  // /api/campaigns/[id]/sheet/owed makes a pick the character's levels
+  // earned and no level-up offered (a dragon ancestor, a favored enemy, a
+  // fighting style), outside a level-up. An older host answers 404, so the
+  // sheet only lists the pick as owed there.
+  owedPicks: true,
+  // A workshop subclass's own choices (issue #833): the archetype's
+  // `choices` field (a bloodline, an element, each option's damage type,
+  // resistances, skills, languages and spells), which the workshop's
+  // subclass editor writes. An older host drops the field on save, so the
+  // editor shows its "Let the player choose" section only here.
+  subclassChoices: true,
+  // Spells on a workshop species and on each option of its player's choice
+  // (issue #833): the species editor's spell rows, which an older host
+  // drops unread on save.
+  speciesSpells: true,
+  // A workshop class's list of its own and a workshop subclass's additions
+  // to its class's list (issue #833): the class's `spellList`/`spellStyle`,
+  // the subclass's `expanded` and a homebrew spell tagged with a workshop
+  // class. An older host drops the fields unread (the class falls back to
+  // the wizard's list), so the editor offers none of them there.
+  customSpellLists: true,
 } as const;
 export type ServerFeatures = { [K in keyof typeof SERVER_FEATURES]: boolean };
 

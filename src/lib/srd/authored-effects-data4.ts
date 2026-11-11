@@ -5,6 +5,13 @@
 
 import type { AuthoredEntry, Formula } from "@/lib/srd/authored-effects-types";
 
+// Wild Magic Surge (Wild Magic sorcerer 1): after a sorcerer spell of 1st
+// level or higher "the GM may have you roll" on the surge table, and a spent
+// Tides of Chaos comes back when they do. A casting that opens that chance
+// leaves this mark for a round (cast-guard.ts, authored-effects-more.ts
+// opensSurgeChance); use_resource "Wild Magic Surge" needs it, and spends it.
+export const SURGE_CHANCE = "surge chance";
+
 const ALL_DAMAGE = [
   "acid", "bludgeoning", "cold", "fire", "force", "lightning", "necrotic",
   "piercing", "poison", "psychic", "radiant", "slashing", "thunder",
@@ -116,7 +123,9 @@ export const AUTHORED_DATA_C: Record<string, AuthoredEntry> = {
   },
   "cleric::Twilight Shroud": {
     subclass: "Twilight Domain",
-    narrated: "Half cover for the cleric and allies inside Twilight Sanctuary: +2 AC the GM adds with set_effect while the sanctuary holds.",
+    // Half cover for the cleric and allies inside Twilight Sanctuary, on every
+    // attack and every save that reads cover.
+    heldBy: { file: "src/lib/dm/attack-spatial.ts", call: "twilightShroudCover(" },
   },
   "cleric::Spell Breaker": {
     subclass: "Arcana Domain",
@@ -131,7 +140,7 @@ export const AUTHORED_DATA_C: Record<string, AuthoredEntry> = {
   "druid::Circle Forms": {
     subclass: "Circle of the Moon",
     // Wild Shape's challenge rating ceiling for a Moon druid.
-    heldBy: { file: "src/lib/srd/beast-forms.ts", call: "moonDruid ? Math.max(baseCr, moonCr)" },
+    heldBy: { file: "src/lib/srd/wild-shape-caps.ts", call: "moonDruid ? Math.max(baseCr, moonCr)" },
   },
   "druid::Thousand Forms": {
     subclass: "Circle of the Moon",
@@ -209,6 +218,8 @@ export const AUTHORED_DATA_C: Record<string, AuthoredEntry> = {
         name: "Psionic Strike",
         pool: { id: "sub_psionic_energy" },
         oncePerTurn: true,
+        // "add it ... as force damage to a hit": after a weapon hit this turn.
+        afterWeaponHit: true,
         action: "none",
         does: { kind: "die_damage", dice: PSIONIC_INT, type: "force" },
       },
@@ -413,7 +424,20 @@ export const AUTHORED_DATA_C: Record<string, AuthoredEntry> = {
   },
 
   // ---- sorcerer ----
-  "sorcerer::Wild Magic Surge": { subclass: "Wild Magic", narrated: "The d20 and the wild magic table are the GM's to roll and narrate." },
+  // The d20 and the wild magic table are the GM's to roll and narrate; the
+  // use given back is the engine's, and the GM's call, so no card is dealt.
+  "sorcerer::Wild Magic Surge": {
+    subclass: "Wild Magic",
+    spends: [
+      {
+        name: "Wild Magic Surge",
+        gm: true,
+        action: "none",
+        gate: { condition: SURGE_CHANCE, because: "gives Tides of Chaos back only right after a sorcerer spell of 1st level or higher, while Tides of Chaos is spent" },
+        does: { kind: "restore", pool: "sub_tides_of_chaos", amount: 1, clears: SURGE_CHANCE },
+      },
+    ],
+  },
   "sorcerer::Controlled Chaos": { subclass: "Wild Magic", narrated: "Rolling the wild magic table twice and choosing is the GM's roll on that narrated table." },
   "sorcerer::Spell Bombardment": {
     subclass: "Wild Magic",
@@ -527,9 +551,12 @@ export const AUTHORED_DATA_C: Record<string, AuthoredEntry> = {
           save: "cha",
           dcAbility: "spell",
           condition: "charmed",
-          rounds: 14400,
           rangeFt: 60,
-          onFail: "becomes friendly and obeys the wizard until they use this again (an undead of Intelligence 8 or more saved with advantage, which the GM rolls; one of 12 or more saves again each hour)",
+          sight: true,
+          types: ["undead"],
+          advantageAt: { ability: "int", atLeast: 8 },
+          commands: true,
+          onFail: "obeys the wizard until they use this again (one of Intelligence 12 or more saves again at the end of every hour, which the GM rolls when an hour passes)",
         },
       },
     ],

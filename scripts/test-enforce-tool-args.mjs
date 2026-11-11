@@ -287,6 +287,14 @@ await test("a fight can always be ended, whatever the arguments say", async () =
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(table.encounter(), null);
   }
+  // And a readable outcome is kept when another field is not: { outcome:
+  // "victory", reason: null } was recorded as a truce at half the XP.
+  for (const reason of [null, ["they ran"]]) {
+    await fight(table);
+    const result = await raw("end_encounter", JSON.stringify({ outcome: "victory", reason }), table);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.doesNotMatch(JSON.stringify(result), /was not recognized|truce/, `reason ${JSON.stringify(reason)} threw the victory away: ${JSON.stringify(result).slice(0, 200)}`);
+  }
 });
 
 // ---- the bounds a tool declares ----
@@ -435,8 +443,16 @@ await test("a console form sends the arguments its tool takes, under the names t
   for (const name of MUTATION_TOOL_NAMES.filter((tool) => tool !== "update_sheet" && !isRetiredTool(tool))) {
     const parameters = mutationTools.find((tool) => tool.function.name === name).function.parameters;
     const fields = adjudication(name).fields.map((field) => field.name);
-    const unread = fields.filter((field) => !(field in parameters.properties));
-    const unsent = (parameters.required ?? []).filter((argument) => !fields.includes(argument));
+    // A list the form does not offer as a list (grant_item's items) is its
+    // one entry, sent flat: the handler resolves one item per call.
+    const flat = (key) => {
+      const entry = parameters.properties[key];
+      return entry?.type === "array" && entry.items?.properties && !fields.includes(key) ? entry.items : null;
+    };
+    const keys = Object.keys(parameters.properties).flatMap((key) => (flat(key) ? Object.keys(flat(key).properties) : [key]));
+    const required = (parameters.required ?? []).flatMap((key) => (flat(key) ? (flat(key).required ?? []) : [key]));
+    const unread = fields.filter((field) => !keys.includes(field));
+    const unsent = required.filter((argument) => !fields.includes(argument));
     if (unread.length || unsent.length) {
       drift.push(`${name} sends ${unread.join(", ") || "nothing"} unread and never sends ${unsent.join(", ") || "nothing"}`);
     }

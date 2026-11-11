@@ -474,7 +474,10 @@ contain one native `panel` with a title, display lines and offered controls.
 Only that panel's controls are actionable while it is open. Its `boardInput`
 flag permits the existing target/area picks; otherwise map input is blocked.
 Weapon/spell choices and concentration confirmation reuse the Hand's current
-state and submission. Chat, ordinary cards, sheets and campaign panels remain
+state and submission. A summoning card's creature is its `hand-choice`; how
+many of it is `hand-count` (one of the numbers offered), and a spell whose
+targets each take their own form (Animate Dead) offers `hand-mix`, one more
+or one fewer of a form (`"Skeleton:+"`), within the slot's budget. Chat, ordinary cards, sheets and campaign panels remain
 HTML. Capability ownership follows the active native view, including enlarged
 view transitions; detach/failure restores the existing HTML battlefield.
 
@@ -620,8 +623,10 @@ Ruler updates are separate from snapshots so hovering does not require rebuildin
 
 ### Enemy and NPC sex
 
-Visible enemy and NPC tokens may include `sex: "Female" | "Male"`, supplied by the server's viewer projection. This cosmetic model-selection field is independent of character/NPC gender, pronouns and combat rules.
+Visible enemy and NPC tokens may include `sex: "Female" | "Male"`, supplied by the server's viewer projection after its normal visibility filtering. It is the same gender the flat board's face for that figure reads (`src/lib/actor-sex-logic.ts`), so a view's model and the plate on the tracker never disagree.
 
-New enemies snapshot a declared value (optional `sex` on `start_encounter`/`add_enemies` entries), a linked cast NPC's declared Male/Female value, or a stable automatic Male/Female assignment derived from their saved identity. Existing enemies and unspecified NPCs use the same stable ID assignment without rewriting records. Returning enemies keep the last fight's value, including those first created by an older server. A linked cast NPC uses its own ID for automatic assignment both as a friendly NPC and as an enemy; an ad hoc display name alone is not a link to the cast. Refreshing, renaming, changing forms or starting another turn never rerolls it.
+- A Cast NPC, as an enemy or as a figure the GM placed by hand (linked by NPC id, else by whole name or alias, as `start_encounter` links one), has the gender the Cast records, read live: a gender the story records later changes the model at once. A Cast NPC recorded as Nonbinary, or not yet recorded, has no `sex`.
+- A nameless enemy has the `gender` its `start_encounter`/`add_enemies` entry was told (Female, Male or Nonbinary), else a stable Female or Male picked once from its own saved row id when it arrived. Renaming, damage, a new form and a return in a later fight never change it, and two enemies with one name are picked separately. One told Nonbinary has no `sex`.
+- A figure the GM placed by hand that the Cast does not know has a stable pick from its token's ref.
 
-PCs retain `character.gender`; props receive no automatic sex. Older hosts omit `sex`, so views should retain their ordinary model fallback. Hidden/fogged actors still never enter a player's snapshot. For example, a view can select `monsters.bandit:Female` when a visible bandit's `sex` is `"Female"`, falling back to `monsters.bandit` when that variant or metadata is absent. The host sends no model paths or full NPC records with this field. This optional addition keeps bridge version 1.
+No `sex` means a view keeps its ordinary model. PCs keep `character.gender`; props have none. Older hosts omit `sex`, so views should keep their ordinary model fallback: for example, select `monsters.bandit:Female` when a visible bandit's `sex` is `"Female"`, falling back to `monsters.bandit` when that variant or the field is absent. Hidden and fogged figures never enter a player's snapshot. The host sends no model paths or NPC records with this field. This optional addition keeps bridge version 1.

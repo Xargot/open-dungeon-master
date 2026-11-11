@@ -1,3 +1,5 @@
+import { parseFightSetup, portableSetup } from "@/lib/workshop/fight-setup-logic";
+import { privateSourceOf, privateSourceOfEntries } from "@/lib/db/private-sources";
 import { createHash } from "node:crypto";
 import { compareNames } from "@/lib/language/text-logic";
 import { readFileSync } from "node:fs";
@@ -16,7 +18,9 @@ import { normalizeStock } from "@/lib/db/shops";
 import { clampMarkup } from "@/lib/dm/shop-logic";
 import { storedSheetSchema } from "@/lib/schemas/sheet";
 import { storedGender } from "@/lib/gender";
+import { storedRace } from "@/lib/npc-race";
 import { normalizeAttraction } from "@/lib/attraction";
+import { parseKnownBefore } from "@/lib/dm/known-before-logic";
 import { isUploadedImagePath } from "@/lib/uploads";
 import { normalizeMapSkin } from "@/lib/battlemap/skins";
 import { normalizeRoutes } from "@/lib/workshop/board";
@@ -30,7 +34,7 @@ import {
   type WorkshopBundle,
 } from "@/lib/workshop/bundle";
 import { isWorkshop, normalizeTargetParty } from "@/lib/workshop/kind";
-import { portableClassRef, portableSheet, portableStatBlock, shelfForBundle, type ShelfReport } from "@/lib/db/workshop-bundle-shelf";
+import { portableEntryData, portableSheet, portableStatBlock, shelfForBundle, type ShelfReport } from "@/lib/db/workshop-bundle-shelf";
 import { exportMapAddonView } from "@/lib/db/map-addon-view-bundle";
 import { portableLabels, portableRoster, stringsIn } from "@/lib/db/workshop-bundle-refs";
 
@@ -48,6 +52,13 @@ type Row = Record<string, unknown>;
 
 function allRows(sql: string, ...args: unknown[]): Row[] {
   return getDatabase().prepare(sql).all(...args) as Row[];
+}
+
+// Who the party already knows when the story begins, in the bundle's words
+// (issue 731): absent for everyone else.
+function knownAtStartOf(column: string): { knownAtStart?: { grade: "acquainted" | "friend" | "close"; source: string } } {
+  const known = parseKnownBefore(column);
+  return known ? { knownAtStart: { grade: known.grade, source: known.how } } : {};
 }
 
 function str(value: unknown, fallback = ""): string {
@@ -130,7 +141,7 @@ export const BUNDLE_COLUMNS: Record<string, { carried: string[]; left: Record<st
     left: { ...IDENTITY },
   },
   encounter_templates: {
-    carried: ["name", "enemies_json", "battlefield", "map_json", "notes", "extras_json"],
+    carried: ["name", "enemies_json", "battlefield", "map_json", "notes", "extras_json", "setup_json"],
     left: { ...IDENTITY, created_by_user_id: "the importer", cued: "a lead's cue is the source table's play" },
   },
   locations: {
@@ -138,7 +149,7 @@ export const BUNDLE_COLUMNS: Record<string, { carried: string[]; left: Record<st
     left: { ...IDENTITY, visited: "play", is_current: "play", map_image_json: "a legacy column nothing reads" },
   },
   npcs: {
-    carried: ["name", "attitude", "trait", "location", "role", "gender", "attraction_json", "aliases_json", "personality_json", "goals_json", "relations_json", "portrait_url", "voice_json", "faction_id", "stat_block"],
+    carried: ["name", "attitude", "trait", "location", "role", "gender", "race", "attraction_json", "aliases_json", "personality_json", "goals_json", "relations_json", "portrait_url", "voice_json", "faction_id", "stat_block", "known_before_json"],
     left: {
       ...IDENTITY,
       last_shift_turn: "the source table's clock",
@@ -386,6 +397,7 @@ export function exportWorkshopBundle(
       location: str(row.location),
       role: str(row.role),
       gender: storedGender(row.gender),
+      race: storedRace(row.race),
       attraction: normalizeAttraction(str(row.attraction_json)),
       aliases: parseJson<string[]>(str(row.aliases_json, "[]"), []),
       personality: str(row.personality_json),
@@ -394,6 +406,7 @@ export function exportWorkshopBundle(
       portrait: loadImage(row.portrait_url, budget),
       voice: row.voice_json ? parseJson<Record<string, unknown> | null>(str(row.voice_json), null) : null,
       statBlock: portableStatBlock(str(row.stat_block)),
+      ...knownAtStartOf(str(row.known_before_json)),
       ref: refFor(row.home, "npcs", str(row.id)),
       shared: row.home !== workshopId,
     })),
@@ -429,6 +442,13 @@ export function exportWorkshopBundle(
           height: number(map.height),
         },
         extras: parseJson<Record<string, unknown>>(str(row.extras_json, "{}"), {}),
+        // The moment a test of it was saved to start from (issue 685): a
+        // scenario travels with the fight it opens, without the author's
+        // library characters' ids and names (portableSetup).
+        setup: (() => {
+          const setup = parseFightSetup(parseJson<unknown>(str(row.setup_json, ""), null));
+          return setup ? portableSetup(setup) : null;
+        })(),
         ref: refFor(row.home, "encounters", str(row.id)),
         shared: row.home !== workshopId,
       };
@@ -487,12 +507,10 @@ export function exportWorkshopBundle(
     homebrew: shelf.homebrew.map((entry) => ({
       kind: entry.kind as Exclude<typeof entry.kind, "monster">,
       name: entry.name,
-      // A subclass of a workshop class names its class as another server
-      // can find it (workshop-bundle-shelf.ts portableClassRef).
-      data:
-        entry.kind === "archetype" && typeof entry.data.classSlug === "string"
-          ? { ...entry.data, classSlug: portableClassRef(entry.data.classSlug, shelfById) }
-          : entry.data,
+      // A subclass of a workshop class, and a spell tagged with one, name
+      // the class as another server can find it (workshop-bundle-shelf.ts
+      // portableEntryData).
+      data: portableEntryData(entry, shelfById),
     })),
     // The owner's library characters filed under this workshop, their
     // homebrew written by kind and name rather than by this server's ids.
@@ -541,6 +559,9 @@ export function exportWorkshopBundle(
     ),
     overworld: null,
     dependsOn: common ? { name: common.title.slice(0, 80) } : null,
+    // The workshop's own mark, or the mark of a book's creature or item
+    // it takes along from the shelf.
+    privateSource: privateSourceOf(workshopId) || privateSourceOfEntries([...shelf.monsters.map((monster) => monster.id), ...shelf.homebrew.map((entry) => entry.id)]),
   };
 
   // The region map, with its anchors as indexes into the places.
@@ -601,4 +622,15 @@ export function exportWorkshopBundle(
   });
 
   return { bundle, skippedImages: budget.skipped, shelf: shelf.report };
+}
+
+// The published book a workshop is from (private-sources.ts), or the book
+// of a creature, item or spell it takes from the GM's shelf: what a world
+// pack, a plugin export and a plugin pull refuse. The shelf is read the way
+// a bundle export reads it, so the two never disagree.
+export function workshopPrivateSource(workshopId: string): string {
+  const own = privateSourceOf(workshopId);
+  if (own) return own;
+  const exported = exportWorkshopBundle(workshopId, { name: "Private source check", blurb: "check", inspiredBy: "check", shelf: "used" });
+  return "bundle" in exported ? (exported.bundle.privateSource ?? "") : "";
 }

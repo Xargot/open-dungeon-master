@@ -1,120 +1,53 @@
-// The physical dice path of pc_attack: the to-hit roll is parked for the
-// player, and when it lands resolvePendingPcAttack adjudicates it and, on a
-// hit, parks the damage roll too. Split from pc-attack.ts, which has
-// already refused or paid for everything the parked roll carries.
+// Real dice for pc_attack: the to-hit roll is parked for the player, and each
+// roll they enter runs the same stages the server's dice run
+// (pc-attack-resolve.ts): attack-swing.ts when the d20 lands, attack-blow.ts
+// when the damage lands. The attack's record (attack-record.ts) rides the
+// parked rolls in between. Nothing here decides a rule: a rule lives in the
+// stages, so it reaches both dice paths or neither.
 
-import { getFoe, resolveTargetFoe } from "@/lib/dm/sheet-foe";
-import { tryParry } from "@/lib/dm/enemy-reactions";
 import { getCampaignById } from "@/lib/db/campaigns";
-import {
-  createPendingRoll,
-  getDmTurn,
-  publicPendingRoll,
-  type PendingRoll,
-} from "@/lib/db/dm-turns";
+import { createPendingRoll, dicePreferencesOf, getDmTurn, publicPendingRoll, type PendingAttack, type PendingRoll } from "@/lib/db/dm-turns";
+import { parkReasonFor } from "@/lib/dice/held-rolls";
 import { getActiveEncounter } from "@/lib/db/encounters";
-import type { StoredRoll } from "@/lib/db/rolls";
-import { listSheets } from "@/lib/db/sheets";
+import { getRoll, type StoredRoll } from "@/lib/db/rolls";
 import { publishPersisted } from "@/lib/events";
-import { adjudicateHit } from "@/lib/dm/attack-logic";
-import { critDamageExpression } from "@/lib/dm/encounter-logic";
-import { claimHitRiders, liveTypedRiders, strikesAsMagic } from "@/lib/dm/pc-attack-damage";
-import { budgetApplies } from "@/lib/dm/action-budget";
+import { attackRecord, attackTurnOver, recordTargetAc, type AttackRecord, type DamageAsk } from "@/lib/dm/attack-record";
+import { damageDiceNote, damageDiceSteps, landSwingBlow } from "@/lib/dm/attack-blow";
+import { hitSwing, judgeSwing, missSwing, type SwingScene } from "@/lib/dm/attack-swing";
+import type { HeldMote } from "@/lib/dm/authored-mote";
+import { applyPendingDamageRoll } from "@/lib/dm/enemy-blow";
 import type { AttackPlan } from "@/lib/dm/pc-attack-plan";
-import type { Strike } from "@/lib/dm/pc-attack-resolve";
-import { clearHitSpent, gainTempHp, spendOnHit, stunningStrikeSave, type ParkedAttack } from "@/lib/dm/pc-attack-riders";
-import { authoredOnHit } from "@/lib/dm/authored-hooks";
-import { applySpellHitCondition, spellAttackRider } from "@/lib/dm/spell-attack-riders";
-import { gearCritRiders } from "@/lib/dm/gear-attack";
-import { FOE_SLAYER, rescueMiss, STROKE_OF_LUCK } from "@/lib/dm/attack-features";
-import {
-  HURL_THROUGH_HELL,
-  hurlThroughHell,
-  openHandOnHit,
-  poisonOnHit,
-  spendFeatureUse,
-} from "@/lib/dm/attack-onhit";
-import { storeBudget } from "@/lib/dm/turn-budget";
-import { SAVAGE_ATTACKER_USED, savageAttackerApplies } from "@/lib/srd/feat-combat";
-import { landNaturalOnHit } from "@/lib/dm/natural-onhit";
+import { serverBlow, shiftedThrow, type Strike } from "@/lib/dm/pc-attack-resolve";
+import { allyChoicesFor, reactionFreeFor, rollsCanWait } from "@/lib/dm/after-roll";
+import { afterRollDeadline, armAfterRollKeep } from "@/lib/dm/after-roll-timer";
+import { afterAttackOptions } from "@/lib/dm/after-roll-logic";
+import { rollsWrathDice } from "@/lib/dm/destructive-wrath-logic";
+import { getSheetById, listSheets } from "@/lib/db/sheets";
+import { entryDice, type RollResult } from "@/lib/dice";
+import { getFoe, resolveTargetFoe } from "@/lib/dm/sheet-foe";
+import { isKnockedOut } from "@/lib/dm/knockout";
 import { rollAgainst } from "@/lib/roll-labels";
-import { markCritRange } from "@/lib/dm/attack-marks";
 
-// The parked roll's share of what rides the attack (src/lib/dm/pc-attack-plan.ts).
-function parkedExtras(plan: AttackPlan): Pick<ParkedAttack, "extras"> | null {
-  const { extras } = plan;
-  const kept = {
-    ...(extras.foeSlayer > 0 ? { foeSlayer: extras.foeSlayer } : {}),
-    ...(extras.strokeOfLuck ? { strokeOfLuck: true } : {}),
-    ...(extras.openHand ? { openHand: extras.openHand } : {}),
-    ...(extras.hurl ? { hurl: true } : {}),
-    ...(extras.poison ? { poison: true } : {}),
-    ...(extras.tempHp ? { tempHp: extras.tempHp } : {}),
-    ...(plan.profile.creatureOnHit ? { creature: plan.profile.creatureOnHit } : {}),
-  };
-  return Object.keys(kept).length ? { extras: kept } : null;
-}
-
-// Foe Slayer is once on each of the ranger's turns: the live turn remembers
-// it. False when it was already used.
-function claimParkedFoeSlayer(campaignId: string): boolean {
-  const encounter = getActiveEncounter(campaignId);
-  const budget = encounter?.turnBudget;
-  if (!encounter || !budget || budget.oncePerTurn.includes(FOE_SLAYER)) {
+// A blow with no dice to roll (a Blowgun's 1 piercing, Contagion's 0) lands
+// at once: parked, it asked for no faces, the route refuses an empty entry,
+// and the turn waited until someone pressed Roll digitally (finding
+// dice-paths-no-dice-damage-card of the 2026-11-09 gap sweep).
+function noDiceIn(expression: string): boolean {
+  try {
+    return entryDice(expression).length === 0;
+  } catch {
     return false;
   }
-  storeBudget(encounter, { ...budget, oncePerTurn: [...budget.oncePerTurn, FOE_SLAYER] });
-  return true;
 }
 
-// Physical dice: park the to-hit roll for the player; the submit route
-// adjudicates it and, on a hit, parks the damage roll too.
-// Savage Attacker on a physical roll: the player rolls the weapon's dice
-// twice and enters the better total, so the once-a-turn mark is spent here.
-function claimSavageAttacker(plan: AttackPlan): boolean {
-  const { budget, encounter, sheet, profile } = plan;
-  if (!budget || !savageAttackerApplies(sheet, { weaponAttack: plan.weaponAttack, melee: !profile.ranged && !plan.atRange }, budget.oncePerTurn)) {
-    return false;
-  }
-  budget.oncePerTurn.push(SAVAGE_ATTACKER_USED);
-  storeBudget(encounter, budget);
-  return true;
+// The AC a parked roll meets when it lands (attack-record.ts recordTargetAc).
+export function parkedTargetAc(campaignId: string, attack: PendingAttack): number {
+  return recordTargetAc(campaignId, attack as AttackRecord);
 }
 
-export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: string | null) {
-  const { campaign, turn, sheet, enemy, profile, riders, context } = plan;
-  const { critExtraDice } = strike;
-  // The damage stage resolves the blow per type and with the magical flag,
-  // as the digital path does, so both travel with the roll.
-  const parkedRiders = liveTypedRiders(plan.typedRiders, plan.droppedRiders);
-  const critGear = gearCritRiders(profile, enemy.stats.type);
-  const parked: ParkedAttack = {
-    magical: strikesAsMagic(plan),
-    ...(plan.atRange ? {} : { melee: true }),
-    ...(parkedRiders.length ? { riders: parkedRiders } : {}),
-    ...(critExtraDice ? { critExtraDice } : {}),
-    attacker: sheet.name,
-    weapon: profile.weapon,
-    ...(profile.material ? { material: profile.material } : {}),
-    targetEnemyId: enemy.id,
-    targetAc: plan.effectiveAc,
-    damageExpression: profile.damageExpression,
-    critDamageExpression: critDamageExpression(profile.damageExpression, critExtraDice, strike.critOptions),
-    damageType: profile.damageType,
-    ...(context.autoCrit ? { autoCrit: true } : {}),
-    ...(Math.min(plan.weaponAttack ? riders.critRange : 20, markCritRange(plan.marks.applies)) < 20
-      ? { critRange: Math.min(plan.weaponAttack ? riders.critRange : 20, markCritRange(plan.marks.applies)) }
-      : {}),
-    ...(strike.rerollBelow ? { rerollBelow: strike.rerollBelow } : {}),
-    ...(claimSavageAttacker(plan) ? { savageAttacker: true } : {}),
-    ...(strike.hasOnHit ? { onHit: strike.onHitSpends } : {}),
-    ...(plan.options.nonlethal ? { nonlethal: true } : {}),
-    ...(plan.hitSpent.length ? { hitSpent: plan.hitSpent } : {}),
-    ...(plan.hitClaims.length ? { hitClaims: plan.hitClaims } : {}),
-    ...(plan.kind === "spell" && plan.args.spell ? { spell: plan.args.spell } : {}),
-    ...(critGear.suffix ? { critGear } : {}),
-    ...(parkedExtras(plan) ?? {}),
-  };
+// Physical dice: park the to-hit roll for the player, with the attack's record.
+export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: string | null, mote: HeldMote | null = null) {
+  const { campaign, turn, sheet, enemy, profile } = plan;
   const pending = createPendingRoll({
     campaignId: campaign.id,
     turnId: turn.id,
@@ -127,171 +60,90 @@ export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: strin
     advantage: plan.advantage,
     dc: null,
     reason: `${profile.weapon} attack against ${enemy.displayName}`,
-    attack: parked,
+    attack: attackRecord(plan, strike, mote),
   });
   publishPersisted(campaign.id, "roll_pending", { pendingRoll: publicPendingRoll(pending) });
 }
 
-// Physical-dice adjudication, called from the pending-rolls submit route
-// when a parked pc_attack to-hit roll lands. Returns the combat note the
-// resumed turn surfaces to the model; on a hit it parks the damage roll so
-// the turn stays paused until the player rolls their damage dice (which the
-// existing applyPendingDamageRoll path then applies).
-export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): string | null {
-  const context = pending.attack;
-  if (!context) {
+// The server's dice for a player whose rolls can wait (after-roll.ts
+// rollsCanWait): the d20 is thrown, and when the attack misses as it stands
+// and something they hold could turn it into a hit (a luck point, a held
+// Bardic Inspiration die), the roll is parked thrown, with the attack's
+// record, for the player to decide (after-roll route). Nothing is spent until
+// they do. It lands as a real-dice roll does (resolvePendingPcAttack), and the
+// server throws its damage. `thrown` when there is nothing to decide: the
+// caller resolves the attack with that throw at once.
+export function throwForChoice(plan: AttackPlan, strike: Strike, toolCallId: string | null, mote: HeldMote | null): { parked: PendingRoll } | { thrown: RollResult } | null {
+  const { campaign, turn, sheet, enemy, profile } = plan;
+  const fresh = getSheetById(sheet.id) ?? sheet;
+  if (!rollsCanWait(fresh)) {
     return null;
   }
+  const record = attackRecord(plan, strike, mote);
+  const ac = recordTargetAc(campaign.id, record);
+  const critRange = record.critRange ?? 20;
+  const thrown = shiftedThrow(plan, strike, ac, critRange);
+  const options = [
+    ...afterAttackOptions(fresh, { outcome: thrown, ac, critRange, spent: record.luck ? ["lucky"] : [], reactionFree: reactionFreeFor(campaign.id, fresh.id), melee: record.melee === true && record.ranged !== true, wrathDice: rollsWrathDice(record.damageExpression, record.damageType, record.riders) }),
+    // A wizard or a War cleric beside them may answer the miss (after-roll.ts).
+    ...allyChoicesFor(campaign.id, fresh, { kind: "attack", outcome: thrown, ac, critRange }),
+  ];
+  if (!options.length) {
+    return { thrown };
+  }
+  const parked = createPendingRoll({
+    campaignId: campaign.id,
+    turnId: turn.id,
+    toolCallId,
+    userId: sheet.userId,
+    characterId: sheet.id,
+    kind: "attack",
+    detail: strike.detail,
+    expression: strike.toHitExpression,
+    advantage: plan.advantage,
+    dc: null,
+    reason: `${profile.weapon} attack against ${enemy.displayName}`,
+    attack: { ...record, serverDice: true } as AttackRecord,
+    parkedFor: "after_roll",
+    thrown: { outcome: thrown, options, choosing: false, landing: { status: "fallback", physical: false, source: "digital" }, deadline: afterRollDeadline(campaign.id, sheet.userId) },
+  });
+  publishPersisted(campaign.id, "roll_pending", { pendingRoll: publicPendingRoll(parked) });
+  armAfterRollKeep(parked.id, parked.thrown?.deadline);
+  return { parked };
+}
+
+// The stage's world, read as the roll lands. A record parked by an older
+// build names no attacker or round: the roll's character, on the turn now
+// under way, as that build read it.
+function sceneOf(pending: PendingRoll): { scene: SwingScene; record: AttackRecord } | null {
+  const stored = pending.attack as AttackRecord | null;
   const campaign = getCampaignById(pending.campaignId);
   const turn = getDmTurn(pending.turnId);
-  if (!campaign || !turn) {
-    return null;
-  }
-  // A to-hit roll still parked when the turn moved on (the lead skipped it,
-  // the order was edited) must not land on a later turn as though nothing
-  // had happened: the player declared it on a turn that is over.
-  const fight = getActiveEncounter(pending.campaignId);
-  if (fight?.orderReady) {
-    const current = fight.order[fight.turnIndex];
-    if (!current || current.kind !== "pc" || current.characterId !== pending.characterId) {
-      return `${context.attacker}'s ${context.weapon} attack was still unrolled when their turn ended, so it does not land. No damage roll happens; narrate the moment passing.`;
-    }
-  }
-  const judged = adjudicateHit(roll.total, roll.breakdown.crit, context.targetAc, {
-    natural: roll.breakdown.natural,
-    critRange: context.critRange,
-  });
-  // Parry: the creature's reaction lifts its AC against a melee hit (enemy-reactions.ts).
-  const parryFoe = fight && context.targetEnemyId ? getFoe(context.targetEnemyId) : null;
-  const parry = judged.hit && !judged.crit && fight && parryFoe && (context as ParkedAttack).melee
-    ? tryParry({ encounter: fight, enemy: parryFoe, total: roll.total, natural20: false, ac: context.targetAc, melee: true, attackerUnseen: false })
-    : null;
-  const adjudicated = parry ? { ...judged, hit: false, crit: false } : judged;
-  const extras = (context as ParkedAttack).extras;
-  // Foe Slayer turns a near miss into a hit, and a declared Stroke of Luck
-  // any miss (src/lib/dm/attack-features.ts).
-  const rescued = adjudicated.hit
-    ? null
-    : rescueMiss({
-        total: roll.total,
-        ac: context.targetAc,
-        natural1: roll.breakdown.crit === "nat1",
-        foeSlayer: extras?.foeSlayer ?? 0,
-        strokeOfLuck: extras?.strokeOfLuck === true,
-      });
-  const rescueNote =
-    rescued === "foe slayer"
-      ? claimParkedFoeSlayer(pending.campaignId) && `Foe Slayer: +${extras?.foeSlayer} turns the miss into a hit`
-      : rescued === "stroke of luck" && spendFeatureUse(campaign, pending.characterId ?? "", STROKE_OF_LUCK, "Stroke of Luck")
-        ? "Stroke of Luck: the miss becomes a hit"
-        : null;
-  const hit = adjudicated.hit || Boolean(rescueNote);
-  const crit = adjudicated.crit || (hit && context.autoCrit === true);
-  if (!hit) {
-    return `${context.attacker}'s ${context.weapon} attack rolled ${roll.total} vs AC ${context.targetAc}: MISS${
-      roll.breakdown.crit === "nat1" ? " (natural 1)" : ""
-    }${parry ? ` (${parry.note})` : ""}. No damage roll happens; narrate the miss.`;
-  }
-  // Verify the target still stands before asking for damage dice (the lead
-  // may have force-ended the encounter while the roll sat parked).
   const encounter = getActiveEncounter(pending.campaignId);
-  const enemy = encounter ? resolveTargetFoe(pending.campaignId, encounter, context.targetEnemyId) : null;
-  if (!enemy || enemy.status !== "alive") {
-    return `${context.attacker}'s ${context.weapon} attack rolled ${roll.total} vs AC ${context.targetAc}: HIT, but the target is already gone; narrate around it.`;
+  if (!stored || !campaign || !turn || !encounter || !pending.characterId) {
+    return null;
   }
   const sheets = listSheets(pending.campaignId);
   const sheet = sheets.find((entry) => entry.id === pending.characterId);
-  // The hit uses up the charges waiting for it (the smites), and an attack
-  // spell's rider lands on it (spell-attack-riders.ts).
-  const parked = context as ParkedAttack;
-  if (sheet && parked.hitSpent?.length) {
-    clearHitSpent(campaign, sheet.id, parked.hitSpent);
+  const enemy = resolveTargetFoe(pending.campaignId, encounter, stored.targetEnemyId);
+  if (!sheet || !enemy) {
+    return null;
   }
-  // Sneak Attack and the other once-a-turn riders are spent by the hit.
-  if (encounter?.turnBudget && budgetApplies(encounter.turnBudget, pending.characterId ?? "", encounter.round)) {
-    claimHitRiders(encounter, encounter.turnBudget, parked.hitClaims);
-  }
-  const spellRider = spellAttackRider(parked.spell);
-  const spellLine = spellRider && sheet ? applySpellHitCondition(campaign, spellRider, enemy.id, sheet.id) : null;
-  // Authored subclass features on a hit (a guardian's mark, Order's Wrath): authored-hooks.ts.
-  const authoredLines = sheet && encounter ? authoredOnHit(campaign, { encounter, sheet, enemy, weapon: !parked.spell, weaponName: context.weapon, dead: false }) : [];
-  // The player's own d20 said hit: now the smite slot and the maneuver's
-  // die are spent, and their dice join the damage the player rolls.
-  const onHit = (context as ParkedAttack).onHit;
-  let damage = context.damageExpression;
-  let critDamage = context.critDamageExpression;
-  const spentNotes: string[] = [...authoredLines];
-  if (onHit) {
-    const paid = spendOnHit(
-      campaign,
-      turn.id,
-      onHit,
-      sheets,
-      new Map(sheets.map((entry) => [entry.id, entry])),
-    );
-    spentNotes.push(...paid.notes);
-    if (paid.stunPaid && onHit.stun) {
-      spentNotes.push(stunningStrikeSave(campaign, enemy.encounterId, enemy.id, pending.characterId ?? "", onHit.stun.dc));
-    }
-    if (paid.suffix) {
-      damage = `${onHit.baseDamage}${paid.suffix}`;
-      critDamage = critDamageExpression(damage, onHit.critExtraDice, {
-        powerfulCritical: campaign.gameSettings.variantRules.powerfulCritical,
-        multiplyNumeric: campaign.gameSettings.variantRules.criticalDamageMods,
-      });
-    }
-  }
-  // A natural 20's magic weapon dice, and Foe Slayer's bonus on a hit it
-  // did not have to rescue.
-  const parkedGear = (context as ParkedAttack).critGear;
-  if (roll.breakdown.crit === "nat20" && parkedGear?.suffix) {
-    damage = `${damage}${parkedGear.suffix}`;
-    critDamage = critDamageExpression(damage, context.critExtraDice ?? 0, {
-      powerfulCritical: campaign.gameSettings.variantRules.powerfulCritical,
-      multiplyNumeric: campaign.gameSettings.variantRules.criticalDamageMods,
-    });
-    spentNotes.push(...parkedGear.notes);
-  }
-  if (adjudicated.hit && (extras?.foeSlayer ?? 0) > 0 && claimParkedFoeSlayer(pending.campaignId)) {
-    damage = `${damage}+${extras?.foeSlayer}`;
-    critDamage = `${critDamage}+${extras?.foeSlayer}`;
-    spentNotes.push(`Foe Slayer: +${extras?.foeSlayer} damage`);
-  }
-  if (rescueNote) {
-    spentNotes.push(rescueNote);
-  }
-  // What the hit carries past its damage (src/lib/dm/attack-onhit.ts).
-  if (extras?.poison && sheet) {
-    spentNotes.push(poisonOnHit(campaign, sheet.id, enemy.id) ?? "");
-  }
-  if (extras?.tempHp && sheet) {
-    spentNotes.push(gainTempHp(campaign, sheet.id, extras.tempHp.amount, extras.tempHp.feature));
-  }
-  if (extras?.openHand && sheet) {
-    spentNotes.push(openHandOnHit(campaign, sheet.id, enemy.id, extras.openHand.choice, extras.openHand.dc));
-  }
-  if (extras?.hurl && sheet && spendFeatureUse(campaign, sheet.id, HURL_THROUGH_HELL, "Hurl Through Hell")) {
-    spentNotes.push(hurlThroughHell(campaign, sheet.id, enemy.id));
-  }
-  // A creature's natural attack: its save, poison, condition or grapple.
-  if (extras?.creature && sheet) {
-    spentNotes.push(...landNaturalOnHit(campaign, {
-      turn,
-      attacker: { kind: "sheet", sheetId: sheet.id, name: sheet.name },
-      holderId: sheet.id,
-      attack: context.weapon,
-      enemyId: enemy.id,
-      onHit: extras.creature,
-    }));
-  }
-  const expression = crit ? critDamage : damage;
-  // A smite the hit paid for rides as radiant, as on the digital path.
-  const smiteDice = onHit?.smite ? `${onHit.smite.dice}d8` : null;
-  const damageRiders = [
-    ...(context.riders ?? []),
-    ...(roll.breakdown.crit === "nat20" ? (parkedGear?.typed ?? []) : []),
-    ...(smiteDice && damage.includes(`+${smiteDice}`) ? [{ dice: smiteDice, type: "radiant" }] : []),
-  ];
+  const record: AttackRecord = stored.attackerId
+    ? stored
+    : { ...stored, attackerId: sheet.id, round: stored.blowRound ?? encounter.round };
+  return { scene: { campaign, turn, sheet, enemy, sheets, sheetsById: new Map(sheets.map((entry) => [entry.id, entry])) }, record };
+}
+
+// Parks the damage roll a hit or a graze asks for, with the record it lands by.
+function parkDamage(pending: PendingRoll, scene: SwingScene, record: AttackRecord, ask: DamageAsk, toHit: StoredRoll) {
+  const attack: AttackRecord = { ...record, damage: ask, toHitRollId: toHit.id, riders: ask.riders, crit: ask.crit, ...(ask.half ? { halfOnMiss: true } : {}) };
+  // The card shows the roll's reason under its title, so the feats' steps go
+  // there for a player with dice in hand. A held roll is thrown by the server
+  // and has no dice to reroll.
+  const { dicePolicy, member } = dicePreferencesOf(pending.campaignId, pending.userId);
+  const steps = parkReasonFor(dicePolicy, member) === "real_dice" ? damageDiceSteps(ask) : "";
+  const reason = `${record.weapon} ${ask.half ? "half damage" : "damage"} against ${scene.enemy.displayName}`;
   const damagePending = createPendingRoll({
     campaignId: pending.campaignId,
     turnId: pending.turnId,
@@ -302,28 +154,131 @@ export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): 
     userId: pending.userId,
     characterId: pending.characterId,
     kind: "damage",
-    detail: rollAgainst(context.weapon, enemy.displayName),
-    expression,
+    detail: rollAgainst(ask.half ? `${record.weapon} (half on a miss)` : record.weapon, scene.enemy.displayName),
+    expression: ask.expression,
     advantage: "none",
     dc: null,
-    reason: `${context.weapon} damage against ${enemy.displayName}`,
-    targetEnemyId: enemy.id,
-    // Carried so the damage stage keeps the types, the magical flag and the
-    // critical for resistance math.
-    attack: {
-      ...context,
-      ...(damageRiders.length ? { riders: damageRiders } : {}),
-      ...(crit ? { crit: true } : {}),
-    },
+    reason: steps ? `${reason}. ${steps}` : reason,
+    targetEnemyId: scene.enemy.id,
+    attack,
   });
-  publishPersisted(pending.campaignId, "roll_pending", {
-    pendingRoll: publicPendingRoll(damagePending),
+  publishPersisted(pending.campaignId, "roll_pending", { pendingRoll: publicPendingRoll(damagePending) });
+}
+
+// Called from the pending-rolls submit route when a parked to-hit roll lands.
+// Returns the combat note the resumed turn surfaces to the model; a hit (or a
+// spell's graze) parks the damage roll, so the turn waits for those dice too.
+export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): string | null {
+  const stored = pending.attack as AttackRecord | null;
+  if (!stored) {
+    return null;
+  }
+  // A to-hit roll still parked when the turn moved on (the lead skipped it,
+  // the order was edited) must not land on a later turn as though nothing
+  // had happened: the player declared it on a turn that is over.
+  if (attackTurnOver(pending.campaignId, stored, pending.characterId)) {
+    return `${stored.attacker}'s ${stored.weapon} attack was still ${stored.serverDice ? "waiting on its player's choice" : "unrolled"} when their turn ended, so it does not land. No damage roll happens; narrate the moment passing.`;
+  }
+  const found = sceneOf(pending);
+  if (!found) {
+    return `${stored.attacker}'s ${stored.weapon} attack rolled ${roll.total}, but the target is already gone; narrate around it.`;
+  }
+  const { scene, record } = found;
+  const notes: string[] = [];
+  const judged = judgeSwing(scene, record, roll.breakdown, notes);
+  const rolled = `${record.attacker}'s ${record.weapon} attack rolled ${roll.total} vs AC ${judged.targetAc}`;
+  // What the engine said of the attack before the roll, as the server's dice
+  // answer says it (conditionEffects).
+  notes.unshift(...(record.notes ?? []));
+  if (!judged.hit) {
+    const { graze } = missSwing(scene, record, judged, roll.breakdown, roll.visibility, notes);
+    const said = notes.length ? ` ${notes.join("; ")}.` : "";
+    if (graze && (record.serverDice || graze.noDice || noDiceIn(graze.expression))) {
+      const out = serverBlow(scene, record, graze, roll.breakdown, roll.visibility, rollAgainst(`${record.weapon} (half on a miss)`, scene.enemy.displayName), []);
+      return `${rolled}: MISS.${said} The spell still deals half its damage. ${blowSentences(scene, graze, out, []).join(" ")}`;
+    }
+    if (graze) {
+      parkDamage(pending, scene, record, graze, roll);
+      return `${rolled}: MISS.${said} The spell still deals half its damage: ${record.attacker} now rolls damage (${graze.expression}), and the server will apply half of it to ${scene.enemy.displayName} automatically.`;
+    }
+    return `${rolled}: MISS${judged.natural1 ? " (natural 1)" : ""}.${said} No damage roll happens; narrate the miss.`;
+  }
+  if (scene.enemy.status !== "alive") {
+    return `${rolled}: HIT, but the target is already gone; narrate around it.`;
+  }
+  const prepared = hitSwing(scene, record, judged, roll.breakdown, roll.visibility, notes);
+  const said = notes.length ? ` ${notes.join("; ")}.` : "";
+  if ("done" in prepared) {
+    return `${rolled}: HIT.${said} ${String(prepared.done.note ?? "")}`.trim();
+  }
+  const { ask } = prepared;
+  const critical = ask.crit ? (ask.stunShot ? " (CRITICAL: the target is stunned instead of the dice doubling)" : " (CRITICAL: damage dice are doubled)") : "";
+  if (record.serverDice || ask.noDice || noDiceIn(ask.expression)) {
+    // The server threw the d20, so it throws the damage too, as its own
+    // answer would have: the player decided only what to do with the d20.
+    const blowNotes: string[] = [];
+    const out = serverBlow(scene, record, ask, roll.breakdown, roll.visibility, pending.detail, blowNotes);
+    return `${rolled}: HIT${critical}.${said} ${blowSentences(scene, ask, out, blowNotes).join(" ")}`.trim();
+  }
+  parkDamage(pending, scene, record, ask, roll);
+  return `${rolled}: HIT${critical}.${said} ${record.attacker} now rolls damage (${ask.expression})${damageDiceNote(ask)}; the server will apply it to ${scene.enemy.displayName} automatically.`;
+}
+
+// Called from the pending-rolls submit route when the player's damage roll
+// for a parked attack lands: the blow lands as the server's dice land it.
+export function resolvePendingPcDamage(pending: PendingRoll, roll: StoredRoll): string | null {
+  const stored = pending.attack as AttackRecord | null;
+  const ask = stored?.damage;
+  // A damage roll parked by an older build resolves the way it was parked.
+  if (!stored || !ask) {
+    return applyPendingDamageRoll(pending, roll);
+  }
+  const found = sceneOf(pending);
+  if (!found) {
+    return `${stored.attacker}'s target is no longer in the fight; the damage was NOT applied. Narrate around it.`;
+  }
+  const { scene, record } = found;
+  const toHit = record.toHitRollId ? (getRoll(record.toHitRollId)?.breakdown ?? null) : null;
+  const notes: string[] = [];
+  const out = landSwingBlow(scene, record, ask, roll, toHit, pending.visibility, notes);
+  if ("error" in out && typeof out.warning !== "string") {
+    return null;
+  }
+  return blowSentences(scene, ask, out, notes, roll.total).join(" ");
+}
+
+// What a landed blow did, in the words the resumed turn gives the model.
+// `total`: the player's damage roll, said beside the half of it that landed.
+function blowSentences(scene: SwingScene, ask: DamageAsk, out: Record<string, unknown>, notes: string[], total?: number): string[] {
+  if (typeof out.warning === "string") {
+    return [out.warning];
+  }
+  const byType = Array.isArray(out.damageByType) ? ` (${(out.damageByType as string[]).join(", ")})` : "";
+  const dealt = Number(out.damage ?? 0);
+  // A blow declared nonlethal leaves the creature at 0 and stable, as the
+  // server's dice say of it (knockout.ts): "now dead" told the GM otherwise
+  // (finding L820-knockout-note-says-dead).
+  const after = getFoe(scene.enemy.id);
+  const now = after && isKnockedOut(after) ? "knocked out: unconscious and stable" : out.dead ? "SLAIN" : String(out.health ?? "unharmed");
+  const parts = [
+    ask.half
+      ? `The server already applied half ${total === undefined ? "the" : `of this ${total}`} damage, ${dealt}${byType}, to ${scene.enemy.displayName} (now ${now}).`
+      : `The server already applied this ${dealt} damage${byType} to ${scene.enemy.displayName} (now ${now}).`,
+  ];
+  if (out.encounterOver) {
+    parts.push(`The encounter ended: ${String(out.outcome)}. XP was awarded automatically.`);
+  }
+  parts.push(...notes.map((note) => `${note}.`), ...outcomeLines(out));
+  parts.push(`Do NOT call apply_damage for this ${ask.half ? "miss" : "hit"}; narrate from this state.`);
+  return parts;
+}
+
+// What the blow left, said in the order the server's dice answer says it.
+function outcomeLines(out: Record<string, unknown>): string[] {
+  const keys = ["maneuver", "stunningStrike", "tempHp", "poison", "onHit", "openHand", "hurlThroughHell", "darkOnesBlessing", "subclassFeatures", "spellEffect", "mote"];
+  return keys.flatMap((key) => {
+    const value = out[key];
+    const lines = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+    return lines.filter((line): line is string => typeof line === "string" && line.length > 0).map((line) => (/[.!?]$/.test(line) ? line : `${line}.`));
   });
-  return `${context.attacker}'s ${context.weapon} attack rolled ${roll.total} vs AC ${context.targetAc}: HIT${
-    crit ? " (CRITICAL: damage dice are doubled)" : ""
-  }.${spentNotes.length ? ` ${spentNotes.join("; ")}.` : ""}${spellLine ? ` ${spellLine}.` : ""} ${context.attacker} now rolls damage (${expression})${
-    context.rerollBelow
-      ? `, rerolling any die of ${context.rerollBelow} or less once for Great Weapon Fighting`
-      : ""
-  }${context.savageAttacker ? ", rolling the weapon's dice a second time and keeping the better total (Savage Attacker)" : ""}; the server will apply it to ${enemy.displayName} automatically.`;
 }
