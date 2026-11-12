@@ -2542,6 +2542,15 @@ const FLASH_TITLE = "Flash of Insight";
 const flashTables = {};
 const TOUCH_TITLE = "Deathly Swing";
 const touchTables = {};
+// A fighter whose real d20 is never entered: the lead skips the turn and the
+// card leaves the screen with it (scenario after-roll-attack).
+const SKIPPED_TITLE = "Skipped Swing";
+const skippedTables = {};
+// A player's hit with the lead's Graviturgy wizard beside them (Violent
+// Attraction): scenario after-roll-helpers. Restore Balance is used before
+// the roll (issue #908), so it has no lane on the after-the-roll card.
+const ATTRACTION_TITLE = "Heavy Swing";
+const attractionTables = {};
 {
   const { invokeEngine } = await import("../../src/lib/dm/invoke.ts");
   const maps = await import("../../src/lib/db/battle-maps.ts");
@@ -2572,10 +2581,17 @@ const touchTables = {};
       features: [{ name: "Flash of Genius", source: "choice" }],
       resources: { art_flash_of_genius: { max: 3, used: 0 } },
     }],
+    [SKIPPED_TITLE, skippedTables, [], {}],
     [TOUCH_TITLE, touchTables, [], {
       class: "cleric",
       features: [{ name: "Channel Divinity: Touch of Death", source: "choice" }],
       resources: { channel_divinity: { max: 1, used: 0 } },
+    }],
+    [ATTRACTION_TITLE, attractionTables, [], {
+      class: "wizard",
+      otherRolls: true,
+      features: [{ name: "Violent Attraction", source: "choice" }],
+      resources: { sub_violent_attraction: { max: 3, used: 0 } },
     }],
   ]) for (const viewport of ["desktop", "phone"]) {
     const table = campaigns.createCampaign(player.id, {
@@ -2598,11 +2614,14 @@ const touchTables = {};
       3,
       heroInput({ name: "Tamsin Reed", class: patch.class ?? "fighter", level: 3, feats, equipment: [{ name: "Longsword", qty: 1, equipped: true }] }),
     );
-    const { class: _heroClass, otherRolls, ...heroPatch } = patch;
+    const { class: _heroClass, otherRolls, rollerPatch, ...heroPatch } = patch;
     sheets.patchSheet(hero.id, heroPatch);
     const roller = otherRolls
       ? sheets.createSheet(table.id, player.id, 3, heroInput({ name: "Bren Ash", class: "fighter", level: 3, feats: [], equipment: [{ name: "Longsword", qty: 1, equipped: true }] }))
       : hero;
+    if (rollerPatch) {
+      sheets.patchSheet(roller.id, rollerPatch);
+    }
     const started = await invokeEngine(campaigns.getCampaignById(table.id), { kind: "human", userId: player.id }, {
       name: "start_encounter",
       args: { enemies: [{ monster: "goblin", count: 1 }] },
@@ -2694,6 +2713,32 @@ const watchTables = {};
     encounterRows.saveEncounter({ ...encounter, orderReady: true, round: Math.max(1, encounter.round), legendary: { ...encounter.legendary, due: [] } });
     watchTables[viewport] = { id: table.id, hero: hero.id };
   }
+}
+
+// Out of a fight, the lead's Circle of Stars druid holds Weal (the ruling on
+// issue #908): the Watch toggle stands for her at a table the AI GM plays,
+// and her own check waits before the throw for the omen's d6 (scenario
+// before-roll).
+const STAR_TITLE = "Star Watch";
+const starTables = {};
+for (const viewport of ["desktop", "phone"]) {
+  const table = campaigns.createCampaign(player.id, {
+    title: `${STAR_TITLE} (${viewport})`,
+    description: "A druid who reads the stars.",
+    theme: "high-fantasy",
+    maxPlayers: 6,
+    startingLevel: 6,
+    difficulty: "normal",
+    gameSettings: { ttsEnabled: false, dmMode: "steered" },
+  });
+  const seated = campaigns.joinByInviteCode(world.owner.id, campaigns.getCampaignById(table.id).inviteCode);
+  if ("error" in seated) {
+    throw new Error(`could not seat the lead at the star watch: ${seated.error}`);
+  }
+  campaigns.setCampaignStatus(table.id, "active");
+  const hero = sheets.createSheet(table.id, world.owner.id, 6, heroInput({ name: "Vela Stars", class: "druid", subclass: "Circle of Stars", level: 6 }));
+  sheets.patchSheet(hero.id, { resources: { ...hero.resources, sub_cosmic_omen: { max: 3, used: 0 } }, omen: "weal" });
+  starTables[viewport] = { id: table.id, hero: hero.id };
 }
 
 // A pointer move held for a watch stop (src/lib/dm/turn-hold.ts): the lead's
@@ -2885,6 +2930,63 @@ const damageStepTables = {};
   }
 }
 
+// Healing dice on real dice (issue 902): a table the player runs, at
+// real_allowed, where the lead's fighter is hurt and rolls physical dice. The
+// GM's seat plays her Second Wind, and the d10 is hers to roll.
+const HEALING_DICE_TITLE = "Infirmary Table";
+const healingDiceTables = {};
+for (const viewport of ["desktop", "phone"]) {
+  const table = campaigns.createCampaign(player.id, {
+    title: `${HEALING_DICE_TITLE} (${viewport})`,
+    description: "A long road and a short breath.",
+    theme: "high-fantasy",
+    maxPlayers: 6,
+    startingLevel: 3,
+    difficulty: "normal",
+    gameSettings: { ttsEnabled: false, dmMode: "human", dicePolicy: "real_allowed" },
+  });
+  const seated = campaigns.joinByInviteCode(world.owner.id, campaigns.getCampaignById(table.id).inviteCode);
+  if ("error" in seated) {
+    throw new Error(`could not seat the lead at the infirmary table: ${seated.error}`);
+  }
+  campaigns.setCampaignStatus(table.id, "active");
+  const hero = sheets.createSheet(table.id, world.owner.id, 3, heroInput({ name: "Maren Vost", class: "fighter", level: 3, maxHp: 28, abilities: { str: 16, con: 14 } }));
+  sheets.patchSheet(hero.id, { currentHp: 6 });
+  campaigns.setMemberRealDice(table.id, world.owner.id, true);
+  healingDiceTables[viewport] = { id: table.id, hero: hero.id };
+}
+
+// Hit dice on real dice (issue 902): the same kind of table just after a
+// short rest, with the lead's hurt fighter still choosing her hit dice and a
+// bard in the party, so the first die she spends carries the song's d6.
+const HIT_DICE_TITLE = "Rest Stop Table";
+const hitDiceTables = {};
+{
+  const { openShortRestWindow } = await import("../../src/lib/db/clock.ts");
+  for (const viewport of ["desktop", "phone"]) {
+    const table = campaigns.createCampaign(player.id, {
+      title: `${HIT_DICE_TITLE} (${viewport})`,
+      description: "An hour by the road, and a song.",
+      theme: "high-fantasy",
+      maxPlayers: 6,
+      startingLevel: 3,
+      difficulty: "normal",
+      gameSettings: { ttsEnabled: false, dmMode: "human", dicePolicy: "real_allowed" },
+    });
+    const seated = campaigns.joinByInviteCode(world.owner.id, campaigns.getCampaignById(table.id).inviteCode);
+    if ("error" in seated) {
+      throw new Error(`could not seat the lead at the rest stop table: ${seated.error}`);
+    }
+    campaigns.setCampaignStatus(table.id, "active");
+    const hero = sheets.createSheet(table.id, world.owner.id, 3, heroInput({ name: "Maren Vost", class: "fighter", level: 3, maxHp: 28, abilities: { str: 16, con: 14 } }));
+    sheets.patchSheet(hero.id, { currentHp: 6 });
+    sheets.createSheet(table.id, player.id, 2, heroInput({ name: "Lira Quill", class: "bard", level: 2, maxHp: 15, abilities: { cha: 16 } }));
+    campaigns.setMemberRealDice(table.id, world.owner.id, true);
+    openShortRestWindow(table.id, [hero.id]);
+    hitDiceTables[viewport] = { id: table.id, hero: hero.id };
+  }
+}
+
 // Issue 530: a running campaign the lead steers, one per viewport, to step
 // out of play to its prep and back without ending anything.
 const PREP_RETURN_TITLE = "Waystation Table";
@@ -2953,6 +3055,44 @@ for (const viewport of ["desktop", "phone"]) {
     content: "Previously: You reached the mill at dusk, found the miller's daughter gone, and followed her lantern's tracks to the edge of the fen.",
   });
   recapTables[viewport] = table.id;
+}
+
+// Issue 917: a line a short tag splits ("...," she says. "...") was drawn
+// as two cards for one speaker with the tag stranded between. A passage
+// with both kinds of split and a reply from someone else, its lines stored
+// as the claims reader stores them, one table per viewport.
+const SPLIT_LINE_TITLE = "Split Line Table";
+const splitLineTables = {};
+for (const viewport of ["desktop", "phone"]) {
+  const table = campaigns.createCampaign(world.owner.id, {
+    title: `${SPLIT_LINE_TITLE} (${viewport})`,
+    description: "A table at the crossroads.",
+    theme: "high-fantasy",
+    maxPlayers: 6,
+    startingLevel: 3,
+    difficulty: "normal",
+    gameSettings: { ttsEnabled: false },
+  });
+  campaigns.setCampaignStatus(table.id, "active");
+  sheets.createSheet(table.id, world.owner.id, 3, heroInput({ name: "Corra Venn", class: "fighter", level: 3 }));
+  const marla = { kind: "npc", id: "npc-split-marla", name: "Marla" };
+  const pike = { kind: "npc", id: "npc-split-pike", name: "Old Pike" };
+  messages.insertCampaignMessage({
+    campaignId: table.id,
+    seq: campaigns.allocateSeq(table.id),
+    authorType: "dm",
+    speech: [
+      { line: "We ride at dawn,", speaker: marla },
+      { line: "and not a moment later.", speaker: marla },
+      { line: "Aye,", speaker: pike },
+      { line: "Two roads,", speaker: marla },
+      { line: "Pick one.", speaker: marla },
+    ],
+    content:
+      'Marla rolls the map flat on the crate. "We ride at dawn," said Marla, "and not a moment later." "Aye," says Old Pike, and spits into the fire.' +
+      '\n\nShe taps the fork in the road. "Two roads," she says. "Pick one."',
+  });
+  splitLineTables[viewport] = table.id;
 }
 
 // Issue 539: a table outside a fight, narration on, with two passages to
@@ -3830,14 +3970,20 @@ const ids = {
   allyTables,
   flashTables,
   touchTables,
+  skippedTables,
+  attractionTables,
   portentTables,
   watchTables,
+  starTables,
   heldTurnTables,
   shiftTables,
   chronalWatchTables,
   twoHandsTables,
   damageStepTables,
+  healingDiceTables,
+  hitDiceTables,
   recapTables,
+  splitLineTables,
   prepReturn,
   prepReturnTitle: PREP_RETURN_TITLE,
   chipTables,
@@ -3956,14 +4102,20 @@ const ids = {
     ...Object.fromEntries(Object.entries(allyTables).map(([viewport, table]) => [table.id, `${ALLY_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(flashTables).map(([viewport, table]) => [table.id, `${FLASH_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(touchTables).map(([viewport, table]) => [table.id, `${TOUCH_TITLE} (${viewport})`])),
+    ...Object.fromEntries(Object.entries(skippedTables).map(([viewport, table]) => [table.id, `${SKIPPED_TITLE} (${viewport})`])),
+    ...Object.fromEntries(Object.entries(attractionTables).map(([viewport, table]) => [table.id, `${ATTRACTION_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(portentTables).map(([viewport, table]) => [table.id, `${PORTENT_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(watchTables).map(([viewport, table]) => [table.id, `${WATCH_TITLE} (${viewport})`])),
+    ...Object.fromEntries(Object.entries(starTables).map(([viewport, table]) => [table.id, `${STAR_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(heldTurnTables).map(([viewport, table]) => [table.id, `${HELD_TURN_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(shiftTables).map(([viewport, table]) => [table.id, `${SHIFT_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(chronalWatchTables).map(([viewport, table]) => [table.id, `${CHRONAL_WATCH_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(twoHandsTables).map(([viewport, table]) => [table.id, `${TWO_HANDS_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(damageStepTables).map(([viewport, table]) => [table.id, `${DAMAGE_STEPS_TITLE} (${viewport})`])),
+    ...Object.fromEntries(Object.entries(healingDiceTables).map(([viewport, table]) => [table.id, `${HEALING_DICE_TITLE} (${viewport})`])),
+    ...Object.fromEntries(Object.entries(hitDiceTables).map(([viewport, table]) => [table.id, `${HIT_DICE_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(recapTables).map(([viewport, id]) => [id, `${RECAP_TITLE} (${viewport})`])),
+    ...Object.fromEntries(Object.entries(splitLineTables).map(([viewport, id]) => [id, `${SPLIT_LINE_TITLE} (${viewport})`])),
     ...Object.fromEntries(Object.entries(prepReturn).map(([viewport, id]) => [id, `${PREP_RETURN_TITLE} (${viewport})`])),
     [world.campaignId]: TITLE,
     [lobby.id]: LOBBY_TITLE,

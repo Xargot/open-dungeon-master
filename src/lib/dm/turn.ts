@@ -1,4 +1,6 @@
+import { armsWatchRow } from "@/lib/dm/after-roll-table";
 import { emptyTurnLine, type EmptyTurnPlayer } from "@/lib/dm/empty-turn";
+import { noteToolCallHealth } from "@/lib/tool-call-health";
 import { foesAboutBlock } from "@/lib/dm/foe-return";
 import { legendaryLairLines } from "@/lib/dm/legendary-tools";
 import { defaultSide } from "@/lib/dm/combat-sides-logic";
@@ -24,6 +26,7 @@ import {
 import {
   createDmTurn,
   failStaleRunningTurns,
+  getAwaitingTurn,
   getDmTurn,
   getLatestDmTurnId,
   listPendingForTurn,
@@ -35,6 +38,7 @@ import {
   type WatchStop,
   type DmTurn,
   watchChoiceOf,
+
 } from "@/lib/db/dm-turns";
 import { haltDmTurn, haltUnbuiltTurn } from "@/lib/dm/turn-halt";
 import { assertJobLive, bindJobTurn, DmJobStopped, jobAbandoned, runInTurnScope, setJobStage } from "@/lib/dm/job-control";
@@ -70,7 +74,7 @@ import { listQuests } from "@/lib/db/quests";
 import { SMALL_MODEL_REASONING_CHARS, type ModelTuning } from "@/lib/dm/model-tuning-logic";
 import { PC_ATTACK_PARKED } from "@/lib/dm/pc-attack";
 import { doneParts, listedCalls, listRefusal, oneCasting, PART_LISTS, partsResult, type OneCasting } from "@/lib/dm/action-parts-logic";
-import { AWAITING_ROLL, fillQueuedParts } from "@/lib/dm/pc-attack-parts";
+import { AWAITING_ROLL, fillQueuedParts, queuedResultsFor } from "@/lib/dm/pc-attack-parts";
 import type { AttackRecord } from "@/lib/dm/attack-record";
 import { doorArgs, strictBooleanArgs, type DoorField } from "@/lib/dm/arg-coerce";
 import { sideAllyInList } from "@/lib/dm/cast-buff-allies";
@@ -78,7 +82,10 @@ import { insertCampaignMessage, listMessagesPage, listRecentMessages, markCardRe
 import { heldNarrationSeq, narrationShown, takeNarrationSeq, takeNarrationSlot } from "@/lib/dm/narration-slot";
 import { getRoll, listRecentRolls, type StoredRoll } from "@/lib/db/rolls";
 import { getSheetById, listSheets } from "@/lib/db/sheets";
-import { holdBehindStop, parkForWatch, runWithForetold } from "@/lib/dm/foresight";
+import { forcerOfCall, holdBehindStop, parkForWatch, runWithForetold } from "@/lib/dm/foresight";
+import { beforeChoiceOf } from "@/lib/dm/foresight-before";
+import { slayersCounterAtStop } from "@/lib/dm/slayers-counter";
+import { layCloudTurn } from "@/lib/dm/cloud-rune";
 import { runWithShift } from "@/lib/dm/chronal-shift";
 import { adoptTurnAudit } from "@/lib/db/sheet-audit";
 import { describeConditionDuration } from "@/lib/dm/condition-logic";
@@ -137,9 +144,11 @@ import type { SpokenLine } from "@/lib/dm/speech";
 import { badArguments, type ToolResult } from "@/lib/dm/tool-errors";
 import { dispatchAdjudication } from "@/lib/dm/invoke-dispatch";
 import { clearWatchAnswered, isHeldPark, markWatchAnswered, runHeld, watchStopOf } from "@/lib/dm/held-call";
+import { backstopTurn, backstopWaiting } from "@/lib/dm/backstop-calls";
+import { resumeBackstop } from "@/lib/dm/backstop-resume";
 import { deedRefusal } from "@/lib/dm/deed-guard";
 import { playsWhole } from "@/lib/dm/legendary-play";
-import { awayCall, gateAiCall } from "@/lib/dm/ai-gate";
+import { awayCall, gateAiCall, healListRolledByServer } from "@/lib/dm/ai-gate";
 import { characterAwaitingPlayer, characterHeld, prepareWordFor } from "@/lib/dm/player-word";
 import { hitIdOf, openHits } from "@/lib/dm/last-hit";
 import { aiPlaysSheet } from "@/lib/dm/companion-command";
@@ -558,6 +567,8 @@ function openHitsForState(campaignId: string, encounter: Encounter, sheets: Char
               hitId: hitIdOf(hit),
               what: hit.source === "fall"
                 ? `a fall, ${damage} damage`
+                : hit.source === "effect"
+                  ? `${damage} ${hit.type} damage from ${hit.attacker.name}`
                 : `${hit.attacker.name}'s ${hit.attack}${landed.length ? `, ${damage} ${hit.type}` : ", a miss"}`,
             };
           }),
@@ -1140,6 +1151,34 @@ export function pendingRollAnswer(pending: PendingRoll, roll: StoredRoll) {
   };
 }
 
+// A parked turn closed with nothing more said: the rolls it waited on have
+// published themselves and applied what they apply.
+function closeUntold(campaignId: string, turn: DmTurn) {
+  if (takeNarrationSeq(campaignId, turn.id) !== null) {
+    // A message posted while the turn waited reserved a place for its
+    // narration, and nothing will fill it; the draft bubble lets it go.
+    publishEphemeral(campaignId, "dm_draft_seq", { seq: null });
+  }
+  turn.status = "done";
+  saveDmTurn(turn);
+  setDmStatus(campaignId, "idle");
+}
+
+// A turn parked on a swing that landed on nothing, once the story has gone
+// on without it (src/lib/dm/open-roll-logic.ts parkedTurnIsStale): closed
+// untold, where resuming it had the GM narrate a lost attack turns later.
+export async function closeStaleDmTurn(campaignId: string, turnId: string) {
+  const turn = getDmTurn(turnId);
+  if (!turn || turn.status !== "awaiting_rolls" || listPendingForTurn(turnId).some((pending) => pending.status === "pending")) {
+    return;
+  }
+  closeUntold(campaignId, turn);
+  // Another turn may still wait on dice of its own.
+  if (getAwaitingTurn(campaignId)) {
+    setDmStatus(campaignId, "awaiting_rolls");
+  }
+}
+
 export async function resumeDmTurn(campaignId: string, turnId: string) {
   const campaign = getCampaignById(campaignId);
   const turn = getDmTurn(turnId);
@@ -1150,20 +1189,19 @@ export async function resumeDmTurn(campaignId: string, turnId: string) {
   if (pendings.some((pending) => pending.status === "pending")) {
     return;
   }
+  // The rolls waited on the enemy-turn backstop, after the narration
+  // (backstop-calls.ts): the pass goes on, and no model is asked again.
+  if (backstopTurn(pendings)) {
+    await resumeBackstop(campaignId, turnId);
+    return;
+  }
   // A person holds the seat now: the table switched from the AI while this
   // turn waited on a roll, or it was a pass delegated on the person's behalf.
   // The rolls already published and applied what they apply; there is no
   // model to hand them to, so the turn closes as a person's does rather than
   // narrating at a table the AI no longer runs.
   if (personRunsTable(campaign)) {
-    if (takeNarrationSeq(campaignId, turn.id) !== null) {
-      // A message posted while the turn waited reserved a place for its
-      // narration, and nothing will fill it; the draft bubble lets it go.
-      publishEphemeral(campaignId, "dm_draft_seq", { seq: null });
-    }
-    turn.status = "done";
-    saveDmTurn(turn);
-    setDmStatus(campaignId, "idle");
+    closeUntold(campaignId, turn);
     return;
   }
 
@@ -1222,7 +1260,7 @@ export async function resumeDmTurn(campaignId: string, turnId: string) {
       content.attacks[at] = { ...answer, ...(content.attacks[at].spent ? { spent: content.attacks[at].spent } : {}) };
       // The attacks that waited behind this roll, made once it landed.
       if ((pending.attack as AttackRecord | null)?.queue) {
-        fillQueuedParts(content.attacks, at, (pending.attack as AttackRecord).queuedResults);
+        fillQueuedParts(content.attacks, at, queuedResultsFor(pending.attack as AttackRecord));
       }
       waiting.content = JSON.stringify(content);
       continue;
@@ -1322,9 +1360,11 @@ async function runHeldCalls(context: TurnContext, turn: DmTurn, watcherId: strin
     // call's one roll, whichever of its d20s comes first.
     const picked = watchChoiceOf(stop);
     // Every power but Portent's number is armed to answer the roll once it goes wrong.
-    const shifting = Boolean(stop.power) && stop.power !== "portent";
-    const choice = at === 0 && !shifting && stop.face !== null ? { watcherId, face: stop.face, tags: picked ? picked.rolls.map((roll) => roll.tag) : [stop.tag, ...(stop.also ?? [])], line: stop.line } : null;
-    const shift = at === 0 && shifting && stop.shift && picked && stop.power && stop.power !== "portent" ? { wizardId: watcherId, rolls: picked.rolls, power: stop.power } : null;
+    // Slayer's Counter arms nothing: its attack is made before the call (below).
+    const shifting = armsWatchRow(stop.power);
+    // Portent's number, Cosmic Omen or Restore Balance, set on the call's d20 (foresight-before.ts).
+    const choice = at === 0 ? beforeChoiceOf(stop, watcherId) : null;
+    const shift = at === 0 && shifting && stop.shift && picked && armsWatchRow(stop.power) ? { wizardId: watcherId, rolls: picked.rolls, power: stop.power } : null;
     // A call that throws is answered like any refusal: the loop's catch does
     // not reach this far, and the table would wait on it for good.
     let outcome: ToolResult;
@@ -1335,10 +1375,17 @@ async function runHeldCalls(context: TurnContext, turn: DmTurn, watcherId: strin
       if (at === 0) {
         markWatchAnswered(campaignId, toolCall.tape ?? []);
       }
+      // Slayer's Counter is made "before the save": the ranger's attack, then
+      // the call that forces it, which reads a hit's mark (slayers-counter.ts).
+      const countered = at === 0 && stop.power === "slayers_counter" && stop.shift ? slayersCounterAtStop(campaign, turn, watcherId, forcerOfCall(toolCall, standing?.id)) : null;
+      // The Cloud Rune's answer, read at the hit the call stopped on (cloud-rune.ts).
+      if (at === 0) {
+        layCloudTurn(watcherId, stop);
+      }
       const ran = await runWithShift(campaignId, shift, () => runWithForetold(campaign, turn.id, choice, () => resolveModelCall(context, turn, toolCall)));
       outcome = ran.result.result;
       portent = ran.result.portent;
-      chronalShift = ran.shift;
+      chronalShift = ran.shift ?? countered;
     } catch (error) {
       console.error(`[dm-turn] a held ${toolCall.name} threw:`, error);
       outcome = { error: `${toolCall.name} failed on the server, so nothing came of it.`, retry: true };
@@ -1783,6 +1830,42 @@ export function modelCallArguments(
   });
 }
 
+// One casting of a healing spell over a list of creatures, as the one call it
+// is: the list whole, each entry read as modelCallArguments reads a call (a
+// creature's name as their id). Null for any other list, which its caller
+// splits into a call for each entry (action-parts-logic.ts listedCalls).
+//
+// Split, the entries shared what the first one paid in memory, and a roll
+// that held one entry ran it again alone, where it paid for the casting a
+// second time: so a caster on physical dice had a list's dice thrown for
+// them (issue 902). Whole, the call is gated, counted and held once, as a
+// pc_attack with several attacks is, and its handler resolves the entries
+// (mutations.ts healList), each creature's roll asked in turn.
+export function oneCastingCall(
+  campaign: Campaign,
+  name: string,
+  rawArguments: string,
+  each: readonly Record<string, unknown>[],
+  sheets: readonly CharacterSheet[],
+): { rawArguments: string } | { refusal: ToolResult } | null {
+  if (!oneCasting(name, each) || !healListRolledByServer(each)) {
+    return null;
+  }
+  const { key } = PART_LISTS[name];
+  const shared = Object.fromEntries(Object.entries(JSON.parse(rawArguments) as Record<string, unknown>).filter(([field]) => field !== key));
+  const entries: Record<string, unknown>[] = [];
+  for (const one of each) {
+    const door = modelCallArguments(campaign, name, JSON.stringify(one), sheets);
+    if ("refusal" in door) {
+      return door;
+    }
+    // What the entry says beside the list's own fields.
+    const read = JSON.parse(door.rawArguments) as Record<string, unknown>;
+    entries.push(Object.fromEntries(Object.entries(read).filter(([field, value]) => JSON.stringify(shared[field]) !== JSON.stringify(value))));
+  }
+  return { rawArguments: JSON.stringify({ ...shared, [key]: entries }) };
+}
+
 // Whether a set of tools takes a call by this name: one it offers, or a
 // retired name whose merged tool it offers (issue #471), which a stored turn
 // or an agent program may still send.
@@ -1988,6 +2071,15 @@ async function runAdvance(context: TurnContext, turn: DmTurn) {
     });
 
     const { message, error, finishReason } = reply;
+    // A call the server answered with its tools taken off is kept on the
+    // turn's trace and shown on the admin text-model panel (tool-call-health.ts).
+    if (!resolvesCard && tools.length && !error) {
+      noteToolCallHealth(Boolean(reply.toolsDropped));
+      if (reply.toolsDropped) {
+        const trace = (turn.contextTrace ??= { limitTokens: 0, promptTokens: 0, blocks: [] });
+        trace.toolsDropped = (trace.toolsDropped ?? 0) + 1;
+      }
+    }
     // The provider's own continuation items (the Responses API's encrypted
     // reasoning), echoed with the assistant turn they belong to.
     const carried = message?.provider_items?.length ? { provider_items: message.provider_items } : {};
@@ -2912,11 +3004,19 @@ async function resolveModelCall(
   // reaches: each entry the one-entry call it always was
   // (src/lib/dm/action-parts-logic.ts listedCalls).
   const each = listedCalls(toolCall.name, toolCall.rawArguments);
-  if (each) {
-    const refused = listRefusal(toolCall.name, each) ?? awayCall(toolCall.name, JSON.parse(toolCall.rawArguments), { campaign, sheetsById });
-    if (refused) {
-      return refused;
-    }
+  const refusedList = each ? (listRefusal(toolCall.name, each) ?? awayCall(toolCall.name, JSON.parse(toolCall.rawArguments), { campaign, sheetsById })) : null;
+  if (refusedList) {
+    return refusedList;
+  }
+  // One casting over several creatures goes on below as the one call it is.
+  const whole = each ? oneCastingCall(campaign, toolCall.name, toolCall.rawArguments, each, sheets) : null;
+  if (whole && "refusal" in whole) {
+    return whole.refusal;
+  }
+  if (whole) {
+    toolCall = { ...toolCall, rawArguments: whole.rawArguments };
+  }
+  if (each && !whole) {
     if (turn.mutationCount >= MUTATION_CAP_PER_TURN) {
       return MUTATION_CAP_REFUSAL;
     }
@@ -4031,6 +4131,10 @@ function finalize(context: TurnContext, turn: DmTurn, failed: string, spoken: re
   // landed, so the server's next-turn note follows it in the transcript.
   // Runs before the hold below so a hold wraps the NEW turn's floor.
   advanceAfterTurn(context.campaign, turn);
+  // A creature the backstop played waits on a watcher or a seat's dice
+  // (backstop-calls.ts): the turn waits with it, and its close goes on once
+  // the answer is in (backstop-resume.ts).
+  const backstopHeld = backstopWaiting(turn.id);
 
   // Held responses: after a successful narration the table is locked for
   // discussion until the lead releases. A spotlight set this turn becomes
@@ -4047,7 +4151,11 @@ function finalize(context: TurnContext, turn: DmTurn, failed: string, spoken: re
   // Wait for the table: the narration opens a new beat, so every seat is told
   // who the DM now waits on. Posts made while this turn wrote count already,
   // and if they are the whole table the next turn wakes at once.
-  if (settleTableWait(campaignId)) {
+  // Not while the backstop waits: the turn that would wake would find this
+  // one still open (resumeBackstop wakes it).
+  if (backstopHeld) {
+    // Woken by resumeBackstop once the pass is done.
+  } else if (settleTableWait(campaignId)) {
     wakeDm(campaignId);
   }
 
@@ -4069,8 +4177,11 @@ function finalize(context: TurnContext, turn: DmTurn, failed: string, spoken: re
     }
   }
 
-  turn.status = "done";
+  turn.status = backstopHeld ? "awaiting_rolls" : "done";
   saveDmTurn(turn);
+  if (backstopHeld) {
+    setDmStatus(campaignId, "awaiting_rolls");
+  }
   toolsSentByTurn.delete(turn.id);
   // A fight begun or ended, or a companion who joined, changes the next
   // turn's first message: the narrator reads it now, while the table reads.

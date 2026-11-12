@@ -30,13 +30,14 @@ import { releaseGrapplesOutOfReach } from "@/lib/dm/grapple";
 import { publishBattleMapUpdate } from "@/lib/dm/map-tools";
 import { healWalk } from "@/lib/dm/heal-walk-logic";
 import { canRegain, healableHp, regainHitPoints } from "@/lib/dm/regain";
-import { rollCard } from "@/lib/dm/roll-card";
+import { diceFor, rollOwnDice } from "@/lib/dm/character-roll";
 import { swallowCoverBetween } from "@/lib/dm/swallow";
 import type { ToolError } from "@/lib/dm/tool-errors";
 import { speedFor } from "@/lib/srd";
 import { resolveFormula } from "@/lib/srd/authored-effects";
 import type { SpendDoes } from "@/lib/srd/authored-effects-types";
 import { isConditionNamed } from "@/lib/srd/feature-names";
+import { textKey } from "@/lib/language/text-logic";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
 import type { SpendContext } from "@/lib/dm/authored-spend-effects";
 
@@ -55,6 +56,7 @@ function walkOf(campaign: Campaign, encounter: Encounter | null, sheet: Characte
   const footprintOf = footprintLookup(enemiesById);
   const traits = pcMoveTraits({
     width: map.width,
+    theme: map.theme, drawnTerrain: map.drawnTerrain,
     tokens,
     mover: token,
     sheet,
@@ -87,23 +89,38 @@ export function healArea(ctx: SpendContext, does: HealArea): ToolError | { resul
   const walks = does.rangeFt === "move";
   const walk = walks ? walkOf(campaign, encounter, sheet, party) : null;
   const rangeFt = typeof does.rangeFt === "number" ? does.rangeFt : effectiveSpeed(sheet.conditions, speedFor(sheet));
-  const targets = walk
+  const inReach = walk
     ? walk.order.map((id) => party.find((entry) => entry.id === id)!)
     : party.filter((entry) => entry.id === sheet.id || walks || !encounter || withinFeet(encounter.id, sheet.id, entry.id, rangeFt));
+  // "Creatures of your choice" (Turn the Tide): the one named, when one is;
+  // every hurt ally in reach healed whoever was named was the bug.
+  const named = does.chosen && ctx.args.targetCharacterId ? textKey(ctx.args.targetCharacterId) : null;
+  const targets = named ? inReach.filter((entry) => entry.id === ctx.args.targetCharacterId || textKey(entry.name) === named) : inReach;
+  if (named && !targets.length) {
+    // Said in words a player reads too (the Hand shows the refusal): "only
+    // nobody are" was the sentence when no one in reach was hurt.
+    const open = inReach.map((entry) => `${entry.name} (${entry.id})`).join(", ");
+    const within = open ? `of the characters it heals, only ${open} ${inReach.length === 1 ? "is" : "are"} within ${rangeFt} feet` : `nobody it heals is within ${rangeFt} feet`;
+    return { error: `${ctx.spend.name} cannot heal ${ctx.args.targetCharacterId}: ${within}. Nothing was spent.`, retry: true };
+  }
   if (!targets.length) {
     const who = does.belowHalf ? "at or under half their hit points" : "hurt";
     const reach = walks ? `${sheet.name} can walk past in ${rangeFt} feet` : `within ${rangeFt} feet${does.othersOnly ? ` of ${sheet.name}` : ""}`;
     return { error: `${ctx.spend.name} heals characters ${who}${does.hears ? " who can hear" : ""} ${reach}, and nobody is. Nothing was spent.`, refused: "rules" };
   }
   const dice = resolveFormula(does.formula, ctx.held.level, ctx.mods);
-  const roll = () => Math.max(1, Number(rollCard(campaign, ctx.turn, sheet.id, "custom", `${ctx.spend.name}: healing`, dice, null).total));
+  // The holder's own dice, whoever they heal (character-roll.ts rollOwnDice):
+  // one roll shared out, or one for each creature, which a seat on physical
+  // dice rolls one after another.
+  const roll = (target?: CharacterSheet) =>
+    Math.max(1, Number(rollOwnDice(campaign, sheet, target ? diceFor(`${ctx.spend.name}: healing`, sheet, target) : `${ctx.spend.name}: healing`, dice, { turn: ctx.turn }).total));
   const shared = does.each ? 0 : roll();
   const healed: string[] = [];
   for (const target of targets) {
     // A total shared out (Clockwork Cavalcade's 100 hit points among the
     // creatures in the cube), not each one's.
     const share = does.divided ? Math.max(1, Math.floor(shared / targets.length)) : shared;
-    const gained = regainHitPoints(campaign, ctx.turnId, target, does.each ? roll() : share, `${ctx.spend.name} (${sheet.name})`);
+    const gained = regainHitPoints(campaign, ctx.turnId, target, does.each ? roll(target) : share, `${ctx.spend.name} (${sheet.name})`);
     const now = getSheetById(target.id) ?? target;
     const hp = healableHp(now, effectiveMaxHp(now));
     healed.push(`${now.name} +${gained} (${hp.current}/${hp.max})`);

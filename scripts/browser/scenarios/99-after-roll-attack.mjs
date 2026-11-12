@@ -7,7 +7,9 @@
 // the die from the keyboard, the swing hits, and the server lands its damage.
 // The rules are held by scripts/test-enforce-after-roll-attacks.mjs; this is
 // what only a page can see: the card's line for an attack, finger-sized,
-// inside the phone's width, by day and by night and in the app shell.
+// inside the phone's width, by day and by night and in the app shell, and
+// the End Turn button waiting for the card, and a card whose dice were
+// never entered leaving with the turn the lead skipped.
 import { request } from "playwright-core";
 import { axeViolations, check, eventually, untilStill } from "../lib.mjs";
 
@@ -68,6 +70,24 @@ const scenario = {
       await t.shot("attack-day");
       await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
 
+      // End Turn with the card open (table report, 2026-11-10): alone at
+      // the table no clock keeps the roll, and the turn used to end under
+      // it. The button now answers with the roll to settle, the card stays,
+      // and the turn is still the fighter's.
+      const endTurn = page.locator(root || "body").getByRole("button", { name: "End turn", exact: true }).locator("visible=true").first();
+      await t.tap(endTurn);
+      const held = page.getByText("is waiting on your choice. Change the roll or keep it, then end the turn.").locator("visible=true").first();
+      await held.waitFor({ state: "visible", timeout: 15_000 });
+      check(await lucky.count(), "the card is still open after End Turn");
+      const order = (await (await gm.get(`${base}/api/campaigns/${table.id}`)).json()).encounter;
+      check(order.order[order.turnIndex]?.id === table.hero, "the turn is still the fighter's");
+      await untilStill(page);
+      await t.shot("end-turn-waits");
+      await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+      await untilStill(page);
+      await t.shot("end-turn-waits-day");
+      await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+
       // From the keyboard: the die goes on. A die too small to reach still
       // leaves Lucky on offer, and the card stays for it; keeping the roll
       // lands it. Either way the card goes, with the die spent.
@@ -86,6 +106,29 @@ const scenario = {
       check(left.every((kind) => kind === "damage") && left.length <= 1, `only a hit's damage roll is left waiting (${left.join(", ")})`);
       const hero = snapshot.sheets.find((sheet) => sheet.id === table.hero);
       check(!(hero?.conditions ?? []).includes("bardic inspiration (d8)"), `the die is spent (${JSON.stringify(hero?.conditions)})`);
+
+      // A swing whose real d20 is never entered: the lead skips the turn, and
+      // the card goes with it, on the open page, by the stream's word. Left
+      // up, it could only land nothing.
+      const skipped = ids.skippedTables[viewport];
+      await t.open(`/campaigns/${skipped.id}`);
+      if (viewport === "phone") {
+        const tab = page.locator(`${root}nav.cine-bottombar`).getByRole("button", { name: "Table", exact: true });
+        if (await tab.count()) await t.tap(tab);
+      }
+      const unrolled = await gm.post(`${base}/api/campaigns/${skipped.id}/dm/invoke`, {
+        data: { name: "pc_attack", args: { characterId: skipped.hero, targetEnemyId: skipped.goblin, weapon: "Longsword" } },
+      });
+      check(unrolled.ok(), `the second swing was made (${unrolled.status()})`);
+      const submit = page.locator(root || "body").getByRole("button", { name: "Submit roll" }).locator("visible=true");
+      await eventually(() => submit.count(), { timeoutMs: 30_000, label: "the dice card for the unrolled swing" });
+      const skip = await gm.post(`${base}/api/campaigns/${skipped.id}/floor`, { data: {} });
+      check(skip.ok(), `the lead skipped the turn (${skip.status()})`);
+      await eventually(async () => !(await submit.count()), { timeoutMs: 15_000, label: "the card gone with the skipped turn" });
+      const after = await (await gm.get(`${base}/api/campaigns/${skipped.id}`)).json();
+      check(!(after.pendingRolls ?? []).some((entry) => entry.kind === "attack"), "no to-hit roll is left waiting");
+      await untilStill(page);
+      await t.shot("skipped-card-gone");
     } finally {
       await gm.dispose();
     }

@@ -5,34 +5,22 @@ import type { CharacterSheet } from "@/lib/schemas/sheet";
 import type { PendingRoll } from "@/app/campaigns/[campaignId]/useCampaignStream";
 import { CheckFrame } from "@/app/campaigns/[campaignId]/SkillCheckCard";
 import { foretoldLeft } from "@/lib/dm/foretold-logic";
-import { holdsFeature } from "@/lib/srd/feature-names";
+import { amountWords, stopPower, WATCH_FEATURES, WATCH_HINTS, watchRow, watchWords, type WatchPower } from "@/lib/dm/after-roll-table";
+import { OMEN_SIDES, OMEN_WORDS, TABLE_WATCH, watchFeatureOf } from "@/lib/dm/before-roll-logic";
 
 // A finger-sized target (40px, the kit's own) with a ring for the keyboard.
 const RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/70";
 const NUMBER = `motion-press inline-flex min-h-10 items-center justify-center rounded-full border border-amber-400/60 px-3 py-1 text-xs font-semibold disabled:opacity-50 ${RING}`;
 const PLAIN = `motion-press inline-flex min-h-10 items-center px-1 text-xs font-medium underline decoration-dotted underline-offset-2 disabled:opacity-50 ${RING}`;
 
-type Power = "portent" | "chronal_shift" | "flash_of_genius" | "favored_by_the_gods";
-const FEATURES: Record<Power, string> = { portent: "Portent", chronal_shift: "Chronal Shift", flash_of_genius: "Flash of Genius", favored_by_the_gods: "Favored by the Gods" };
+type Power = WatchPower;
+const FEATURES = WATCH_FEATURES;
 
-// The feature a character watches with: a diviner's numbers first, then a
-// chronurgist's shift, an artificer's Flash of Genius, a divine soul's
-// Favored by the Gods (src/lib/dm/foresight.ts asks in the same order).
-export function watchFeatureOf(sheet: CharacterSheet): Power | null {
-  if (foretoldLeft(sheet).length > 0) return "portent";
-  if (holdsFeature(sheet, "chronal shift")) return "chronal_shift";
-  if (holdsFeature(sheet, "flash of genius")) return "flash_of_genius";
-  if (holdsFeature(sheet, "favored by the gods")) return "favored_by_the_gods";
-  return null;
-}
+// The feature a character watches with (before-roll-logic.ts).
+export { watchFeatureOf };
 
 // What watching lets the player do, on the button's hint.
-const WATCH_FOR: Record<Power, string> = {
-  portent: "use a foretold number",
-  chronal_shift: "use Chronal Shift on it",
-  flash_of_genius: "add your Intelligence modifier to a save that fails",
-  favored_by_the_gods: "add 2d4 to your save if it fails",
-};
+const WATCH_FOR = WATCH_HINTS;
 
 // The Intelligence modifier Flash of Genius adds, as the sheet's score gives it.
 const intModifier = (sheet: CharacterSheet | undefined) => Math.floor(((sheet?.abilities?.int ?? 10) - 10) / 2);
@@ -117,14 +105,29 @@ export function WatchCard({
   }
 
   const numbers = watcher ? [...new Set(foretoldLeft(watcher))] : [];
+  const row = watchRow(power);
+  // What the row adds, in the button's words: Flash of Genius's modifier,
+  // Favored by the Gods' 2d4, the omen the druid read at their last rest.
+  const omen = power === "cosmic_omen" ? (watcher?.omen ?? null) : null;
+  const amount = omen
+    ? `${OMEN_WORDS[omen]}: ${omen === "weal" ? "add" : "take off"} 1d${OMEN_SIDES}`
+    : row?.amount?.kind === "ability" ? String(intModifier(watcher)) : row ? amountWords(row) : "";
   const choice = asking && pick !== null ? { choice: pick } : {};
   const when = choices[pick ?? 0]?.when ?? "";
+  // The creature a Cloud Rune turns the hit onto, once one is picked: the
+  // button named the first of them while none was, and could be read as the pick.
+  const onto = pick !== null ? (choices[pick]?.name ?? null) : null;
+  // The button's words and the card's, from the table (after-roll-table.ts):
+  // the watch row's, or the stop power's own (a hit's "Let it land").
+  const words = watchWords(power);
+  const own = stopPower(power)?.words;
+  const fill = (template: string, pickWord: string) => template.replace("{amount}", amount).replace("{when}", when).replace("{pick}", pickWord);
   return (
     <CheckFrame className="mb-2 animate-fade-up px-3 py-2.5">
       <p className="text-sm">{pending.reason}</p>
       {asking ? (
-        <div role="radiogroup" aria-label="Whose roll it answers" className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="text-xs">Whose roll:</span>
+        <div role="radiogroup" aria-label={own?.pickGroup ?? "Whose roll it answers"} className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs">{own?.pickPrompt ?? "Whose roll:"}</span>
           {choices.map((entry, index) => (
             <button
               key={`${entry.name}:${index}`}
@@ -140,7 +143,7 @@ export function WatchCard({
           ))}
         </div>
       ) : null}
-      <div role="group" aria-label={power === "portent" ? "Use a number Portent foretold, or let it roll" : `Use ${feature} on this roll, or let it roll`} className="mt-2 flex flex-wrap items-center gap-2">
+      <div role="group" aria-label={own?.group ?? `Use ${feature} on this roll, or let it roll`} className="mt-2 flex flex-wrap items-center gap-2">
         <span className="text-xs">{feature}:</span>
         {power === "portent"
           ? numbers.map((value) => (
@@ -162,16 +165,10 @@ export function WatchCard({
                 disabled={busy || pick === null}
                 aria-describedby={clockId}
                 onClick={() => void answer({ shift: true, ...choice })}
-                title={
-                  power === "flash_of_genius"
-                    ? "Spend a use of Flash of Genius and your reaction only if the save fails and your Intelligence modifier would carry it."
-                    : power === "favored_by_the_gods"
-                      ? "Spend Favored by the Gods only if the save fails and 2d4 could carry it: the 2d4 is added to the save."
-                      : "Spend a use of Chronal Shift and your reaction only if the roll goes that way: it is rolled again and the new roll stands."
-                }
+                title={fill(words.title, onto ?? "the creature you pick")}
                 className={NUMBER}
               >
-                {power === "flash_of_genius" ? `Add ${intModifier(watcher)} ${when}` : power === "favored_by_the_gods" ? `Add 2d4 ${when}` : `Roll it again ${when}`}
+                {fill(words.button, onto ?? "them")}
               </button>
             )}
         <button
@@ -181,18 +178,20 @@ export function WatchCard({
           onClick={() => void answer({ pass: true })}
           className={PLAIN}
         >
-          Let it roll
+          {own?.pass ?? "Let it roll"}
         </button>
-        <span id={clockId} className="check-dim text-xs" aria-live="off"><span className="sr-only">It rolls on its own in </span>{left}s</span>
+        <span id={clockId} className="check-dim text-xs" aria-live="off"><span className="sr-only">{own?.passing ?? "It rolls on its own in "}</span>{left}s</span>
       </div>
-      {asking && picked === null ? <p className="check-dim mt-1 text-xs">Choose whose roll first.</p> : null}
+      {asking && picked === null ? <p className="check-dim mt-1 text-xs">{own?.pickFirst ?? "Choose whose roll first."}</p> : null}
       {error ? <p role="alert" className="mt-1.5 text-xs text-red-400">{error}</p> : null}
     </CheckFrame>
   );
 }
 
-// The button: only a character who holds a number, a Chronal Shift, Flash of
-// Genius or Favored by the Gods, only in a fight.
+// The button: only a character who holds a feature the stop answers with. In
+// a fight, every one of them; out of one (`encounterId` TABLE_WATCH), only a
+// before-the-roll feature (Portent, Cosmic Omen, Restore Balance), and the
+// stops are for an ally's check or save (foresight-before.ts).
 export function WatchToggle({
   campaignId,
   sheet,
@@ -205,7 +204,9 @@ export function WatchToggle({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const on = sheet.watchingEncounterId === encounterId;
-  const power = watchFeatureOf(sheet) ?? "portent";
+  const table = encounterId === TABLE_WATCH;
+  const power = watchFeatureOf(sheet, table) ?? "portent";
+  const rolls = table ? "each check or save an ally makes" : "each roll you can see";
   const feature = FEATURES[power];
   const what = WATCH_FOR[power];
 
@@ -236,7 +237,7 @@ export function WatchToggle({
         aria-pressed={on}
         disabled={busy}
         onClick={() => void toggle()}
-        title={on ? `The game stops before each roll you can see, so you can ${what}. It turns off when the fight ends.` : `Stop the game before each roll you can see, so you can ${what}. Only turn it on when it matters: every stop holds up the table.`}
+        title={on ? `The game stops before ${rolls}, so you can ${what}. ${table ? "It stays on until you turn it off." : "It turns off when the fight ends."}` : `Stop the game before ${rolls}, so you can ${what}. Only turn it on when it matters: every stop holds up the table.`}
         className={`motion-press inline-flex min-h-10 items-center rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-50 ${RING} ${on ? "border-amber-400 bg-amber-500/20" : "border-amber-400/60"}`}
       >
         {on ? `Watching for ${feature}` : `Watch for ${feature}`}

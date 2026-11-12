@@ -5,6 +5,7 @@ import type { RollKind, RollVisibility } from "@/lib/db/rolls";
 import type { ContextTrace } from "@/lib/dm/context-budget";
 import { parkReasonFor, type ParkReason } from "@/lib/dice/held-rolls";
 import type { ThrownRoll } from "@/lib/dm/after-roll-logic";
+import type { AfterRollId, WatchPower } from "@/lib/dm/after-roll-table";
 import type { RollTag } from "@/lib/dice-script-logic";
 import { writeTurnQuality } from "@/lib/db/turn-ledger";
 import { currentTurnId, releaseStandIn, standInFor } from "@/lib/dm/job-control";
@@ -329,9 +330,15 @@ export type PendingRollStatus = "pending" | "submitted" | "fallback";
 export type PendingAttack = {
   // Touch of Death's necrotic, chosen on the hit (after-roll.ts).
   touchOfDeath?: number;
+  // Another character's choice on the hit (Violent Attraction's 1d10),
+  // paid for when the hit stands (attack-swing.ts).
+  helperHits?: Array<{ by: string; use: AfterRollId }>;
   // Destructive Wrath, chosen on the hit (after-roll.ts): its lightning and
   // thunder dice are dealt at their maximum.
   destructiveWrath?: boolean;
+  // A Valor bard's Bardic Inspiration die on this hit's damage, chosen on
+  // the hit (after-roll.ts, ar-wbf-bard-dice.ts).
+  combatInspiration?: boolean;
   attacker: string;
   weapon: string;
   targetEnemyId: string;
@@ -359,10 +366,20 @@ export type PendingAttack = {
   riders?: Array<{ dice: string; type: string; flat?: number }>;
   critExtraDice?: number;
   crit?: boolean;
+  // The attack was sent with endTurn ("and end the turn"): once the last of
+  // its rolls lands, the turn ends, as on the server's dice
+  // (pending-roll-land.ts carryEndTurn).
+  endTurn?: boolean;
 };
 
 export type PendingCarry = {
   mote?: { bardId: string; die: string; sides: number };
+  // The before-the-roll features already used on this roll (Cosmic Omen,
+  // Restore Balance; the before-roll route), each once.
+  before?: Array<"cosmic_omen" | "restore_balance">;
+  // The tool an ability check is made with (request_roll's `tool`), which
+  // the roll's kind and detail do not say.
+  tool?: string;
   // The call this roll stopped (src/lib/dm/held-call.ts), run again from the
   // start when the roll lands, and what that run answered.
   call?: HeldRollCall;
@@ -371,8 +388,16 @@ export type PendingCarry = {
 
 // A roll a held call already has, for its next run: the player's, as it
 // landed. `raw`: faces entered at the table, before what the roll site adds
-// to the dice it throws itself (a floor under the d20).
-export type DecidedRoll = { characterId: string; kind: RollKind; outcome: RollResult; raw: boolean };
+// to the dice it throws itself (a floor under the d20). `landing`: how it
+// landed, so the run that records it says whose dice they were: dice rolled
+// at the table are marked physical and are not thrown again on the stage.
+export type DecidedRoll = {
+  characterId: string;
+  kind: RollKind;
+  outcome: RollResult;
+  raw: boolean;
+  landing?: { physical: boolean; source: "digital" | "physical" };
+};
 
 // A tool call held for a player's roll. `tape`: the faces its first run drew
 // by chance, [sides, face], drawn again by the next run so a die nobody saw
@@ -547,10 +572,14 @@ export function dicePreferencesOf(campaignId: string, userId: string) {
 // (src/lib/dm/held-call.ts), drawn again when it runs.
 export type HeldCall = { id?: string; name: string; rawArguments: string; tape?: Array<[number, number]> };
 // Which feature the stop is for: Portent's number before the roll, or a
-// Chronal Shift, Flash of Genius or Favored by the Gods decided now and taken
-// once the roll goes the wrong way (src/lib/dm/chronal-shift.ts). A stop
-// stored before there were two is Portent's.
-export type WatchPower = "portent" | "chronal_shift" | "flash_of_genius" | "favored_by_the_gods";
+// watch row of src/lib/dm/after-roll-table.ts (Chronal Shift, Flash of
+// Genius, Favored by the Gods, Convergent Future, Bend Luck) decided now and
+// taken once the roll goes the wrong way (src/lib/dm/chronal-shift.ts). A
+// stop stored before there were two is Portent's. Slayer's Counter and the
+// Cloud Rune act at the stop itself (answeredAtStop), arming nothing on the
+// dice.
+export type { WatchPower } from "@/lib/dm/after-roll-table";
+export { answeredAtStop } from "@/lib/dm/after-roll-table";
 // One creature's roll the stop may answer: its tag on the dice, and the way
 // it must go for a Chronal Shift to take it ("success" a foe's, "failure" an
 // ally's).
@@ -558,7 +587,8 @@ export type WatchRoll = { tag: RollTag; reverse: "success" | "failure" };
 // Whose roll: a creature by name, and the rolls of theirs the call may make
 // (a spell at a creature is the caster's attack or the creature's save,
 // whichever d20 comes first). An area holds one choice per creature in it.
-export type WatchChoice = { name: string; rolls: WatchRoll[] };
+// `ref`: the creature a Cloud Rune stop's choice turns the attack onto.
+export type WatchChoice = { name: string; rolls: WatchRoll[]; ref?: string };
 export type WatchStop = {
   calls: HeldCall[];
   tag: RollTag;
@@ -578,6 +608,9 @@ export type WatchStop = {
   // The watcher said to use it if the roll goes wrong: a Chronal Shift rolls
   // it again, Flash of Genius and Favored by the Gods add to a failed save.
   shift?: boolean;
+  // The hit a Cloud Rune stop holds (cloud-rune.ts): who attacked whom, and
+  // which swing of the call it was.
+  hit?: { attackerId: string; struckId: string; swing: number };
 };
 
 // The choice a stop's answer stands on: the one picked, or the only one.
@@ -785,6 +818,15 @@ export function setPendingCombatNote(id: string, note: string) {
     .run(note.slice(0, 500), id);
 }
 
+// What a parked roll carries, written while it is still open (the
+// before-roll route's used features). Null once resolved.
+export function setPendingCarry(id: string, carry: PendingCarry): PendingRoll | null {
+  const result = getDatabase()
+    .prepare(`UPDATE pending_rolls SET carry_json = ? WHERE id = ? AND status = 'pending'`)
+    .run(Object.keys(carry).length ? JSON.stringify(carry) : null, id);
+  return result.changes > 0 ? getPendingRoll(id) : null;
+}
+
 // A parked roll the player spent Inspiration on takes its new d20 term while
 // it is still open (src/lib/dm/pending-inspiration.ts). Null once resolved.
 export function setPendingAdvantage(id: string, expression: string, advantage: Advantage): PendingRoll | null {
@@ -809,6 +851,14 @@ export function setPendingThrown(id: string, thrown: ThrownRoll): PendingRoll | 
 // then what they did once it landed (pc-attack-parts.ts runQueuedParts).
 export function setPendingAttack(id: string, attack: PendingAttack): PendingRoll | null {
   const result = getDatabase().prepare(`UPDATE pending_rolls SET attack_json = ? WHERE id = ?`).run(JSON.stringify(attack), id);
+  return result.changes > 0 ? getPendingRoll(id) : null;
+}
+
+// A card taken off the table with nothing rolled against it, as a watch stop
+// closes: a to-hit roll whose dice were never entered when the lead skipped
+// its turn (src/lib/dm/pending-roll-land.ts keepRollsLeftBehind).
+export function withdrawPendingRoll(id: string): PendingRoll | null {
+  const result = getDatabase().prepare(`UPDATE pending_rolls SET status = 'fallback' WHERE id = ? AND status = 'pending'`).run(id);
   return result.changes > 0 ? getPendingRoll(id) : null;
 }
 

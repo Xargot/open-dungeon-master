@@ -116,21 +116,30 @@ export const DRUID = {
     const friend = rig.hero("cleric", "Life Domain", 10);
     const [foe] = await rig.fight(who);
     rig.kit.place(friend.id, 6, 5);
-    const tooFar = await rig.spend(who, "Hidden Paths", { variant: "self", x: 18, y: 5 });
+    // The spend pays for the teleport and move_token makes it (the engine's
+    // door for a feature's teleport, src/lib/dm/feature-teleport.ts): the
+    // spend alone moves nobody, and use_resource takes no square.
+    const hop = async (args, mover, x, y) => {
+      const paid = await rig.spend(who, "Hidden Paths", args);
+      if (!paid.ok) return paid;
+      const moved = await rig.call("move_token", { token: mover.id, x, y, teleport: true, spell: "Hidden Paths", casterCharacterId: who.id });
+      return { ...moved, ok: moved.ok === true, error: moved.error, result: { paid: paid.result, moved: moved.result } };
+    };
+    const tooFar = await hop({ variant: "self" }, who, 18, 5);
     const at = () => [rig.kit.token(who.id).x, rig.kit.token(who.id).y];
     const afterFar = at();
     rig.kit.place(who.id, 5, 5);
     // A fresh bonus action: the far try above spent this turn's.
     rig.kit.freshTurn();
-    const occupied = await rig.spend(who, "Hidden Paths", { variant: "self", x: 5, y: 6 });
+    const occupied = await hop({ variant: "self" }, who, 5, 6);
     const afterOccupied = at();
     rig.kit.place(who.id, 5, 5);
     rig.kit.freshTurn();
-    const ok = await rig.spend(who, "Hidden Paths", { variant: "self", x: 17, y: 5 });
+    const ok = await hop({ variant: "self" }, who, 17, 5);
     const afterOk = at();
     rig.kit.freshTurn();
     rig.kit.place(who.id, 5, 5);
-    const touch = await rig.spend(who, "Hidden Paths", { variant: "touch", targetCharacterId: friend.id, x: 13, y: 5 });
+    const touch = await hop({ variant: "touch", targetCharacterId: friend.id }, friend, 12, 5);
     const friendAt = [rig.kit.token(friend.id).x, rig.kit.token(friend.id).y];
     rig.note("paths", [tooFar.ok, tooFar.error, afterFar, occupied.ok, occupied.error, afterOccupied, ok.ok, ok.error, afterOk, touch.ok, touch.error, brief(touch.result), friendAt, foe.id]);
     rig.reset();
@@ -430,15 +439,60 @@ export const DRUID = {
       dragon: () => assert.equal(floor.result.total, 10, `an Arcana check on a 3 (Intelligence +0) totalled ${floor.result.total}`),
       "2d8-at-10": () => assert.equal(rig.diceIn(arrow10.damage, 8), 2, `at 10th level the arrow rolled ${arrow10.damage?.expression ?? arrow10.error}`),
       "dragon-fly-at-10": () => assert.equal(changed.speeds?.fly, 20, `after changing to the Dragon at 10th level the druid's speeds read ${brief(changed.speeds)} (${changed.conditions}): ${change.error}`),
-      "change-each-turn": () => assert.ok(change.ok && changed.pools[1]?.used === 1 && changed.conditions.filter((name) => /starry form/.test(name)).length === 1, `changing from the Archer to the Dragon on a later turn: ${change.ok ? `the druid carries ${changed.conditions.join(" and ")} at once, and the form's counter reads ${brief(changed.pools[1])}` : change.error}`),
+      // The form's use is Wild Shape's (Starry Form: "Spend a Wild Shape
+      // use"): the change spends none of it, so Wild Shape still reads one.
+      "change-each-turn": () => assert.ok(change.ok && changed.pools[0]?.used === 1 && changed.conditions.filter((name) => /starry form/.test(name)).length === 1, `changing from the Archer to the Dragon on a later turn: ${change.ok ? `the druid carries ${changed.conditions.join(" and ")} at once, and the form's counter reads ${brief(changed.pools[1])}` : change.error}`),
     };
   },
 
   "druid::Cosmic Omen": async (rig) => {
     const facts = await rig.counterFacts("druid", "Circle of Stars", 6, "sub_cosmic_omen");
+    // The omen a long rest reads, and the d6 on a roll before it is thrown
+    // (before-roll-logic.ts, the ruling on issue #908): Weal at the hold
+    // before the druid's own check, Woe at the watch stop before a foe's
+    // attack. scripts/test-enforce-before-roll.mjs runs the stop itself.
+    const { call: callRoute } = await import("./enforce-campaign.mjs");
+    const { listOpenPendingRolls, getPendingRoll } = await import(new URL("../../src/lib/db/dm-turns.ts", import.meta.url).href);
+    const { getRoll } = await import(new URL("../../src/lib/db/rolls.ts", import.meta.url).href);
+    const { runWithForetold } = await import(new URL("../../src/lib/dm/foresight.ts", import.meta.url).href);
+    const { getCampaignById } = await import(new URL("../../src/lib/db/campaigns.ts", import.meta.url).href);
+    const { world } = rig;
+    const who = rig.hero("druid", "Circle of Stars", 6);
+    world.patch(who.id, { omen: null });
+    world.clearDice();
+    world.dice(3);
+    await world.invoke("take_rest", { kind: "long" });
+    world.clearDice();
+    const rested = world.sheet(who.id).omen;
+    world.patch(who.id, { omen: "weal" });
+    world.dice(10, 4);
+    await world.invoke("request_roll", { characterId: who.id, kind: "ability_check", ability: "wis", dc: 1, reason: "the stars" });
+    const [held] = listOpenPendingRolls(world.campaignId).filter((entry) => entry.characterId === who.id && !entry.thrown);
+    world.signIn({ id: world.sheet(who.id).userId });
+    const pressed = held ? await callRoute(await world.route("campaigns/[campaignId]/pending-rolls/[pendingRollId]/before-roll"), "POST", { use: "cosmic_omen" }, { campaignId: world.campaignId, pendingRollId: held.id }) : null;
+    if (held) await callRoute(await world.route("campaigns/[campaignId]/pending-rolls/[pendingRollId]"), "POST", { fallback: "digital" }, { campaignId: world.campaignId, pendingRollId: held.id });
+    world.clearDice();
+    const own = held ? getRoll(getPendingRoll(held.id).rollId) : null;
+    // Woe on a foe's attack, set before its d20 as the stop sets it.
+    const [enemy] = await rig.fight(who);
+    rig.foesTurn(enemy);
+    world.patch(who.id, { omen: "woe", resources: { ...world.sheet(who.id).resources, sub_cosmic_omen: { max: facts.max, used: 0 } } });
+    const tag = { roller: "enemy", kind: "attack", who: rig.enemy(enemy.id).displayName };
+    world.dice(12, 5);
+    const ran = await runWithForetold(getCampaignById(world.campaignId), "", { watcherId: who.id, face: null, power: "cosmic_omen", tags: [tag], line: "" }, () => world.invoke("enemy_attack", { enemyId: enemy.id, targetCharacterId: who.id }));
+    world.clearDice();
+    const swing = rig.lastRolls(6).filter((roll) => roll.kind === "attack").at(-1);
     return {
       uses: () => assert.equal(facts.max, profOf(6), `${facts.max} uses at 6th level (proficiency +3, Wisdom +${wis(6)})`),
       "long-rest": () => assert.deepEqual([facts.afterShort, facts.afterLong], [facts.max, 0]),
+      "omen-rest": () => assert.equal(rested, "woe", `a long rest with the die on 3 (odd) read ${rested}`),
+      "omen-stop": () => {
+        assert.equal(pressed?.status, 200, `Weal at the hold before the druid's own check: ${JSON.stringify(pressed?.json)}`);
+        assert.match(own?.expression ?? "", /\+1d6$/, "the d6 rides the druid's own check");
+        assert.equal(own?.total, 10 + wis(6) + 4);
+        assert.match(ran.portent ?? "", /used Cosmic Omen \(Woe\)/, `the stop's Woe on the foe's attack: ${ran.portent}`);
+        assert.match(swing?.expression ?? "", /-1d6$/, `the d6 comes off the attack: ${swing?.expression}`);
+      },
     };
   },
 
@@ -481,6 +535,9 @@ export const DRUID = {
     const [foe] = await rig.fight(who);
     rig.kit.place(friend.id, 6, 5);
     rig.world.patch(friend.id, { currentHp: 50 });
+    // Two spectral flames, under the goblin and under the friend, as two
+    // deaths there would leave them (src/lib/dm/cauterizing-flames.ts).
+    rig.world.patch(who.id, { conditions: [...rig.conditions(who), "spectral flames"], conditionMeta: { ...(rig.world.sheet(who.id).conditionMeta ?? {}), "spectral flames": { flames: [{ x: 5, y: 6, untilRound: 99 }, { x: 6, y: 5, untilRound: 99 }] } } });
     rig.foesTurn(foe);
     const burn = await rig.spend(who, "Cauterizing Flames", { variant: "burn", targetEnemyId: foe.id }, [5, 5]);
     const burned = 300 - rig.enemy(foe.id).currentHp;

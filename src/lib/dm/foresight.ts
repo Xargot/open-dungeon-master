@@ -18,7 +18,8 @@ import { createPendingRoll, getPendingRoll, publicPendingRoll, setPendingWatch, 
 import { getActiveEncounter, type Encounter, type EncounterEnemy } from "@/lib/db/encounters";
 import { spellEngineName, spellMechanicsFor } from "@/lib/content";
 import { boardCatch } from "@/lib/dm/area-casting";
-import { canHelpSaveNow, canShiftNow, inShiftReach, playerAtTable, type SaveHelp } from "@/lib/dm/chronal-shift";
+import { canHelpSaveNow, canReactNow, canShiftNow, inShiftReach, playerAtTable, stopReaches, type SaveHelp } from "@/lib/dm/chronal-shift";
+import { quarryFor } from "@/lib/dm/reaction-triggers";
 import { kindOfId, sideOf } from "@/lib/dm/combatant";
 import { resolveEnemyRef } from "@/lib/dm/enemy-damage";
 import { attackNamed } from "@/lib/dm/enemy-profile";
@@ -30,6 +31,8 @@ import { getSheetById, listSheets } from "@/lib/db/sheets";
 import { heroRollTag, type RollTag } from "@/lib/dice-script-logic";
 import { rollsCanWait } from "@/lib/dm/after-roll";
 import { canWaitOnRoll } from "@/lib/dm/after-roll-logic";
+import { afterRollRow, SAVE_HELPS, WATCH_ROWS } from "@/lib/dm/after-roll-table";
+import { isFatePower } from "@/lib/dm/fate-turn-logic";
 import { spendForetold } from "@/lib/dm/foretold";
 import { foretoldLeft } from "@/lib/dm/foretold-logic";
 import { getFoe } from "@/lib/dm/sheet-foe";
@@ -38,20 +41,33 @@ import { publishPersisted } from "@/lib/events";
 import { moreAbout } from "@/lib/dm/foresight-more";
 import { attackRiderFoes, foeRoll, holdsCondition, savesAbout, unseen, type About, type Seen } from "@/lib/dm/foresight-saves";
 import type { CharacterSheet } from "@/lib/schemas/sheet";
+import { canTurnFate, inFateReach } from "@/lib/dm/fate-turn";
+import type { OpenedStop } from "@/lib/dm/held-call";
+import { beforeRollAt, runWithBeforeRoll, tableWatcherFor, type BeforeChoice } from "@/lib/dm/foresight-before";
+import { balanceLeft, omenLeft, TABLE_WATCH } from "@/lib/dm/before-roll-logic";
+
+// The rolls a watch stop offers Convergent Future and Bend Luck on: the ones
+// a roll site asks takeFate about.
+const FATE_KINDS: readonly RollTag["kind"][] = ["save", "check", "death_save"];
+// The watch rows fate-turn.ts takes, in the table's order.
+const FATE_WATCH = WATCH_ROWS.flatMap((row) => (isFatePower(row.id) ? [row.id] : []));
 
 // A stop comes before every watched roll, so it cannot ask for long.
 export const WATCH_SECONDS = 20;
 
-// Whether the sheet is watching this fight and could answer a stop: a
-// number left (Portent), or a Chronal Shift, Flash of Genius or Favored by the
-// Gods it holds. "A creature that you can see": a blinded or unconscious
-// watcher sees nothing to stop. A player who has left the table would hold
-// every watched roll for the stop's whole time (chronal-shift.ts playerAtTable),
-// and one waiting on the bench is not in the fight at all (roster.ts inPlay).
+// Whether the sheet is watching this fight (or, out of one, the table:
+// TABLE_WATCH) and could answer a stop: a number left (Portent), Cosmic
+// Omen's omen or Restore Balance with a use left (before-roll-logic.ts), or a
+// watch row of after-roll-table.ts it holds (Chronal Shift, Flash of Genius,
+// Favored by the Gods, Convergent Future, Bend Luck). "A creature that you
+// can see": a blinded or unconscious watcher sees nothing to stop. A player
+// who has left the table would hold every watched roll for the stop's whole
+// time (chronal-shift.ts playerAtTable), and one waiting on the bench is not
+// in the fight at all (roster.ts inPlay).
 function canWatch(campaignId: string, sheet: CharacterSheet, encounterId: string): boolean {
   return (
     sheet.watchingEncounterId === encounterId &&
-    (foretoldLeft(sheet).length > 0 || holdsFeature(sheet, "chronal shift") || holdsFeature(sheet, "flash of genius") || holdsFeature(sheet, "favored by the gods")) &&
+    (foretoldLeft(sheet).length > 0 || omenLeft(sheet) !== null || balanceLeft(sheet) || WATCH_ROWS.some((row) => holdsFeature(sheet, row.feature))) &&
     sheet.currentHp > 0 &&
     !holdsCondition(sheet, "blinded", "unconscious") &&
     rollsCanWait(sheet) &&
@@ -231,17 +247,23 @@ function rollAbout(campaign: Campaign, call: HeldCall, sheets: readonly Characte
     return { line, rollerId: rolls[0].ref, rolls, perCreature: true, rollerWaits: false };
   }
   if (call.name === "request_roll") {
-    const hero = sheetOf(args.characterId);
-    const kind = typeof args.kind === "string" ? args.kind : "";
-    // Initiative waits on its roller's card now (after-roll-logic.ts), but no
-    // watch stops for it: that is a ruling still to make.
-    const tag = hero && canWaitOnRoll(kind) && kind !== "initiative" && (args.visibility ?? "public") === "public" ? heroRollTag(kind, hero.name) : undefined;
-    if (!hero || !tag) {
-      return null;
-    }
-    return { line: `${hero.name} is about to roll a ${kind.replaceAll("_", " ")}.`, rollerId: hero.id, rolls: [{ tag, ref: hero.id, name: hero.name }], perCreature: false, rollerWaits: rollsCanWait(hero) };
+    return requestRollAbout(args, sheets);
   }
   return savesAbout(campaign, encounter, call.name, args, sheets) ?? moreAbout(campaign, encounter, call.name, args, sheets);
+}
+
+// A character's check or save the GM asks for (request_roll), in a fight or
+// out of one.
+function requestRollAbout(args: Record<string, unknown>, sheets: readonly CharacterSheet[]): About | null {
+  const hero = sheets.find((sheet) => sheet.id === args.characterId);
+  const kind = typeof args.kind === "string" ? args.kind : "";
+  // Initiative waits on its roller's card now (after-roll-logic.ts), but no
+  // watch stops for it: that is a ruling still to make.
+  const tag = hero && canWaitOnRoll(kind) && kind !== "initiative" && (args.visibility ?? "public") === "public" ? heroRollTag(kind, hero.name) : undefined;
+  if (!hero || !tag) {
+    return null;
+  }
+  return { line: `${hero.name} is about to roll a ${kind.replaceAll("_", " ")}.`, rollerId: hero.id, rolls: [{ tag, ref: hero.id, name: hero.name }], perCreature: false, rollerWaits: rollsCanWait(hero) };
 }
 
 // "Within 30 feet" and "a creature you can see", for Chronal Shift: the
@@ -259,17 +281,35 @@ function savesHelped(campaignId: string, encounter: Encounter, sheet: CharacterS
     return [];
   }
   const side = (ref: string) => sideOf(encounter, kindOfId(encounter.id, ref) ?? "enemy", ref);
+  const row = afterRollRow(power);
   return [...(about.rollerWaits ? [] : about.rolls), ...(about.riderSaves ?? [])].filter((roll) => {
     // Flash of Genius answers an ability check as well as a save ("makes an
     // ability check or a saving throw"); Favored by the Gods a save only.
     // A death save is a saving throw.
-    const answers = roll.tag.kind === "save" || roll.tag.kind === "death_save" || (power === "flash_of_genius" && roll.tag.kind === "check");
+    const answers = roll.tag.kind === "save" || roll.tag.kind === "death_save" || (row.kinds.includes("check") && roll.tag.kind === "check");
     const saver = roll.tag.roller === "hero" && answers ? sheets.find((entry) => entry.id === roll.ref) : null;
     if (!saver) {
       return false;
     }
-    return power === "favored_by_the_gods" ? saver.id === sheet.id : side(saver.id) === side(sheet.id) && inShiftReach(campaignId, sheet, saver);
+    return row.whose === "own" ? saver.id === sheet.id : side(saver.id) === side(sheet.id) && inShiftReach(campaignId, sheet, saver, row.rangeFt);
   });
+}
+
+// The creature whose spell or ability a held call is, when the call names one.
+export function forcerOfCall(call: Pick<HeldCall, "rawArguments">, encounterId: string | null | undefined): string | null {
+  const args = argsOf(call.rawArguments);
+  const ref = typeof args.casterEnemyId === "string" ? args.casterEnemyId : typeof args.enemyId === "string" ? args.enemyId : null;
+  return ref && encounterId ? (resolveEnemyRef(encounterId, ref)?.id ?? null) : null;
+}
+
+// Slayer's Counter (Monster Slayer 15, src/lib/dm/slayers-counter.ts): "A
+// reaction attacks your prey when it forces a save on you". Whether a save
+// `forcerId` is about to force on this character stops for it: they hold it,
+// their player can be asked, their reaction is theirs to take, and the
+// creature is the one under their Slayer's Prey. No Watch button is asked of
+// them: the stop comes only for their own save from their own prey.
+export function slayersCounterStops(campaignId: string, encounter: Encounter, ranger: CharacterSheet, forcerId: string): boolean {
+  return holdsFeature(ranger, "slayer's counter") && stopReaches(campaignId, ranger) && canReactNow(campaignId, ranger) && quarryFor(encounter.id, ranger, "slayer's prey") === forcerId;
 }
 
 // The watcher for this call and the choices they are offered, or null. A
@@ -277,6 +317,14 @@ function savesHelped(campaignId: string, encounter: Encounter, sheet: CharacterS
 // that reaches a roll a card will not already offer, then an artificer's
 // Flash of Genius or a divine soul's Favored by the Gods on a save.
 function watcherFor(campaignId: string, encounter: Encounter, about: About, ownCard: boolean, sheets: readonly CharacterSheet[]): { watcher: CharacterSheet; power: WatchPower; choices: WatchChoice[] } | null {
+  // A ranger's own save, forced by their prey: Slayer's Counter is asked first,
+  // since its attack comes before the roll anyone else would answer.
+  for (const roll of about.forcerId ? about.rolls : []) {
+    const ranger = roll.tag.roller === "hero" && roll.tag.kind === "save" ? sheets.find((sheet) => sheet.id === roll.ref) : null;
+    if (ranger && slayersCounterStops(campaignId, encounter, ranger, about.forcerId!)) {
+      return { watcher: ranger, power: "slayers_counter", choices: [{ name: ranger.name, rolls: [{ tag: roll.tag, reverse: "failure" }] }] };
+    }
+  }
   const side = (ref: string) => sideOf(encounter, kindOfId(encounter.id, ref) ?? "enemy", ref);
   const choicesOf = (rolls: Seen[], reverseFor: (roll: Seen) => WatchRoll["reverse"]): WatchChoice[] => {
     const one = (roll: Seen): WatchRoll => ({ tag: roll.tag, reverse: reverseFor(roll) });
@@ -289,6 +337,12 @@ function watcherFor(campaignId: string, encounter: Encounter, about: About, ownC
     if (foretoldLeft(sheet).length > 0) {
       return { watcher: sheet, power: "portent", choices: choicesOf(about.rolls, () => "success") };
     }
+    // Cosmic Omen and Restore Balance, before the roll as Portent is
+    // (foresight-before.ts): an enemy's attack among the rolls they answer.
+    const before = beforeRollAt(campaignId, sheet, about, sheets, (ref) => side(ref) === side(sheet.id));
+    if (before) {
+      return { watcher: sheet, power: before.power, choices: choicesOf(before.rolls, () => "success") };
+    }
     // A foe's success is rolled again, an ally's failure; a roll the
     // roller's own card answers once it lands is offered there instead.
     const mine = side(sheet.id);
@@ -298,7 +352,22 @@ function watcherFor(campaignId: string, encounter: Encounter, about: About, ownC
     if (reach.length && canShiftNow(campaignId, sheet)) {
       return { watcher: sheet, power: "chronal_shift", choices: choicesOf(reach, (roll) => (side(roll.ref) === mine ? "failure" : "success")) };
     }
-    for (const power of ["flash_of_genius", "favored_by_the_gods"] as const) {
+    // Convergent Future and Bend Luck (fate-turn.ts) answer a save or a check
+    // the call throws: a foe's success, a friend's failure. An attack roll's
+    // hit is the reaction card's, and a roll that waits on its own card is
+    // offered there.
+    for (const power of FATE_WATCH) {
+      const fated = canTurnFate(campaignId, sheet, power)
+        ? about.rolls.filter((roll) => {
+            const creature = sheets.find((entry) => entry.id === roll.ref) ?? getFoe(roll.ref);
+            return !(about.rollerWaits && roll.ref === about.rollerId) && FATE_KINDS.includes(roll.tag.kind) && Boolean(creature) && inFateReach(campaignId, sheet, creature!, power);
+          })
+        : [];
+      if (fated.length) {
+        return { watcher: sheet, power, choices: choicesOf(fated, (roll) => (side(roll.ref) === mine ? "failure" : "success")) };
+      }
+    }
+    for (const power of SAVE_HELPS) {
       const saves = canHelpSaveNow(campaignId, sheet, power) ? savesHelped(campaignId, encounter, sheet, power, about, sheets) : [];
       if (saves.length) {
         return { watcher: sheet, power, choices: choicesOf(saves, () => "failure") };
@@ -318,14 +387,23 @@ export function watchFor(campaignId: string, encounter: Encounter, about: About,
 export function parkForWatch(campaign: Campaign, turn: DmTurn, calls: readonly HeldCall[]): boolean {
   const [first] = calls;
   const encounter = first ? getActiveEncounter(campaign.id) : null;
-  if (!first || !encounter) {
+  if (!first) {
     return false;
+  }
+  if (!encounter) {
+    // Out of a fight only an ally's check or save is stopped for, and only
+    // by a before-the-roll feature (foresight-before.ts tableWatcherFor).
+    const sheets = listSheets(campaign.id);
+    const about = first.name === "request_roll" ? requestRollAbout(argsOf(first.rawArguments), sheets) : null;
+    const found = about ? tableWatcherFor(campaign.id, about, sheets, (sheet) => canWatch(campaign.id, sheet, TABLE_WATCH)) : null;
+    return about && found ? Boolean(openStopFor(campaign, turn.id, calls, found, about.line)) : false;
   }
   const sheets = listSheets(campaign.id);
   const about = rollAbout(campaign, first, sheets, encounter);
   // A wizard's own check waits on its own card already (invoke-roll.ts); a
   // turn's own end is never held by its own watcher (turn-hold.ts).
-  return about ? openWatchStop(campaign, turn.id, calls, about, first.name === "request_roll" || first.name === "end_turn", encounter, sheets) !== null : false;
+  const forcerId = about ? forcerOfCall(first, encounter.id) : null;
+  return about ? openWatchStop(campaign, turn.id, calls, forcerId ? { ...about, forcerId } : about, first.name === "request_roll" || first.name === "end_turn", encounter, sheets) !== null : false;
 }
 
 // Opens a stop on what `about` says is about to roll, for the first watcher
@@ -355,11 +433,11 @@ function openStopFor(
   campaign: Campaign,
   turnId: string,
   calls: readonly HeldCall[],
-  found: { watcher: CharacterSheet; power: WatchPower; choices: WatchChoice[] },
+  found: OpenedStop,
   line: string,
 ): string {
   const about = { line };
-  const { watcher, power, choices } = found;
+  const { watcher, power, choices, hit } = found;
   const pending = createPendingRoll({
     campaignId: campaign.id,
     turnId,
@@ -376,7 +454,7 @@ function openStopFor(
   });
   const deadline = new Date(Date.now() + WATCH_SECONDS * 1000).toISOString();
   const [lead, ...also] = choices[0].rolls.map((roll) => roll.tag);
-  const held = setPendingWatch(pending.id, { calls: [...calls], tag: lead, ...(also.length ? { also } : {}), line: about.line, face: null, deadline, power, choices });
+  const held = setPendingWatch(pending.id, { calls: [...calls], tag: lead, ...(also.length ? { also } : {}), line: about.line, face: null, deadline, power, choices, ...(hit ? { hit } : {}) });
   publishPersisted(campaign.id, "roll_pending", { pendingRoll: publicPendingRoll(held ?? pending) });
   // Past the deadline the roll goes ahead on its own and nothing is spent.
   const timer = setTimeout(() => {
@@ -401,7 +479,7 @@ export function watchStopForRoll(campaign: Campaign, turn: DmTurn, call: HeldCal
   const words = ROLL_WORDS[tag.kind];
   const encounter = words ? getActiveEncounter(campaign.id) : null;
   if (!encounter) {
-    return null;
+    return words ? tableStopForRoll(campaign, turn, call, tag, words, open) : null;
   }
   const sheets = listSheets(campaign.id);
   // A group's roll names every creature it stands for: the stop is for the
@@ -421,7 +499,8 @@ export function watchStopForRoll(campaign: Campaign, turn: DmTurn, call: HeldCal
   // A player's own card answers their roll once it lands (after-roll.ts), so
   // only Portent's number is asked here, and never of the roller themselves.
   const rollerWaits = hero ? rollsCanWait(hero) : tag.kind === "attack";
-  const about: About = { line: `${shown} is about to make ${words}.`, rollerId: creature.id, rolls: [{ tag, ref: creature.id, name: shown }], perCreature: false, rollerWaits };
+  const forcerId = forcerOfCall(call, encounter.id);
+  const about: About = { line: `${shown} is about to make ${words}.`, rollerId: creature.id, rolls: [{ tag, ref: creature.id, name: shown }], perCreature: false, rollerWaits, ...(forcerId ? { forcerId } : {}) };
   const found = watcherFor(campaign.id, encounter, about, rollerWaits, sheets);
   if (!found) {
     return null;
@@ -429,28 +508,61 @@ export function watchStopForRoll(campaign: Campaign, turn: DmTurn, call: HeldCal
   return open ? openStopFor(campaign, turn.id, [call], found, about.line) : found.watcher.id;
 }
 
-// Whether anyone at the table is watching this fight at all: read once per
-// held call, so a call nobody watches asks nothing of every d20 it throws.
+// Out of a fight: the stop before a character's check or save, for a sheet
+// watching the table (TABLE_WATCH). An ally's roll is thrown at once
+// otherwise (invoke-roll.ts), so this is where a before-the-roll feature can
+// answer it.
+function tableStopForRoll(campaign: Campaign, turn: DmTurn, call: HeldCall, tag: RollTag, words: string, open: boolean): string | null {
+  if (tag.roller !== "hero" || (tag.kind !== "save" && tag.kind !== "check")) {
+    return null;
+  }
+  const sheets = listSheets(campaign.id);
+  const hero = [tag.who ?? []].flat().map((name) => findNamed(sheets, name, (sheet) => [sheet.name])).find(Boolean);
+  if (!hero) {
+    return null;
+  }
+  const about: About = { line: `${hero.name} is about to make ${words}.`, rollerId: hero.id, rolls: [{ tag, ref: hero.id, name: hero.name }], perCreature: false, rollerWaits: rollsCanWait(hero) };
+  const found = tableWatcherFor(campaign.id, about, sheets, (sheet) => canWatch(campaign.id, sheet, TABLE_WATCH));
+  if (!found) {
+    return null;
+  }
+  return open ? openStopFor(campaign, turn.id, [call], found, about.line) : found.watcher.id;
+}
+
+// Whether anyone at the table is watching this fight at all, or the table
+// out of one: read once per held call, so a call nobody watches asks nothing
+// of every d20 it throws.
 export function anyoneWatching(campaignId: string): boolean {
   const encounter = getActiveEncounter(campaignId);
-  return Boolean(encounter) && listSheets(campaignId).some((sheet) => sheet.watchingEncounterId === encounter?.id);
+  if (!encounter) {
+    return listSheets(campaignId).some((sheet) => sheet.watchingEncounterId === TABLE_WATCH);
+  }
+  // A ranger holding Slayer's Counter is asked without a Watch button (slayersCounterStops).
+  return listSheets(campaignId).some((sheet) => sheet.watchingEncounterId === encounter.id || holdsFeature(sheet, "slayer's counter"));
 }
 
 globalThis.__odmWatchStop = watchStopForRoll;
+// A stop made inside a call after its dice began (held-call.ts stopAfterThrow).
+globalThis.__odmOpenStop = openStopFor;
 globalThis.__odmAnyoneWatching = anyoneWatching;
 
 // Runs one held call with the chosen number armed on its first matching d20,
-// and pays for the number if a die took it. The line is for the model's answer.
+// and pays for the number if a die took it; or with Cosmic Omen or Restore
+// Balance set on it the same way (foresight-before.ts). The line is for the
+// model's answer.
 export async function runWithForetold<T>(
   campaign: Campaign,
   turnId: string,
-  choice: { watcherId: string; face: number; tags: readonly RollTag[]; line: string } | null,
+  choice: BeforeChoice | null,
   run: () => Promise<T>,
 ): Promise<{ result: T; portent: string | null }> {
+  if (choice?.power) {
+    return runWithBeforeRoll(campaign, { ...choice, power: choice.power }, run);
+  }
   // Spent some other way since it was chosen (the counter moved, an undo): the
   // die rolls honestly rather than show a number nobody paid for.
   const holder = choice ? getSheetById(choice.watcherId) : null;
-  if (!choice || !holder || !foretoldLeft(holder).includes(choice.face)) {
+  if (!choice || choice.face === null || !holder || !foretoldLeft(holder).includes(choice.face)) {
     return { result: await run(), portent: null };
   }
   armForetold(campaign.id, { face: choice.face, tags: choice.tags });

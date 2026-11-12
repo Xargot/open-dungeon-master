@@ -79,13 +79,25 @@ export type ScriptedDie = (sides: number, frame: RollFrame) => number | null;
 // for a player watching for Portent before the first d20 of a roll.
 export type DiceTape = { taped: (sides: number) => number | null; drawn: (sides: number, face: number) => void; before?: (sides: number, frame: RollFrame) => void };
 
+// A whole roll once its dice are thrown, for what is set on it before the
+// throw and changes the roll, not a die: Cosmic Omen's d6 and Restore
+// Balance's one d20 (src/lib/db/dice-scripts.ts, armed at a watch stop).
+// Registered the way the dice script is; answers the roll unchanged at any
+// other moment. Told only of a roll whose site says what it rolls.
+export type RolledHook = (result: RollResult, purpose: RollTag) => RollResult;
+
 declare global {
   var __odmScriptedDie: ScriptedDie | undefined;
   var __odmDiceTape: DiceTape | null | undefined;
+  var __odmRolled: RolledHook | undefined;
 }
 
 export function registerScriptedDice(hook: ScriptedDie) {
   globalThis.__odmScriptedDie = hook;
+}
+
+export function registerRolledHook(hook: RolledHook) {
+  globalThis.__odmRolled = hook;
 }
 
 let frame: RollFrame | null = null;
@@ -133,6 +145,13 @@ export type RollOptions = {
   // value, once each, and keep the new face even if it is worse. d20s are
   // exempt: this is a damage-dice rule, never an attack-roll one.
   rerollBelow?: number;
+  // Empowered Spell (SRD 5.1, sorcerer, Metamagic): "reroll a number of the
+  // damage dice up to your Charisma modifier (minimum of one). You must use
+  // the new rolls." Once every die is thrown, up to this many of them are
+  // rolled again, lowest first by how far each fell below its die's average,
+  // and only dice that did fall below it: rerolling a die at or above its
+  // average loses more often than it gains. d20s are exempt, as above.
+  empower?: number;
   // Who rolls and what, for a test table's dice script to aim its forced
   // faces by (src/lib/dice-script-logic.ts). Nothing else reads it.
   purpose?: RollTag;
@@ -160,11 +179,13 @@ function rollFramed(expression: string, rng: DieRng, options: EntryOptions): Rol
   // returns; the one it replaced is put back for whoever was rolling.
   const outer = frame;
   frame = { purpose: options.purpose ?? null, forcedD20: null };
+  let result: RollResult;
   try {
-    return rollTerms(expression, rng, options);
+    result = rollTerms(expression, rng, options);
   } finally {
     frame = outer;
   }
+  return options.purpose && globalThis.__odmRolled ? globalThis.__odmRolled(result, options.purpose) : result;
 }
 
 // An expression's signed terms, each read by the grammar, or the reason it
@@ -197,6 +218,9 @@ function termsOf(expression: string): { compact: string; terms: Array<{ rawTerm:
 
 function rollTerms(expression: string, rng: DieRng, options: EntryOptions): RollResult {
   const terms: Array<DiceTerm | ModifierTerm> = [];
+  // Each dice term's floor and its own reroll, for an Empowered Spell's
+  // second throw of a die (below).
+  const again: Array<{ term: DiceTerm; floorAt: number; reroll: () => number }> = [];
   const read = termsOf(expression);
   const compact = read.compact;
   for (const { rawTerm, sign, match } of read.terms) {
@@ -296,7 +320,28 @@ function rollTerms(expression: string, rng: DieRng, options: EntryOptions): Roll
     }
 
     const subtotal = dice.reduce((sum, die) => sum + (die.kept ? die.value : 0), 0);
-    terms.push({ kind: "dice", sign, count, sides, keep, dice, subtotal });
+    const term: DiceTerm = { kind: "dice", sign, count, sides, keep, dice, subtotal };
+    terms.push(term);
+    if (sides !== 20 && !keep && sign === 1) {
+      again.push({ term, floorAt, reroll });
+    }
+  }
+
+  // Empowered Spell: the dice that fell furthest below their average, thrown
+  // again, the new faces kept whatever they are.
+  if ((options.empower ?? 0) > 0) {
+    const low = again
+      .flatMap((entry) => entry.term.dice.map((die) => ({ entry, die })))
+      .filter(({ die }) => die.value * 2 < die.sides + 1)
+      .sort((a, b) => a.die.value / a.die.sides - b.die.value / b.die.sides)
+      .slice(0, options.empower);
+    for (const { entry, die } of low) {
+      const was = die.value;
+      // The face first thrown stays on the card (a floored 1 shows its 1).
+      die.rerolledFrom = die.rerolledFrom ?? was;
+      die.value = Math.max(entry.floorAt, entry.reroll());
+      entry.term.subtotal += die.value - was;
+    }
   }
 
   const total = terms.reduce(

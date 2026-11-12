@@ -5,6 +5,7 @@
 // parked rolls in between. Nothing here decides a rule: a rule lives in the
 // stages, so it reaches both dice paths or neither.
 
+import { swingFacts } from "@/lib/dm/mt-mr-offers";
 import { getCampaignById } from "@/lib/db/campaigns";
 import { createPendingRoll, dicePreferencesOf, getDmTurn, publicPendingRoll, type PendingAttack, type PendingRoll } from "@/lib/db/dm-turns";
 import { parkReasonFor } from "@/lib/dice/held-rolls";
@@ -46,7 +47,7 @@ export function parkedTargetAc(campaignId: string, attack: PendingAttack): numbe
 }
 
 // Physical dice: park the to-hit roll for the player, with the attack's record.
-export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: string | null, mote: HeldMote | null = null) {
+export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: string | null, mote: HeldMote | null = null): PendingRoll {
   const { campaign, turn, sheet, enemy, profile } = plan;
   const pending = createPendingRoll({
     campaignId: campaign.id,
@@ -63,6 +64,7 @@ export function parkPcAttack(plan: AttackPlan, strike: Strike, toolCallId: strin
     attack: attackRecord(plan, strike, mote),
   });
   publishPersisted(campaign.id, "roll_pending", { pendingRoll: publicPendingRoll(pending) });
+  return pending;
 }
 
 // The server's dice for a player whose rolls can wait (after-roll.ts
@@ -84,9 +86,10 @@ export function throwForChoice(plan: AttackPlan, strike: Strike, toolCallId: str
   const critRange = record.critRange ?? 20;
   const thrown = shiftedThrow(plan, strike, ac, critRange);
   const options = [
-    ...afterAttackOptions(fresh, { outcome: thrown, ac, critRange, spent: record.luck ? ["lucky"] : [], reactionFree: reactionFreeFor(campaign.id, fresh.id), melee: record.melee === true && record.ranged !== true, wrathDice: rollsWrathDice(record.damageExpression, record.damageType, record.riders) }),
-    // A wizard or a War cleric beside them may answer the miss (after-roll.ts).
-    ...allyChoicesFor(campaign.id, fresh, { kind: "attack", outcome: thrown, ac, critRange }),
+    ...afterAttackOptions(fresh, { outcome: thrown, ac, critRange, spent: record.luck ? ["lucky"] : [], reactionFree: reactionFreeFor(campaign.id, fresh.id), melee: record.melee === true && record.ranged !== true, wrathDice: rollsWrathDice(record.damageExpression, record.damageType, record.riders), swing: swingFacts(campaign.id, fresh, record) }),
+    // A wizard or a War cleric beside them may answer the miss, a
+    // graviturgist a weapon's hit (after-roll.ts).
+    ...allyChoicesFor(campaign.id, fresh, { kind: "attack", outcome: thrown, ac, critRange, weapon: record.weaponAttack === true }),
   ];
   if (!options.length) {
     return { thrown };
@@ -165,6 +168,12 @@ function parkDamage(pending: PendingRoll, scene: SwingScene, record: AttackRecor
   publishPersisted(pending.campaignId, "roll_pending", { pendingRoll: publicPendingRoll(damagePending) });
 }
 
+// What the turn hears of a to-hit roll its turn ended under: kept as it lay,
+// or taken off the table with its dice never entered.
+export function lostSwingNote(stored: Pick<AttackRecord, "attacker" | "weapon" | "serverDice">): string {
+  return `${stored.attacker}'s ${stored.weapon} attack was still ${stored.serverDice ? "waiting on its player's choice" : "unrolled"} when their turn ended, so it does not land. No damage roll happens; narrate the moment passing.`;
+}
+
 // Called from the pending-rolls submit route when a parked to-hit roll lands.
 // Returns the combat note the resumed turn surfaces to the model; a hit (or a
 // spell's graze) parks the damage roll, so the turn waits for those dice too.
@@ -177,7 +186,7 @@ export function resolvePendingPcAttack(pending: PendingRoll, roll: StoredRoll): 
   // the order was edited) must not land on a later turn as though nothing
   // had happened: the player declared it on a turn that is over.
   if (attackTurnOver(pending.campaignId, stored, pending.characterId)) {
-    return `${stored.attacker}'s ${stored.weapon} attack was still ${stored.serverDice ? "waiting on its player's choice" : "unrolled"} when their turn ended, so it does not land. No damage roll happens; narrate the moment passing.`;
+    return lostSwingNote(stored);
   }
   const found = sceneOf(pending);
   if (!found) {

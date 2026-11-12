@@ -1,13 +1,17 @@
+import { mrSpendAfterRoll } from "@/lib/dm/mt-mr-offers";
+import { isMrAfterRoll } from "@/lib/dm/mt-mr-offers-logic";
 import { z } from "zod";
 import { isErrorResponse, requireMember, steersStory } from "@/lib/campaign-api";
-import { getPendingRoll, publicPendingRoll, setPendingCombatNote, setPendingThrown } from "@/lib/db/dm-turns";
+import { getPendingRoll, publicPendingRoll, setPendingAttack, setPendingCombatNote, setPendingThrown } from "@/lib/db/dm-turns";
 import { getSheetById } from "@/lib/db/sheets";
 import { optionsForPending, spendAfterRoll } from "@/lib/dm/after-roll";
-import { answeredLine, keepD20, type ThrownRoll } from "@/lib/dm/after-roll-logic";
+import { answeredLine, bardOfHeldDie, keepD20, type ThrownRoll } from "@/lib/dm/after-roll-logic";
+import { recordInspiredSuccess } from "@/lib/dm/last-save";
+import { AFTER_ROLL_IDS } from "@/lib/dm/after-roll-table";
 import { afterRollDeadline, armAfterRollKeep } from "@/lib/dm/after-roll-timer";
-import type { AttackRecord } from "@/lib/dm/attack-record";
+import { recordTargetAc, type AttackRecord } from "@/lib/dm/attack-record";
 import { runInTurnScope } from "@/lib/dm/job-control";
-import { landPendingRoll } from "@/lib/dm/pending-roll-land";
+import { landedBody, landPendingRoll } from "@/lib/dm/pending-roll-land";
 import { refuseDuringBreak } from "@/lib/dm/table-break";
 import { publishPersisted } from "@/lib/events";
 
@@ -16,7 +20,7 @@ export const dynamic = "force-dynamic";
 
 const choiceSchema = z.union([
   // `by`: the character whose choice this is, on another character's roll.
-  z.object({ use: z.enum(["lucky", "bardic", "own_luck", "chronal_shift", "guided_strike", "master_duelist", "favored_by_the_gods", "war_gods_blessing", "flash_of_genius", "touch_of_death", "destructive_wrath"]), by: z.string().min(1).max(80).optional() }),
+  z.object({ use: z.enum(AFTER_ROLL_IDS), by: z.string().min(1).max(80).optional() }),
   // Which of a luck point's d20s counts.
   z.object({ die: z.number().int().min(0).max(20) }),
   z.object({ keep: z.literal(true) }),
@@ -68,9 +72,11 @@ export async function POST(
     return Response.json({ error: "This is not your roll." }, { status: 403 });
   }
 
-  const land = (outcome: typeof thrown.outcome, landing = thrown.landing, landed = pending) => {
+  // Read again as it lands: a helper's choice on a hit (Violent Attraction)
+  // rides the attack's stored record.
+  const land = (outcome: typeof thrown.outcome, landing = thrown.landing, landed = getPendingRoll(pending.id) ?? pending) => {
     const roll = landPendingRoll(context.campaign, landed, outcome, landing);
-    return roll ? Response.json({ roll }) : Response.json({ error: "That roll was already resolved." }, { status: 409 });
+    return roll ? Response.json(landedBody(roll)) : Response.json({ error: "That roll was already resolved." }, { status: 409 });
   };
   // A new decision gets its own time; with nothing left to decide it lands.
   const next = (fields: Partial<ThrownRoll>) => {
@@ -128,18 +134,43 @@ export async function POST(
   if (!optionsForPending(pending, thrown.outcome, thrown.spent, thrown).some((option) => option.id === choice.use && (option.by ?? null) === by)) {
     return Response.json({ error: "That is no longer on offer for this roll." }, { status: 409 });
   }
+  // The bard whose die this is, read before the spend takes it off the sheet.
+  const bard = choice.use === "bardic" ? bardOfHeldDie(sheet) : null;
   // The parked turn's spend: its revert gives it back (issue #622).
-  const paid = runInTurnScope(pending.turnId, () => spendAfterRoll(context.campaign, sheet, choice.use, thrown.outcome, pending.advantage, wizard ?? undefined, (pending.attack as AttackRecord | null)?.elvenAccuracy === true));
+  // A monk's or a rogue's subclass choice reads the roll's target, since two
+  // of them are paid only when they change the result (mt-mr-offers.ts).
+  const paid = runInTurnScope(pending.turnId, () =>
+    isMrAfterRoll(choice.use)
+      ? mrSpendAfterRoll(context.campaign, sheet, choice.use, thrown.outcome, pending)
+      : spendAfterRoll(context.campaign, sheet, choice.use, thrown.outcome, pending.advantage, wizard ?? undefined, (pending.attack as AttackRecord | null)?.elvenAccuracy === true, pending.attack ? recordTargetAc(pending.campaignId, pending.attack as AttackRecord) : pending.dc),
+  );
   if (!paid) {
     return Response.json({ error: "That is no longer on offer for this roll." }, { status: 409 });
   }
-  if ((paid.touchOfDeath || paid.destructiveWrath) && pending.attack) {
+  // Combat Inspiration is the bard's die on an attack's damage (after-roll.ts);
+  // a monk's or a rogue's choice never carries it.
+  const combatInspiration = "combatInspiration" in paid ? paid.combatInspiration : undefined;
+  // A Bardic Inspiration die that made the roll succeed is on record as its
+  // bard's (last-save.ts recordInspiredSuccess): Infectious Inspiration answers it.
+  const mark = pending.dc ?? (pending.attack as AttackRecord | null)?.targetAc ?? null;
+  if (bard && typeof mark === "number" && paid.outcome.total >= mark) {
+    runInTurnScope(pending.turnId, () => recordInspiredSuccess(context.campaign.id, { id: sheet.id, name: sheet.name }, bard, pending.attack ? "attack" : pending.kind === "saving_throw" ? "save" : "check"));
+  }
+  if ((paid.touchOfDeath || paid.destructiveWrath || combatInspiration) && pending.attack) {
     // No die is thrown: the roll stays the player's, and the hit carries the
     // necrotic and pays its use once it stands (attack-swing.ts), or its
     // lightning and thunder at their maximum. A hit waits on one cleric's
     // Channel Divinity, so it lands with the choice.
-    const attack = { ...pending.attack, ...(paid.touchOfDeath ? { touchOfDeath: paid.touchOfDeath } : {}), ...(paid.destructiveWrath ? { destructiveWrath: true } : {}) };
+    const attack = { ...pending.attack, ...(paid.touchOfDeath ? { touchOfDeath: paid.touchOfDeath } : {}), ...(paid.destructiveWrath ? { destructiveWrath: true } : {}), ...(combatInspiration ? { combatInspiration: true } : {}) };
     return land(paid.outcome, thrown.landing, { ...pending, attack });
+  }
+  if ("helperHit" in paid && paid.helperHit && pending.attack && wizard) {
+    // Another's choice on the hit (Violent Attraction): no die is thrown now.
+    // The hit carries the helper's dice and pays their use and reaction once
+    // it stands (attack-swing.ts), and the roller may still choose their own.
+    const attack = pending.attack as AttackRecord;
+    setPendingAttack(pending.id, { ...attack, helperHits: [...(attack.helperHits ?? []), { by: wizard.id, use: choice.use }] });
+    return next({ shiftedBy: [...(thrown.shiftedBy ?? []), wizard.id] });
   }
   // The server threw this die: "(physical)" would overclaim the roll now,
   // and the model would be told the player threw it all.
