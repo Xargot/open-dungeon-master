@@ -3,6 +3,7 @@
 import { romanceCueAllowed } from "@/lib/dm/director-logic";
 import { gmTurnCompanion, gmTurnDominated, initiativeCharacter, selectedCharacter, typedReactors as typedReactorsOf } from "@/lib/player-characters";
 import { useThemePrefs } from "@/lib/theme-mode";
+import { EquipmentArtProvider } from "@/components/ui/EquipmentArtProvider";
 import { LevelUpMoment, LootMoment, MomentVeil, RestMoment, TravelBanner } from "@/app/campaigns/[campaignId]/Moments";
 import { CoordinationPanel } from "@/app/campaigns/[campaignId]/CoordinationPanel";
 import { CorrectionReasonChips } from "@/components/CorrectionReasonChips";
@@ -109,6 +110,7 @@ import { revealPane, useTableLayout, type LayoutSeat } from "@/app/campaigns/[ca
 import { poppedTabs, tabPane } from "@/lib/table-layout";
 import { PanelLoading, panels, preloadSidePanels } from "@/app/campaigns/[campaignId]/side-panel-loaders";
 import { preloadable } from "@/lib/preloadable";
+import { floorExpectOf } from "@/lib/dm/floor-expect-logic";
 
 // The level-up dialog carries the class feature and resource tables of the
 // whole SRD; it loads the first time a character actually levels rather
@@ -874,8 +876,14 @@ export function SessionView({
   );
 
   const releaseFloor = useCallback(async () => {
-    await fetch(`/api/campaigns/${campaignId}/floor`, { method: "POST" });
-  }, [campaignId]);
+    // The floor this screen showed (floor-expect-logic.ts): a release that
+    // lands after the floor moved would skip the next turn instead.
+    await fetch(`/api/campaigns/${campaignId}/floor`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expect: floorExpectOf(floor) }),
+    });
+  }, [campaignId, floor]);
 
   const submit = useCallback(
     async (event: FormEvent) => {
@@ -1309,6 +1317,7 @@ export function SessionView({
   } satisfies Omit<SidePanelRouterProps, "tab" | "visible" | "onOpenTab">;
 
   return (
+    <EquipmentArtProvider genre={campaign.genre}>
     <main className="cine-stage flex h-dvh flex-col" data-session-view={sessionLayout ? shownStageView : undefined} data-side-board={boardInPanel ? "" : undefined}
       data-prep={prepOpen ? "" : undefined}
       data-addon-theme={sessionTheme ? "" : undefined}
@@ -1733,5 +1742,6 @@ export function SessionView({
         )
       ) : null}
     </main>
+    </EquipmentArtProvider>
   );
 }

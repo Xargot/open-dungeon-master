@@ -12,6 +12,7 @@ import {
   type ChatRequestOptions,
   type UpstreamResult,
   probeCustomContextWindow,
+  endpointUnreachable,
 } from "@/lib/model-client";
 import { requestHarnessMessage } from "@/lib/harness/bridge";
 import { harnessConfig, harnessContextTokens } from "@/lib/harness/status";
@@ -22,6 +23,7 @@ import { recordUsage } from "@/lib/usage/ledger";
 import { recordModelCall, type ModelCallOutcome } from "@/lib/usage/model-calls";
 import { fitRequest, requestTokens, toolDefinitionTokens, type FitMessage } from "@/lib/dm/request-fit";
 import { calibrationFor, noteReportedInput } from "@/lib/dm/token-calibration";
+import { slotForOtherCall } from "@/lib/dm/prompt-snapshot";
 import { asInteractive, waitForInteractive } from "@/lib/dm/inference-gate";
 import { currentModelTask } from "@/lib/usage/task-scope";
 import { afterFailure, afterSuccess, breakerOpen, CLOSED, type BreakerState } from "@/lib/dm/utility-breaker-logic";
@@ -267,7 +269,13 @@ async function attempt(
       // as before any of this was measured. A server that really is this
       // small refuses it, and that refusal teaches the real window
       // (model-client.ts contextOverflowWindow).
-      console.warn(`[model] ${task}: ${fit.reason} The window is assumed (the endpoint reports none), so the request goes out anyway; set OPENAI_COMPAT_CONTEXT to the server's real window.`);
+      // A server that did not answer the probe at all has a window nobody
+      // asked yet: telling the operator to set one by hand was the wrong
+      // advice for an app whose own llama-server was still starting (#925).
+      const why = route.provider === "custom" && endpointUnreachable(route.baseUrl, route.model)
+        ? "The window is assumed because the server did not answer when asked for it (it may still be starting), so the request goes out anyway."
+        : "The window is assumed (the endpoint reports none), so the request goes out anyway; set OPENAI_COMPAT_CONTEXT to the server's real window.";
+      console.warn(`[model] ${task}: ${fit.reason} ${why}`);
       sent = fit.messages as ChatMessage[];
       sizing = {
         windowTokens: route.windowTokens,
@@ -345,10 +353,20 @@ async function attempt(
   if (route.provider === "custom") {
     await probeCustomContextWindow(route.baseUrl, route.apiKey, route.model);
   }
+  // A narrator that keeps prompt snapshots gives its tables' turns a slot of
+  // their own (src/lib/dm/prompt-snapshot.ts). A call that names none goes
+  // to the slot holding its first message (a turn's rescue, the guard's
+  // rewrite), or to the helper slot: the claims reader landing on the turn's
+  // slot threw the turn's prompt away.
+  const slot =
+    route.provider !== "custom" || options.slot !== undefined
+      ? options.slot
+      : slotForOtherCall({ baseUrl: route.baseUrl, model: route.model, apiKey: route.apiKey }, messages[0]?.content, options.tools);
   const call = () =>
     send(route, sent, {
       ...transport,
       ...leastThought,
+      ...(slot !== undefined ? { slot } : {}),
       onDelta,
       ...(sizing && !sizing.windowAssumed ? { maxOutputTokens: sizing.outputTokens } : {}),
     });

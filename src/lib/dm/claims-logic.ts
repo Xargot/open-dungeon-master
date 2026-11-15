@@ -15,6 +15,7 @@ import { textKey, words } from "../language/text-logic.ts";
 import type { TableLanguage } from "../schemas/game-settings-options.ts";
 import { DEED_KINDS, type DeedKind } from "./companion-values-logic.ts";
 import { BOND_MOVES, bondClaim, bondKindLine, type BondClaim } from "./story-moves-logic.ts";
+import { ARC_MARKER } from "./tool-text.ts";
 
 export const CLAIM_KINDS = ["hit", "miss", "dies", "downed", "amount", "cast", "fight_start", "roll_ask", "aside", "speaker", "turn_over", "deed", "bond"] as const;
 export type ClaimKind = (typeof CLAIM_KINDS)[number];
@@ -168,7 +169,7 @@ const KIND_LINES: Record<Exclude<ClaimKind, "bond">, string> = {
   aside:
     '{"kind":"aside","quote":Q}: the narrator steps out of the story to talk to itself about its own work: what it will do, check, look up or set up next, or the game\'s bookkeeping that work waits on ("The quay is not on the map yet.", "I\'ll check how the table records that first."). Unlike the other kinds it is not about what happens in the story. One claim per such sentence; quote is copied from that one sentence. Never for: any character\'s words, however they are written (quoted in any style, a letter, an inscription, a song, a voice in someone\'s head); an out-of-character answer to a player; a question or an offer to the players ("What do you do?", "Let me know if you search the boat."); the story itself, even told by a narrator who says "I" because the table asked for one.',
   turn_over:
-    '{"kind":"turn_over","quote":Q}: the narration says the acting character\'s own turn is over now, or hands the turn to whoever acts next ("Your turn ends.", "It is now Bram\'s turn.", "The goblins act next."); in a player\'s words, that they end their turn ("...then I end my turn.", "That\'s my turn."). Never for: a question, whether about what they do next or about ending the turn ("Do you use your last step or end your turn here?"); an offer of what they could still do; a turn that ends only later or not yet ("Don\'t end my turn yet.", "Before I end my turn I cast Web."); an action taken on its own, such as an attack, a spell, a Dash or a Dodge, since movement and a bonus action can still follow it.',
+    '{"kind":"turn_over","quote":Q}: the narration says the acting character\'s own turn is over now, or hands the turn to whoever acts next ("Your turn ends.", "It is now Bram\'s turn.", "The goblins act next."); in a player\'s words, that they end their turn ("...then I end my turn.", "That\'s my turn."). Never for: a question, whether about what they do next or about ending the turn ("Do you use your last step or end your turn here?"); an offer of what they could still do; a turn that ends only later or not yet ("Don\'t end my turn yet.", "Before I end my turn I cast Web."); an action or a bonus action taken on its own, such as an attack, a spell, Second Wind, a Dash or a Dodge, since movement and the rest of the turn can still follow it.',
   deed: `{"kind":"deed","actor":PARTY_REF,"deed":DEED,"quote":Q}: a party character commits one of these deeds now. DEED is one of: murder_helpless (kills someone who cannot fight back: a prisoner, the bound, the surrendered, the sleeping), torture, theft_from_poor, necromancy (raises or commands the dead), desecration (of graves, the dead or a holy place), slaving (takes, sells or keeps slaves), cruelty, betrayal (of an ally), broke_word, mercy (spares a beaten foe who could be killed), laid_to_rest (buries or gives rites to the dead), freed_captives (sets prisoners, slaves or hostages free), upheld_law (hands a wrongdoer to the law instead of killing, freeing or selling them). Never for a threat, a plan, a deed someone else does, or killing an enemy who is still fighting.`,
   speaker:
     '{"kind":"speaker","ref":SPEAKER_REF,"quote":Q}: the one claim about quoted dialogue, saying only who speaks a line of it; quote is copied from inside that line\'s quotation marks. Only when the words around the line tie it to one listed person: a tag that names them or one of their other names, the person the narration is about just before or after it, or a word like "she" that points back to them. Leave the line out when its tag names nobody listed ("a guard calls", "you say"), when it answers the line before with no tag of its own, or when you would be guessing: a line left out stays the narrator\'s, and a line given to the wrong person is a mistake. One claim per quoted line.',
@@ -201,6 +202,21 @@ export function englishEndsTurn(text: string): boolean {
     const asks = /^[^.!;\n]*\?/.test(text.slice(match.index + match[0].length));
     return !asks && !ENGLISH_NOT_YET.test(clause);
   });
+}
+
+// A player's English words that only declare what their character does: an
+// action, a bonus action or a feature, with no word that ends the turn ("I
+// use Second Wind as a bonus action."). The helper model read that line as
+// the end of the fighter's turn, the enemies went, and the off-hand attack
+// was never asked for (issue 966); the reader is told never to read an
+// action taken on its own as one. A reader's turn_over claim on such a quote
+// ends nothing. Words in another language, or an English phrasing the
+// pattern above does not hold ("Over to the goblin."), stay the reader's.
+const ENGLISH_DECLARES = /\b(?:i|i['’]ll|i will)\s+(?:(?:also|then|now|quickly)\s+)?(?:use|attack|cast|take|drink|dodge|dash|disengage|hide|help|shove|grapple|throw|swing|strike|stab|slash|shoot|fire|move|step|run|activate|draw|ready|heal|channel|rage|pray)\b|\bbonus action\b/i;
+const ENGLISH_TURN_WORDS = /\b(?:turn|done|finish(?:ed|es)?|over|pass(?:es|ing)?|end(?:s|ed|ing)?|nothing (?:else|more)|that['’]?s (?:it|all))\b/i;
+
+export function englishOnlyDeclares(quote: string): boolean {
+  return ENGLISH_DECLARES.test(quote) && !ENGLISH_TURN_WORDS.test(quote);
 }
 
 // A player's English words that name the end of their turn only to keep it
@@ -263,9 +279,10 @@ SKILL is one of: ${skillIds.join(", ")}.
 Rules:
 ${
     bonds
-      ? `- A passage headed "Player's words" holds what each player wrote this turn, after their character's name: it is read only for turn_over and bond, and there what the player says or does toward someone is a move their character makes now. Every other kind comes from the narration alone. In the narration, "you" is the party character whose player wrote.`
+      ? `- A passage headed "Player's words" holds what each player wrote this turn, after their character's name: it is read only for turn_over and bond, and there what the player says or does toward someone is a move their character makes now. Every other kind comes from the narration alone.`
       : `- A passage headed "Player's words" is asked only for turn_over: there the player's own word that their turn ends is the claim.`
   }
+- In the narration, "you" is a party character: the one whose player wrote, or the only one when the party has one ("the guard's blade bites into you" is a hit on them). When the passage does not make clear which, leave a claim on "you" out.
 - A claim only for what the narrator states as a fact happening now. Never for:
   - anything inside quoted dialogue, numbers included${bonds ? " (a bond excepted: a move or an answer made in words counts)" : ""};
   - what a character reports, boasts, swears or claims ("the innkeeper insists the boar was slain" is no death);
@@ -378,6 +395,10 @@ export type ClaimContext = {
   creatureRefs: ReadonlySet<string>;
   // Party character id to name.
   party: ReadonlyMap<string, string>;
+  // In a running fight, a party fighter's ref (their sheet id, or the key the
+  // guard gives them as a creature) to that key: a blow on one of the party
+  // is checked like a blow on an enemy (issue 931).
+  partyKeys?: ReadonlyMap<string, string>;
   // Every leveled spell the spell data knows, normalized (cantrips cost
   // nothing, so a cast of one proves nothing).
   leveledSpells: ReadonlySet<string>;
@@ -446,8 +467,13 @@ export function checkClaims(raw: readonly unknown[], context: ClaimContext): Nar
         // A blow on a creature the turn attacked is checked against the roll;
         // one on a creature of the fight that no tool touched is a blow the
         // prose alone resolved (engine-boundary.ts unrolledBlow).
-        if (context.attackRefs.has(claim.target) || context.creatureRefs.has(claim.target)) {
-          kept.push(claim);
+        // A blow on one of the party is filed under the key their creature
+        // ref carries, whichever of their refs the reader copied.
+        {
+          const target = context.partyKeys?.get(claim.target) ?? claim.target;
+          if (context.attackRefs.has(target) || context.creatureRefs.has(target) || context.partyKeys?.has(target)) {
+            kept.push({ ...claim, target });
+          }
         }
         break;
       case "dies":
@@ -592,11 +618,12 @@ export function withoutSentences(text: string, quotes: readonly string[]): strin
 // its own input format echoed back ("Bram | attempt to ask the merchant..."),
 // a table note copied out, and sentences about tool calls and corrections
 // ("I will correct this by calling the necessary tool to resolve the attack
-// properly"). The phrasings are English, read only at an English table; the
+// properly"), and about the story arc in plain words ("The current beat is
+// complete.", issue 941). The phrasings are English, read only at an English table; the
 // reader's asides cover every language. A sentence holding a quotation is
 // speech and is never taken.
 const ENGLISH_META_SENTENCE =
-  /\btool[ -]?calls?\b|\b(?:the|this|a) tool'?s? (?:output|result)s?\b|\bcalling the (?:necessary |right |appropriate |correct )?tools?\b|\bnarrate the results?\b|\bunwarranted assumption\b|\bmy (?:previous|last|earlier) (?:response|reply|narration|message)\b/i;
+  /\btool[ -]?calls?\b|\b(?:the|this|a) tool'?s? (?:output|result)s?\b|\bcalling the (?:necessary |right |appropriate |correct )?tools?\b|\bnarrate the results?\b|\bunwarranted assumption\b|\bmy (?:previous|last|earlier) (?:response|reply|narration|message)\b|\bstory beats?\b|\b(?:the|this) (?:current |active |next )?beat is (?:now )?(?:complete|completed|done|finished)\b/i;
 const ECHOED_LINE = /^[ \t]*(?:\[[^\]\n]{1,80}\|\s*attempt\][^\n]*|[^\n|[\]]{1,60}\s\|\s*attempt\b[^\n]*|\[Table note\][^\n]*)$/gim;
 // The board squares a small model (Qwen3.5 9B) copied into the story,
 // "(7,13)": the board shows them; the prose never needs them. The turn order
@@ -607,7 +634,9 @@ const GRID_SQUARE = /\(\s*\d{1,3}\s*,\s*\d{1,3}\s*\)/;
 export function metaQuotes(text: string, language: TableLanguage): string[] {
   const quotes = [...text.matchAll(ECHOED_LINE)].map((match) => match[0].trim());
   for (const match of text.matchAll(/[^.!?\n]+[.!?]*/g)) {
-    if (((language === "english" && ENGLISH_META_SENTENCE.test(match[0])) || GRID_SQUARE.test(match[0])) && !/["\u201c\u201d\u00ab\u00bb]/.test(match[0])) {
+    // The story arc's markers go at every table, quoted or not: no one in a
+    // story says "[NOW]" (tool-text.ts ARC_MARKER, issue 941).
+    if (ARC_MARKER.test(match[0]) || (((language === "english" && ENGLISH_META_SENTENCE.test(match[0])) || GRID_SQUARE.test(match[0])) && !/["\u201c\u201d\u00ab\u00bb]/.test(match[0]))) {
       quotes.push(match[0].trim());
     }
   }

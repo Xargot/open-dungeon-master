@@ -408,12 +408,14 @@ ODMRender.render = function render(spec, cv) {
     }
   }
 
-  // The play board and add-on can share the same positions in tile units.
-  const placements = opt.scenery ?? ODMRender.scenery(rows, skin, assets.catalogue, seed, opt.props, opt.dressing, opt.decals && !low);
+  // 8. Dressing and 9. scatter decals use the same seeded positions a view
+  // can draw in 3D. The painter still chooses among pictures it could load.
+  const placements = scenery(rows, skin, {
+    objects: assets.catalogue.objects.filter((p) => propImg(p.id)),
+    decals: assets.catalogue.decals.filter((d) => assets.decals[d.id]),
+  }, seed, { props: opt.props, dressing: opt.dressing, decals: opt.decals && !low });
   for (const item of placements) {
-    if (item.section !== "props") continue;
-    const img = propImg(item.id);
-    if (img) drawProp(img, item.x * CELL, item.y * CELL, item.size * CELL, item.rotation);
+    if (item.section === "props") drawProp(propImg(item.id), item.x * CELL, item.y * CELL, item.size * CELL, item.rotation);
   }
   // Placed stamps, at full size.
   for (const p of opt.props) {
@@ -423,11 +425,9 @@ ODMRender.render = function render(spec, cv) {
     drawProp(img, (p.x + 0.5) * CELL, (p.y + 0.5) * CELL, entry.span * 1.15 * CELL, p.rot || 0, { outline: 1.6 });
   }
 
-  // 9. Scatter decals: small loose things on open ground.
-  if (opt.decals && !low) for (const item of placements) {
+  for (const item of placements) {
     if (item.section !== "decals") continue;
     const img = assets.decals[item.id];
-    if (!img) continue;
     ctx.save();
     ctx.translate(item.x * CELL, item.y * CELL);
     ctx.rotate(item.rotation);
@@ -555,18 +555,19 @@ function dressingPool(skin, objects) {
 }
 ODMRender.dressingPool = dressingPool;
 
-// Cosmetic placements only. Coordinates and sizes are in tile units.
-ODMRender.scenery = function (rows, skin, catalogue, seed, reserved, dressing, decals) {
+// Cosmetic positions in square units, independent of the drawing surface.
+// Leave doorways and narrow corridors free. A stamp reserves its space first.
+function scenery(rows, skin, catalogue, seed, { props = [], dressing = true, decals = true } = {}) {
   const H = rows.length, W = rows[0]?.length ?? 0;
   const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? "#" : rows[y][x]);
   const rnd = (x, y, s) => hash(x + seed * 7, y + seed * 13, s);
   const placements = [];
-  const taken = new Set(), key = (x, y) => `${x},${y}`;
-  for (const p of reserved) {
-    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) taken.add(key(p.x + a, p.y + b));
-  }
-  const pool = dressingPool(skin, catalogue.objects);
   if (dressing) {
+    const taken = new Set(), key = (x, y) => `${x},${y}`;
+    for (const p of props) {
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) taken.add(key(p.x + a, p.y + b));
+    }
+    const pool = dressingPool(skin, catalogue.objects);
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const ch = rows[y][x];
@@ -590,33 +591,37 @@ ODMRender.scenery = function (rows, skin, catalogue, seed, reserved, dressing, d
             break;
           }
         }
-        let cx = (x + 0.5), cy = (y + 0.5);
+        let cx = x + 0.5, cy = y + 0.5;
         if (kind === "wall") {
-          const push = 0.16;
-          if (N) cy -= push;
-          if (S) cy += push;
-          if (E) cx += push;
-          if (Wd) cx -= push;
+          if (N) cy -= 0.16;
+          if (S) cy += 0.16;
+          if (E) cx += 0.16;
+          if (Wd) cx -= 0.16;
         }
         cx += (rnd(x, y, 9) - 0.5) * 0.14;
         cy += (rnd(x, y, 10) - 0.5) * 0.14;
-        const ang = prop.align ? (N || S ? 0 : Math.PI / 2) + (rnd(x, y, 12) - 0.5) * 0.12 : rnd(x, y, 13) * Math.PI * 2;
+        const rotation = prop.align ? (N || S ? 0 : Math.PI / 2) + (rnd(x, y, 12) - 0.5) * 0.12 : rnd(x, y, 13) * Math.PI * 2;
         const size = Math.min(prop.span, 1.2) * 1.3 * (0.9 + rnd(x, y, 14) * 0.2);
-        placements.push({ section: "props", id: prop.id, x: cx, y: cy, size, rotation: ang });
+        placements.push({ section: "props", id: prop.id, x: cx, y: cy, size, rotation });
         taken.add(key(x, y));
       }
     }
   }
-  if (decals) {
-    const scatter = catalogue.decals.filter(d => d.shape === "scatter" && d.on.includes(skin.ground));
-    if (scatter.length) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      if (rows[y][x] !== "." || rnd(x, y, 601) > skin.scatterDecalDensity) continue;
-      const d = scatter[Math.floor(rnd(x, y, 602) * scatter.length)];
-      placements.push({ section: "decals", id: d.id, x: x + rnd(x, y, 604), y: y + rnd(x, y, 605),
-        size: 0.45 + rnd(x, y, 603) * 0.35, rotation: rnd(x, y, 606) * Math.PI * 2, blend: d.blend });
+  const scatter = decals ? catalogue.decals.filter((d) => d.shape === "scatter" && d.on.includes(skin.ground)) : [];
+  if (scatter.length) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (rows[y][x] !== "." || rnd(x, y, 601) > skin.scatterDecalDensity) continue;
+        const d = scatter[Math.floor(rnd(x, y, 602) * scatter.length)];
+        placements.push({
+          section: "decals", id: d.id, x: x + rnd(x, y, 604), y: y + rnd(x, y, 605),
+          size: 0.45 + rnd(x, y, 603) * 0.35, rotation: rnd(x, y, 606) * Math.PI * 2, blend: d.blend,
+        });
+      }
     }
   }
   return placements;
-};
+}
+ODMRender.scenery = scenery;
 
 export { ODMRender };

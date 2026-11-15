@@ -5,9 +5,8 @@ import type { TokenIntent } from "@/lib/battlemap/intent";
 import type { PlayerMapView } from "@/lib/battlemap/view-types";
 import type { Gender } from "@/lib/gender";
 import { storedSex, type Sex } from "@/lib/actor-sex-logic";
-import { boardScenery } from "@/lib/battlemap/render/painted";
-import type { SceneryPlacement } from "@/lib/battlemap/render/renderer.js";
 import type { Ruler } from "@/lib/battlemap/board-move";
+import type { SceneryPlacement } from "@/lib/battlemap/render/renderer.js";
 
 // The board view contract: what the table page posts into an addon's
 // sandboxed frame, and what it accepts back (docs/addons/extension-points.md,
@@ -42,8 +41,9 @@ export type BoardSnapshotToken = {
   y: number;
   // Squares per side: 1 for medium, 2 for large, and so on.
   size: number;
-  mine: boolean;
+  side?: "party" | "foe";
   walkPath?: Array<{ x: number; y: number }>;
+  mine: boolean;
   down: boolean;
   hidden: boolean;
   elevation: "flying" | "burrowing" | null;
@@ -149,6 +149,7 @@ export function boardSnapshot(
     looks?: Map<string, BoardLook>;
     intents?: TokenIntent[] | null;
     moveAim?: { x: number; y: number } | null;
+    scenery?: SceneryPlacement[];
     assetsUrl?: string;
     // The view's option fields and what this device chose for them.
     viewOptions?: { fields: OptionField[]; values: unknown };
@@ -179,8 +180,9 @@ export function boardSnapshot(
       x: token.x,
       y: token.y,
       size: view.tokenFootprint[token.id] ?? 1,
+      ...(token.side === "party" || token.side === "foe" ? { side: token.side } : {}),
+      ...(token.walkPath && !options.appearance.reducedMotion ? { walkPath: token.walkPath } : {}),
       mine: token.mine,
-      ...(addonId === "comdat-tabletop" && !options.appearance.reducedMotion && token.walkPath ? { walkPath: token.walkPath } : {}),
       down: token.down,
       hidden: token.hidden,
       elevation: view.tokenElevation[token.id] ?? null,
@@ -199,7 +201,7 @@ export function boardSnapshot(
     budgetLeft: view.budgetLeft,
     moveAim: options.moveAim ?? null,
     hasBackdrop: Boolean(view.backdrop),
-    ...(addonId === "comdat-tabletop" ? { scenery: boardScenery(view, options.genre) } : {}),
+    ...(!view.backdrop && options.scenery ? { scenery: options.scenery } : {}),
     view: own ? { data: own.data, files: own.files.map(({ name, type, bytes }) => ({ name, type, bytes })) } : null,
     assetsUrl: options.assetsUrl ?? `/api/addons/${addonId}/assets/`,
     options: options.viewOptions ? normalizeOptionValues(options.viewOptions.fields, options.viewOptions.values) : {},
@@ -308,11 +310,12 @@ export function nativeBoardHud(hud: BoardHud): BoardHud {
 }
 
 export function offeredBoardControl(hud: Pick<BoardHud, "controls" | "panel" | "pending">, id: BoardControlId, value?: string): BoardControl | null {
-  const control = (hud.panel ? hud.panel.controls : hud.controls).find(entry => entry.id === id);
-  if (!control || control.disabled !== null || hud.pending) return null;
-  if (control.options && !control.options.some(option => option.value === value && option.disabled === null)) return null;
-  if (control.input && (typeof value !== "string" || value.length > 200)) return null;
-  return control;
+  if (hud.pending) return null;
+  return (hud.panel?.controls ?? hud.controls).find(entry =>
+    entry.id === id && entry.disabled === null
+    && (!entry.options || entry.options.some(option => option.value === value && option.disabled === null))
+    && (!entry.input || (typeof value === "string" && value.length <= 200)),
+  ) ?? null;
 }
 export type HostMessage =
   | { odm: number; type: "battlefield-ui"; mapId: string; revision: number; hud: BoardHud }

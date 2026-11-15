@@ -20,6 +20,7 @@ import { resourceName } from "@/lib/srd/class-resources";
 import { lowestSlot, type HandCard, type HandCardType, type HandCost } from "@/lib/battlemap/hand-core";
 import { END_TURN_ID, isUrgentCard } from "@/lib/battlemap/hand-layout";
 import { textKey } from "@/lib/language/text-logic";
+import { cardIcon } from "@/lib/battlemap/spell-glyph-logic";
 
 export const GROUP_FOLD_MIN = 4;
 // A group's own search box shows once it holds more cards than this.
@@ -163,6 +164,13 @@ function spellSections(cards: HandCard[], sheet: Pick<CharacterSheet, "spellcast
   }));
 }
 
+export function handBoardChoices(cards: HandCard[], mode: "attack" | "cast"): Array<Pick<HandGroupSection, "label" | "cards">> {
+  const playable = cards.filter(card => card.disabled === null && !card.spent && !card.compose &&
+    (mode === "attack" ? card.intent.card === "attack" : card.intent.card === "spell" && !card.fromItem));
+  if (mode === "cast") return spellSections(playable, null);
+  return playable.length ? [{ label: "Attack", cards: playable }] : [];
+}
+
 // Items by the item, each with what it has left, as Spells goes by level with its
 // slots: a Staff of the Magi deals 19 cards, and its charges are the choice. With
 // nothing cast from an item, the group is the one list it always was.
@@ -222,7 +230,7 @@ function makeGroup(key: HandGroupKey, cards: HandCard[], sheet: Pick<CharacterSh
     sections,
     left,
     tone,
-    icons: [...playable, ...cards.filter((card) => card.disabled)].slice(0, 3).map((card) => card.icon),
+    icons: [...playable, ...cards.filter((card) => card.disabled)].slice(0, 3).map(cardIcon),
     costs: PIP_COSTS.filter((cost) => cards.some((card) => card.cost === cost)).map((cost) => ({
       cost,
       open: playable.some((card) => card.cost === cost),

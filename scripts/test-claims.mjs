@@ -148,7 +148,7 @@ await test("A turn handed on in a question ends nothing, at a table in any langu
   const system = readerSystem([], false);
   assert.match(system, /"kind":"turn_over".*Never for: a question, whether about what they do next or about ending the turn/);
   assert.match(system, /"kind":"turn_over".*a turn that ends only later or not yet/);
-  assert.match(system, /"kind":"turn_over".*an action taken on its own, such as an attack, a spell, a Dash or a Dodge/);
+  assert.match(system, /"kind":"turn_over".*an action or a bonus action taken on its own, such as an attack, a spell, Second Wind, a Dash or a Dodge/);
 });
 
 await test("The request lists the kinds, the refs and the narration; the instructions name every skill id.", () => {
@@ -223,6 +223,23 @@ await test("A claim quoting words the narration does not hold never acts; a quot
   assert.deepEqual(checkClaims([{ kind: "hit", target: "goblin", quote: "Mira kills the goblin" }], context(text, ALL)), []);
   assert.equal(checkClaims([{ kind: "hit", target: "goblin", quote: "colpisce   il GOBLIN" }], context(text, ALL)).length, 1);
   assert.equal(checkClaims([{ kind: "fight_start", quote: '"Morirai", sibila' }], context(text, ALL)).length, 1);
+});
+
+// Issue 931: the guard's blow on the hero was no claim at all, the hero being
+// only a party ref, and "you" a party character only on a read for bonds.
+await test("In a fight a hit on one of the party is kept under their creature key, whether the reader copied their sheet id or that key; out of one it is dropped.", () => {
+  const text = "The guard's blade bites into you, and Mira staggers.";
+  const fight = { ...context(text, ALL), partyKeys: new Map([[mira.id, "mira"], ["mira", "mira"]]) };
+  assert.deepEqual(checkClaims([{ kind: "hit", target: mira.id, quote: "The guard's blade bites into you" }], fight), [{ kind: "hit", target: "mira", quote: "The guard's blade bites into you" }]);
+  assert.deepEqual(checkClaims([{ kind: "miss", target: "mira", quote: "The guard's blade bites into you" }], fight), [{ kind: "miss", target: "mira", quote: "The guard's blade bites into you" }]);
+  assert.deepEqual(checkClaims([{ kind: "downed", target: mira.id, quote: "Mira staggers" }], fight), [], "a drop is still a creature's alone");
+  assert.deepEqual(checkClaims([{ kind: "hit", target: mira.id, quote: "The guard's blade bites into you" }], context(text, ALL)), [], "no fight, no party targets");
+});
+
+await test("Every narration read is told who \"you\" is, with bonds asked or not.", () => {
+  for (const system of [readerSystem([], false), readerSystem([], false, true, "kindness"), readerSystem([], true, true, "romance")]) {
+    assert.match(system, /In the narration, "you" is a party character: the one whose player wrote, or the only one when the party has one/);
+  }
 });
 
 await test("An aside is asked only when the gate says so; its sentences leave the prose and the rest stays, and a passage that was all aside leaves nothing.", () => {
@@ -501,6 +518,15 @@ await test("The reader gives a player's character a line only where the words sa
   const tobin = { kind: "pc", id: ally.id, name: "Tobin" };
   assert.deepEqual(stored('Fella nods to Tobin. "Agreed."', [{ line: "Agreed.", speaker: tobin }]), [["Agreed.", "Tobin"]], "a companion takes the reader's word");
   assert.deepEqual(stored('Fella nods to Tobin. "Agreed."', [{ line: "Agreed.", speaker: { kind: "npc", id: "", name: "Tobin" } }]), [["Agreed.", "Tobin"]], "a companion the reply itself added");
+  // Issue 965: a stranger's line given to the companion who spoke before it.
+  const scene = 'Tobin stands beside you. "They\'re coming," he whispers.\n\nThe lead cultist raises a hand, his voice a low, guttural growl. "The heir. Give us the fragment, and you may live."';
+  const heir = "The heir. Give us the fragment, and you may live.";
+  assert.deepEqual(
+    stored(scene, [{ line: "They're coming,", speaker: tobin }, { line: heir, speaker: tobin }]),
+    [["They're coming,", "Tobin"]],
+    "the cultist's line stays the narrator's",
+  );
+  assert.deepEqual(stored(scene, [{ line: heir, speaker: { kind: "npc", id: gerda.id, name: "Gerda" } }]), [], "nor does an NPC nobody named there take it");
 });
 
 await test("A call that names the character as its actor, a healer or a caster among them, is a ruling for them.", () => {

@@ -927,7 +927,8 @@ await test("The model's end_turn waits for the enemies due before it; played, th
   const ended = await aiEndTurn(world, kara.id, turn);
   assert.equal(ended.ok, true, ended.error);
   assert.deepEqual(ended.result.enemiesToAct.map((enemy) => enemy.enemyId), goblins.map((goblin) => goblin.id));
-  assert.equal(ended.result.note, `Kara's turn is over. Goblin 1 and Goblin 2 act before Kara. ${ENEMY_TURNS_CUE} It is now Kara's turn (round 3).`);
+  // They close round 2, and Kara opens round 3 (issue 931).
+  assert.equal(ended.result.note, `Kara's turn is over. Goblin 1 and Goblin 2 take their turns now, the last of round 2; then round 3 begins with Kara. ${ENEMY_TURNS_CUE}`);
   assert.equal(handoff(world).turnId, turn.id, "the model's own pass is handed to it, not held");
   world.dice(1, 1);
   dmTurnEnds(world, getDmTurn(turn.id));
@@ -987,6 +988,21 @@ await test("Party down: the End Turn whose death save kills the last dying hero 
   assert.match(passed, /^Kara ends their turn\. It is now Brom's turn\./, "the pass is said first");
   assert.match(died, /Brom fails their final death save/, "then the death save that begins his turn");
   assert.match(over, /fight is lost/, "then the end");
+  // Issue 968: the End Turn runs under no GM turn, and the fight's end was
+  // written under none, so no "Revert this turn" could open it again. It is
+  // kept under the stand-in turn the loss opens, whose revert opens it.
+  // The last turn that kept the fight's row: the one its end was written in.
+  const kept = getDatabase().prepare("SELECT turn_id FROM turn_rows WHERE tbl = 'encounters' AND row_id = ? ORDER BY rowid DESC LIMIT 1").get(encounterId);
+  assert.ok(kept?.turn_id, "the fight's end was kept under no turn");
+  world.signIn(world.owner);
+  const handler = await world.route("campaigns/[campaignId]/audit/revert-turn");
+  const response = await handler.POST(
+    new Request("http://test/", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ turnId: kept.turn_id, confirm: true }) }),
+    { params: Promise.resolve({ campaignId: world.campaignId }) },
+  );
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const after = getDatabase().prepare("SELECT status, outcome FROM encounters WHERE id = ?").get(encounterId);
+  assert.equal(world.encounter()?.id, encounterId, `reverting the loss did not open the fight again: ${JSON.stringify(await response.clone().json())} ${JSON.stringify(after)}`);
 });
 
 await test("Party down: the DM's step forward whose death save kills the last dying hero ends the fight", async () => {
@@ -1334,9 +1350,14 @@ const model = await fakeModel();
 const gameState = (request) => request.messages.map((message) => message.content ?? "").join("\n\n");
 const WAITING = (name) =>
   `Waiting on ${name}'s player: they have not declared an action this turn. Set the scene and ask what ${name} does; the server refuses any action or end_turn for ${name} until they do.`;
-const DUE = (enemies, name, round) => {
+// `closing`: the enemies are the last of the round before `round`, and the
+// hero opens `round` (issue 931: "act before" had them go first in it).
+const DUE = (enemies, name, round, closing = false) => {
   const one = enemies.length === 1;
-  return `${enemies.map((enemy) => `${enemy.displayName} [enemyId=${enemy.id}]`).join(" and ")} ${one ? "acts" : "act"} before ${name}; the turn passed ${one ? "it" : "them"} outside your turn. ${ENEMY_TURNS_CUE} ${name}'s turn comes after ${one ? "its" : "theirs"}: a new turn in round ${round}, its action, bonus action and movement unspent.`;
+  const listed = enemies.map((enemy) => `${enemy.displayName} [enemyId=${enemy.id}]`).join(" and ");
+  return closing
+    ? `${listed} ${one ? "takes its turn" : "take their turns"} now, the last of round ${round - 1}; the turn passed ${one ? "it" : "them"} outside your turn. ${ENEMY_TURNS_CUE} Then round ${round} begins with ${name}: a new turn, its action, bonus action and movement unspent.`
+    : `${listed} ${one ? "acts" : "act"} before ${name}; the turn passed ${one ? "it" : "them"} outside your turn. ${ENEMY_TURNS_CUE} ${name}'s turn comes after ${one ? "its" : "theirs"}: a new turn in round ${round}, its action, bonus action and movement unspent.`;
 };
 const lastTurnNote = (world) => listRecentMessages(world.campaignId, 200).filter((message) => message.glyph === "cue-battle").at(-1)?.content;
 const backstopNotes = (world) => listRecentMessages(world.campaignId, 200).filter((message) => message.content.startsWith("Skipped enemy turns"));
@@ -1373,7 +1394,7 @@ await test("End Turn wrapping past two goblins: its note and the DM turn it wake
   const goblins = world.enemies();
   assert.equal(lastTurnNote(world), "Kara ends their turn. It is Kara's turn again. Goblin 1 and Goblin 2 act before Kara.", "the note says what the banner says");
   const state = await wokenTurn(world);
-  assert.ok(state.includes(DUE(goblins, "Kara", 2)), "GAME STATE names the goblins due");
+  assert.ok(state.includes(DUE(goblins, "Kara", 2, true)), "GAME STATE names the goblins due, closing round 1");
   assert.ok(!state.includes("Waiting on Kara's player"), "and does not ask what Kara does");
   // The scripted turn played nobody: the backstop did, as before.
   assert.deepEqual(due(world), []);
@@ -1506,7 +1527,7 @@ await test("The lead's skip, a companion leaving on its own turn and a mid-round
     assert.equal(tools.skipCurrentTurn(world.campaignId), true);
     assert.equal(lastTurnNote(world), "The party lead skipped Kara's turn. It is Kara's turn again. Goblin acts before Kara.");
     const state = await wokenTurn(world);
-    assert.ok(state.includes(DUE(world.enemies(), "Kara", 2)), "the lead's skip");
+    assert.ok(state.includes(DUE(world.enemies(), "Kara", 2, true)), "the lead's skip");
     assert.ok(!state.includes("Waiting on Kara's player"));
   }
   {

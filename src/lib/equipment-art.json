@@ -1,0 +1,63 @@
+{
+  "cyberpunk": [
+    "weapon-dagger",
+    "gear-forgery-kit"
+  ],
+  "dark_fantasy": [
+    "weapon-longsword",
+    "armor-chain-shirt",
+    "gear-manacles",
+    "weapon-dagger",
+    "armor-leather",
+    "gear-herbalism-kit",
+    "armor-shield",
+    "weapon-flail",
+    "weapon-whip",
+    "gear-lute",
+    "weapon-club",
+    "gear-poisoners-kit"
+  ],
+  "horror": [
+    "armor-leather",
+    "gear-holy-symbol",
+    "weapon-dagger",
+    "gear-component-pouch",
+    "weapon-longsword",
+    "armor-chain-shirt"
+  ],
+  "mystery": [
+    "weapon-club",
+    "armor-leather",
+    "weapon-dagger",
+    "weapon-quarterstaff",
+    "gear-disguise-kit",
+    "weapon-warhammer",
+    "armor-studded-leather"
+  ],
+  "post_apocalyptic": [
+    "armor-leather",
+    "gear-tinkers-tools",
+    "weapon-battleaxe",
+    "armor-hide",
+    "weapon-spear",
+    "weapon-dagger",
+    "weapon-mace",
+    "gear-herbalism-kit",
+    "weapon-shortbow",
+    "gear-quiver",
+    "gear-arrows"
+  ],
+  "steampunk": [
+    "weapon-light-hammer",
+    "gear-tinkers-tools",
+    "weapon-rapier",
+    "armor-leather",
+    "gear-navigators-tools",
+    "weapon-dagger",
+    "gear-alchemists-supplies",
+    "weapon-quarterstaff",
+    "weapon-warhammer",
+    "armor-shield",
+    "armor-chain-mail"
+  ]
+}

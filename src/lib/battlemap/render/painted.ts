@@ -11,10 +11,8 @@
 // already route to the host with the session token, so the same code paints
 // in a browser tab and in the apps' native screens.
 import { ODMRender, type RenderAssets, type SceneryPlacement } from "@/lib/battlemap/render/renderer.js";
-import type { PlayerMapView } from "@/lib/battlemap/view-types";
-import propCatalogue from "../../../../public/assets/props/manifest.json";
-import tileCatalogue from "../../../../public/assets/tiles/manifest.json";
 import { mapSkinKey, resolveSkin, type MapSkin, type Skin } from "@/lib/battlemap/skins";
+import type { PlayerMapView } from "@/lib/battlemap/view-types";
 
 export type TileEntry = {
   id: string;
@@ -52,8 +50,6 @@ export type PaintRequest = {
   cell?: number;
   // Stamps the DM placed, drawn at full size over the dressing.
   stamps?: PaintStamp[];
-  scenery?: SceneryPlacement[];
-  sceneryKey?: string;
 };
 
 let manifests: Promise<Manifests | null> | null = null;
@@ -68,7 +64,7 @@ async function readJson<T>(path: string): Promise<T | null> {
   }
 }
 
-function loadManifests(): Promise<Manifests | null> {
+export function loadManifests(): Promise<Manifests | null> {
   manifests ??= (async () => {
     const [tiles, props] = await Promise.all([
       readJson<{ tiles: TileEntry[] }>("/assets/tiles/manifest.json"),
@@ -172,27 +168,15 @@ function seedOf(key: string): number {
   return (h >>> 0) % 100000;
 }
 
-const tileCategories = new Map(tileCatalogue.tiles.map(tile => [tile.id, tile.category]));
-let lastScenery: { key: string; placements: SceneryPlacement[] } | undefined;
-
-export function sceneryPropKey(view: PlayerMapView | null): string {
-  return (view?.tokens ?? []).filter(token => token.kind === "prop" && !token.hidden)
-    .map(({ x, y }) => [x, y].join(",")).sort().join(";");
+function terrainRows({ terrain, width, height }: Pick<PaintRequest, "terrain" | "width" | "height">): string[] {
+  return Array.from({ length: height }, (_, y) => terrain.slice(y * width, (y + 1) * width).padEnd(width, " "));
 }
 
-export function boardScenery(view: PlayerMapView, genre: string | null | undefined, propKey = sceneryPropKey(view)): SceneryPlacement[] {
+export function boardScenery(view: Pick<PlayerMapView, "mapId" | "terrain" | "width" | "height" | "theme" | "skin" | "backdrop">,
+  genre: string | null | undefined, all: Pick<Manifests, "objects" | "decals" | "categories">): SceneryPlacement[] {
   if (view.backdrop) return [];
-  const key = JSON.stringify([view.mapId, view.width, view.height, view.terrain, view.theme, genre, mapSkinKey(view.skin), propKey]);
-  if (lastScenery?.key === key) return lastScenery.placements;
-  const skin = resolveSkin(genre, view.theme, view.skin, tileCategories);
-  const rows = Array.from({ length: view.height }, (_, y) => view.terrain.slice(y * view.width, (y + 1) * view.width));
-  const reserved = propKey ? propKey.split(";").map(point => {
-    const [x, y] = point.split(",").map(Number);
-    return { x, y };
-  }) : [];
-  const placements = ODMRender.scenery(rows, skin, propCatalogue, seedOf(view.mapId), reserved, true, true);
-  lastScenery = { key, placements };
-  return placements;
+  const skin = resolveSkin(genre, view.theme, view.skin, all.categories);
+  return ODMRender.scenery(terrainRows(view), skin, all, seedOf(view.mapId));
 }
 
 // Pixels per square. The picture is stretched to the board by the SVG, so this
@@ -215,7 +199,6 @@ export function paintKey(request: PaintRequest): string {
     request.dressing === false ? "bare" : "",
     request.cell ?? "",
     (request.stamps ?? []).map((stamp) => `${stamp.x},${stamp.y},${stamp.id}`).join(";"),
-    request.sceneryKey ?? "",
     request.terrain,
   ].join("|");
 }
@@ -232,10 +215,7 @@ export async function paintCanvas(request: PaintRequest): Promise<HTMLCanvasElem
   const stamps = (request.stamps ?? []).filter((stamp) => all.objects.some((object) => object.id === stamp.id));
   const assets = await assetsFor(skin, all, stamps, request.quality);
   if (!Object.keys(assets.tiles).length) return null;
-  const rows: string[] = [];
-  for (let y = 0; y < request.height; y++) {
-    rows.push(request.terrain.slice(y * request.width, (y + 1) * request.width).padEnd(request.width, " "));
-  }
+  const rows = terrainRows(request);
   const canvas = document.createElement("canvas");
   ODMRender.render(
     {
@@ -252,7 +232,6 @@ export async function paintCanvas(request: PaintRequest): Promise<HTMLCanvasElem
         quality: request.quality,
         ambient: "bright",
         props: stamps,
-        scenery: request.scenery,
       },
     },
     canvas,

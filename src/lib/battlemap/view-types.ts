@@ -51,6 +51,7 @@ export type PlayerMapView = {
     x: number;
     y: number;
     mine: boolean;
+    // Recent confirmed ground walk from origin through the token's position.
     walkPath?: Array<{ x: number; y: number }>;
     // PC at 0 HP: rendered downed, never removed from the map.
     down: boolean;
@@ -87,6 +88,9 @@ export type PlayerMapView = {
   moves?: {
     jumpFeet: number;
     highJumpFeet: number;
+    // A die a jump adds feet from (a satyr's Mirthful Leaps: 8), rolled as
+    // the jump is made. Absent with none, and from an older server.
+    jumpDie?: number;
     runningStart: boolean;
     drag: { factor: 1 | 2; names: string[] } | null;
   };

@@ -28,21 +28,20 @@ import {
   gendersIn,
   keyOf,
   LEAD,
-  nameAt,
   opensSentence,
-  englishPronounAt,
   QUOTE,
   QUOTE_OPEN,
   quotedText,
   sentencesOf,
   speakerMatchers,
+  strangerLines,
   subjectOf,
+  tagOf,
   wordCount,
   written,
   type Named,
   type Pointer,
   type Reading,
-  type Subject,
 } from "@/lib/dm/speech-prose";
 
 // `pc` is a character at the table (a player's, or an AI companion), and
@@ -65,39 +64,6 @@ export type SpokenLine = { line: string; speaker: Speaker };
 
 // How far a tag may run between the two halves of one split line.
 export const SPEECH_WINDOW_WORDS = 8;
-
-// The tag straight after a line that runs on into it: "...," says Marla;
-// "...", dice Marla; "...?" she asks. A line that ends its own sentence
-// has none the words can tell from an action ("Not tonight." Venn frowns.),
-// so the prose around it decides.
-function tagOf(line: string, after: string, reading: Reading): Subject | null {
-  const text = (sentencesOf(after)[0]?.text ?? "").replace(LEAD, "").trimEnd();
-  if (!text) {
-    return null;
-  }
-  const continues = /[,—–-]$/.test(line.trimEnd()) || /^\s*[,—–]/.test(after) || /^\p{Ll}/u.test(text);
-  if (!continues) {
-    return null;
-  }
-  const subject = subjectOf(text, reading, false);
-  if (subject.kind !== "other") {
-    return subject;
-  }
-  // One word, then the speaker: "says Old Pike", "dice Marla", "orders the
-  // Captain".
-  const verb = /^(\p{Ll}+)\s+/u.exec(text);
-  if (!verb) {
-    return subject;
-  }
-  const rest = text.slice(verb[0].length);
-  const found = nameAt(rest, reading, false);
-  const pronoun = englishPronounAt(rest, reading);
-  return found
-    ? { kind: "name", speaker: found.speaker, text: rest, end: found.end }
-    : pronoun
-      ? { kind: "pronoun", text: rest, end: pronoun[0].length }
-      : { kind: "other" };
-}
 
 // A sentence that hands the floor straight to the line after it: a known
 // name, a word or two, and the comma or colon before the line ("Pike
@@ -137,7 +103,16 @@ type Context = {
 // ("...," she says). A pronoun is only followed back past a sentence that
 // names somebody else as well when the passage shows it means the person
 // followed, and never when "she" and "he" both stand for the speaker.
-function lookBack(before: string, previous: Speaker | null, afterLine: boolean, context: Context, told: Pointer | null): Speaker | null {
+// `oneVoice` is true when the line's paragraph, up to it, holds the previous
+// speaker's lines and nobody else's.
+function lookBack(
+  before: string,
+  previous: Speaker | null,
+  afterLine: boolean,
+  context: Context,
+  told: Pointer | null,
+  oneVoice = false,
+): Speaker | null {
   const { reading, genders } = context;
   const sentences = sentencesOf(before);
   const last = sentences[sentences.length - 1];
@@ -159,10 +134,16 @@ function lookBack(before: string, previous: Speaker | null, afterLine: boolean, 
     let subject = subjectOf(sentences[index].text, reading);
     // The words straight after the previous line are its tag, about its
     // speaker, which a pronoun after them follows ("...," says Marla. She
-    // sits.). With nothing between, the tag settles nothing: "...," said
-    // Marla. "Fine." may be anyone's reply.
+    // sits.). With nothing between, the paragraph decides: a new speaker
+    // takes a new paragraph, so a line that carries on in a paragraph only
+    // the previous speaker has spoken in is still theirs ("...," he
+    // whispers, his voice trembling. "He was just following orders."), as
+    // it already was after a tag that opens on the name ("...," Marla says.
+    // "Fine."). The second half went to nobody (issue 943). A reply on a new
+    // paragraph may be anyone's, and so may a line in a paragraph that
+    // already holds two voices ("...," says Marla. "...," says Pike. "Who?").
     if (index === 0 && afterLine && /^[\s,—–]*\p{Ll}/u.test(sentences[0].text)) {
-      if (!chained) {
+      if (!chained && !oneVoice) {
         return null;
       }
       subject = previous ? { kind: "name", speaker: previous, text: "", end: 0 } : { kind: "other" };
@@ -231,6 +212,7 @@ function whoSaid(
   boundary: number,
   previous: Speaker | null,
   context: Context,
+  oneVoice: boolean,
 ): Speaker | null {
   const lineStart = text.lastIndexOf("\n", line.start - 1) + 1;
   const lineEnd = text.indexOf("\n", line.end);
@@ -238,7 +220,7 @@ function whoSaid(
   const stop = Math.min(lineEnd === -1 ? text.length : lineEnd, nextQuote === -1 ? text.length : line.end + nextQuote);
   const after = text.slice(line.end, stop);
   const before = text.slice(boundary, line.start);
-  const back = (told: Pointer | null) => lookBack(before, boundary > 0 ? previous : null, boundary > 0, context, told);
+  const back = (told: Pointer | null) => lookBack(before, boundary > 0 ? previous : null, boundary > 0, context, told, oneVoice);
   const tag = tagOf(line.words, after, context.reading);
   if (tag) {
     if (tag.kind === "name") {
@@ -302,20 +284,32 @@ export function attributeSpeech(
   // Who spoke the line that ended at `boundary`, for a line the tag splits
   // in two: "We ride at dawn," said Marla, "and not a moment later."
   let previous: Speaker | null = null;
+  // Who spoke each line of the current paragraph so far ("" for a line put
+  // on nobody), and where that paragraph starts.
+  let paragraph = -1;
+  let voices: string[] = [];
   for (const match of text.matchAll(QUOTE)) {
     const start = match.index;
     const end = start + match[0].length;
     const words = quotedText(match);
+    const opens = text.lastIndexOf("\n", start - 1) + 1;
+    if (opens !== paragraph) {
+      paragraph = opens;
+      voices = [];
+    }
+    const said: Speaker | null = previous;
+    const oneVoice: boolean = said !== null && voices.length > 0 && voices.every((voice) => voice === keyOf(said));
     // The tag between this line and the last one ends on a comma: the
     // sentence, and so the speaker, carries on, whoever is named next
-    // ("...," says Marla, "..." Pike spits). A full stop there settles
-    // nothing, as a reply may be anyone's.
+    // ("...," says Marla, "..." Pike spits). After a full stop the prose
+    // around the line decides (whoSaid), the paragraph's voices with it.
     const between = text.slice(boundary, start);
     const carriesOn: boolean =
       previous !== null && /,\s*$/.test(between) && wordCount(between) <= SPEECH_WINDOW_WORDS && !between.includes("\n");
-    const found: Speaker | null = carriesOn ? previous : whoSaid(text, { start, end, words }, boundary, previous, context);
+    const found: Speaker | null = carriesOn ? previous : whoSaid(text, { start, end, words }, boundary, previous, context, oneVoice);
     boundary = end;
     previous = found;
+    voices.push(found ? keyOf(found) : "");
     if (!found) {
       continue;
     }
@@ -329,6 +323,22 @@ export function attributeSpeech(
     out.push({ kind: "prose", text: text.slice(last) });
   }
   return out.filter((segment) => segment.text.trim().length > 0);
+}
+
+// The quoted lines the prose gives to somebody the table does not list, each
+// with the people its paragraph does name (speech-prose.ts strangerLines),
+// read with the same words attributeSpeech reads by. A reader's speaker for
+// such a line is held to them (speech-lines.ts modelTextLines, issue 965).
+export function unlistedSpeakerLines(
+  text: string,
+  speakers: Speaker[],
+  options: { common?: ReadonlySet<string>; englishPronouns: boolean },
+): Map<string, Set<string>> {
+  return strangerLines(text, {
+    matchers: speakerMatchers(speakers),
+    common: new Set([...(options.common ?? []), ...commonWords([text])]),
+    englishPronouns: options.englishPronouns,
+  });
 }
 
 // Who is stored as a line's speaker: who they are, never what they were

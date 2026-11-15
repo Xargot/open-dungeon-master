@@ -20,7 +20,6 @@ export type SceneryPlacement = {
 };
 
 export type RenderOptions = {
-  scenery?: SceneryPlacement[];
   grid?: boolean;
   dressing?: boolean;
   decals?: boolean;
@@ -45,5 +44,6 @@ export type RenderSpec = {
 export const ODMRender: {
   render(spec: RenderSpec, canvas: HTMLCanvasElement): void;
   dressingPool(skin: Skin, objects: unknown[]): unknown[];
-  scenery(rows: string[], skin: Skin, catalogue: RenderAssets["catalogue"], seed: number, reserved: Array<{ x: number; y: number }>, dressing: boolean, decals: boolean): SceneryPlacement[];
+  scenery(rows: string[], skin: Skin, catalogue: RenderAssets["catalogue"], seed: number,
+    options?: Pick<RenderOptions, "props" | "dressing" | "decals">): SceneryPlacement[];
 };

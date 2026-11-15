@@ -165,12 +165,28 @@ await test("The page's own errors are kept cut to size, without the address's qu
   for (let index = 0; index < 30; index += 1) ring = bundle.keepPageError(ring, bundle.cleanPageError({ message: `e${index}` }));
   assert.equal(ring.length, bundle.PAGE_ERROR_LIMIT);
   assert.equal(ring.at(-1).message, "e29");
+  // Issue 943's report: twenty ResizeObserver notices and nothing else.
+  let noisy = bundle.keepPageError([], bundle.cleanPageError({ message: "TypeError: real", where: "/campaigns/x" }));
+  for (let index = 0; index < 25; index += 1) {
+    noisy = bundle.keepPageError(noisy, bundle.cleanPageError({ message: "ResizeObserver loop completed with undelivered notifications.", where: "/campaigns/x" }));
+    noisy = bundle.keepPageError(noisy, bundle.cleanPageError({ message: "ResizeObserver loop limit exceeded", where: "/campaigns/x" }));
+  }
+  assert.deepEqual(noisy.map((entry) => entry.message), ["TypeError: real"], "the browser's layout notice is not an error");
+  for (let index = 0; index < 40; index += 1) noisy = bundle.keepPageError(noisy, bundle.cleanPageError({ message: "TypeError: loop", where: "/campaigns/x" }));
+  assert.deepEqual(noisy.map((entry) => [entry.message, entry.times]), [["TypeError: real", undefined], ["TypeError: loop", 40]], "an error thrown in a loop is one entry, counted");
+  assert.equal(bundle.cleanPageError({ message: "x", times: 40 }).times, 40, "the count survives the browser's storage");
+  assert.equal(bundle.cleanPageError({ message: "x", times: "40" }).times, undefined);
   const base = bundle.buildReportBundle({ sources: { setup }, parts: new Set(["setup"]), viewer: PLAYER, reporterUserId: "me", secrets: [] });
   assert.equal(bundle.withPageErrors(base, ring, false).pageErrors, undefined, "unticked errors went in");
   const withErrors = bundle.withPageErrors(base, [...ring, null, "junk", { message: "Bearer abcdefghijklmnop" }], true);
   assert.equal(withErrors.pageErrors.length, bundle.PAGE_ERROR_LIMIT);
   assert.ok(!JSON.stringify(withErrors).includes("abcdefghijklmnop"));
   assert.deepEqual(withErrors.included, ["setup", "pageErrors"]);
+  // A ring kept before the ResizeObserver notices were dropped (issue 965's
+  // report: twenty of them and nothing else) sends none of them.
+  const notice = { at: "2026-11-14T04:23:16.646Z", kind: "error", message: "ResizeObserver loop completed with undelivered notifications.", where: "/index.html" };
+  const stale = bundle.withPageErrors(base, [notice, notice, { ...notice, message: "TypeError: x is undefined" }], true);
+  assert.deepEqual(stale.pageErrors.map((entry) => entry.message), ["TypeError: x is undefined"]);
   const fromApp = bundle.cleanPageError({
     message: "TypeError: failed to fetch https://table.private-domain.test/api/campaigns/abc/state?invite=CODE123",
     stack: "TypeError\n    at run (https://table.private-domain.test/_next/static/chunks/page.js?dpl=dpl_secret_build:1:2345)",

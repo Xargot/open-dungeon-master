@@ -198,6 +198,19 @@ test("two light weapons buy an off-hand swing, after the first attack", () => {
   assert.equal(byId(deriveHand(sheet({ equipment: [item("Longsword"), item("Dagger")] })), "offhand:dagger"), undefined);
 });
 
+// A player with "Shortsword x2" equipped on one row saw two Shortsword cards
+// and took the second for a copy: the off-hand card now says what it is.
+test("one row of two shortswords, equipped, is a blade in each hand, and the off-hand card says so", () => {
+  const pair = sheet({ class: "rogue", equipment: [{ name: "Shortsword", qty: 2, equipped: true }] });
+  const offHand = byId(deriveHand(pair), "offhand:shortsword");
+  assert.ok(offHand, "no off-hand card for a pair of shortswords on one row");
+  assert.equal(offHand.cost, "bonus");
+  assert.match(offHand.rules, /^Off-hand attack, your bonus action: the Shortsword in your other hand/);
+  assert.doesNotMatch(byId(deriveHand(pair), "attack:shortsword").rules, /Off-hand/);
+  const turn = afterCommit(FRESH_TURN, byId(deriveHand(pair), "attack:shortsword"));
+  assert.equal(byId(deriveHand(pair, turn), "offhand:shortsword").disabled, null);
+});
+
 // Issue 210: the card opened on ANY first attack, so a rapier swing lit the
 // off-hand dagger the engine then refused. It asks the engine's rule now.
 test("the off-hand card opens only after the Attack action earns it", () => {
@@ -729,6 +742,11 @@ test("Arcane Sword's first strike comes with its casting action, the bonus actio
   const blade = byId(deriveHand(druid, { ...FRESH_TURN, bonusUsed: true, marks: ["spell:bonus-action"] }), "attack:granted:flame-blade");
   assert.equal(blade.cost, "action");
   assert.equal(blade.dice, "4d6 fire", "1d6 more for the two slot levels above 2nd, and no modifier");
+  assert.equal(blade.glyph, "fire");
+  // A blade the storyteller set with no casting behind it (no meta) is still
+  // the spell's own strike: it wears the spell's glyph, never its painting.
+  const unmeta = byId(deriveHand({ ...druid, conditionMeta: {} }, FRESH_TURN), "attack:granted:flame-blade");
+  assert.equal(unmeta.glyph, "fire");
 });
 
 // Flame Blade: "you can use your action to make a melee spell attack with the
